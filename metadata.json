@@ -1,0 +1,6 @@
+{
+  "name": "OmniStage AI — 3D Game & Media Studio",
+  "description": "Contract-first Agentic 3D Game, HTML5 Playable Ad, and Programmatic Marketing Media Studio powered by a declarative SceneSpec engine and Gemini Vision QA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
