@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Sparkles } from '@react-three/drei';
+import { GpuParticles } from './GpuParticles';
 import * as THREE from 'three';
 import { VFXNode } from '../types/scene.schema';
 import { BurstVFXInstance, useStudioStore } from '../state/useStudioStore';
@@ -59,7 +59,6 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
   const ringRef = useRef<THREE.Mesh>(null);
   const ring2Ref = useRef<THREE.Mesh>(null);
   const beamRef = useRef<THREE.Mesh>(null);
-  const confettiGroupRef = useRef<THREE.Group>(null);
 
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const currentTime = useStudioStore((s) => s.currentTime);
@@ -70,22 +69,9 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
     ((vfx.startTime === undefined || currentTime >= vfx.startTime) &&
       (vfx.endTime === undefined || currentTime <= vfx.endTime));
 
-  const confettiItems = useMemo(() => {
-    return Array.from({ length: 32 }).map((_, idx) => ({
-      id: idx,
-      offset: [
-        (Math.sin(idx * 17.3) - 0.5) * 3.4,
-        ((idx * 0.43) % 2.8) + 0.3,
-        (Math.cos(idx * 23.1) - 0.5) * 3.4,
-      ] as [number, number, number],
-      speed: 0.8 + (idx % 5) * 0.25,
-      color: ['#FBBF24', '#06B6D4', '#EC4899', '#10B981', '#8B5CF6'][idx % 5],
-    }));
-  }, []);
-
-  useFrame((state) => {
+  useFrame(() => {
     if (!isPlaying || !isWithinWindow) return;
-    const t = state.clock.getElapsedTime() * (vfx.intensity || 1);
+    const t = Math.max(0, useStudioStore.getState().currentTime - (vfx.startTime ?? 0)) * (vfx.intensity ?? 1);
 
     if (vfx.type === 'shockwave') {
       if (ringRef.current) {
@@ -103,30 +89,22 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
         mat2.opacity = (1 - phase2) * 0.7;
       }
     }
-
     if (vfx.type === 'laser-beam' && beamRef.current) {
       const pulse = 0.85 + Math.sin(t * 6) * 0.25;
       beamRef.current.scale.set(pulse, 1, pulse);
     }
 
-    if (vfx.type === 'confetti' && confettiGroupRef.current) {
-      confettiGroupRef.current.rotation.y = t * 0.55;
-    }
   });
 
-  if (!isWithinWindow) return null;
+  if (!isWithinWindow || vfx.visible === false) return null;
 
   switch (vfx.type) {
     case 'sparkles':
       return (
         <group position={vfx.position}>
-          <Sparkles
-            count={46}
-            scale={3.6 * (vfx.scale ?? 1)}
-            size={3.4 * (vfx.intensity || 1)}
-            speed={isPlaying ? 0.65 : 0}
-            color={vfx.color || '#38BDF8'}
-          />
+          <GpuParticles kind="sparkles" count={96} spread={3.6}
+            scale={vfx.scale ?? 1} size={0.09 * Math.max(0, vfx.intensity ?? 1)}
+            color={vfx.color || '#38BDF8'} startTime={vfx.startTime} />
         </group>
       );
 
@@ -185,18 +163,10 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
 
     case 'confetti':
       return (
-        <group ref={confettiGroupRef} position={vfx.position}>
-          {confettiItems.map((item) => (
-            <mesh key={item.id} position={item.offset} rotation={[item.id, item.id * 0.5, 0]}>
-              <boxGeometry args={[0.13, 0.04, 0.09]} />
-              <meshStandardMaterial
-                color={item.color}
-                emissive={item.color}
-                emissiveIntensity={0.65}
-                roughness={0.2}
-              />
-            </mesh>
-          ))}
+        <group position={vfx.position}>
+          <GpuParticles kind="confetti" count={Math.floor(160 * Math.max(0, vfx.intensity ?? 1))}
+            spread={3.6} scale={vfx.scale ?? 1} size={0.22} color={vfx.color || '#fbbf24'}
+            startTime={vfx.startTime} />
         </group>
       );
 
@@ -225,19 +195,14 @@ export const CollisionBurstRenderer: React.FC<{ burst: BurstVFXInstance }> = ({ 
   });
 
   return (
-    <mesh
-      ref={meshRef}
-      position={[burst.position[0], 0.15, burst.position[2]]}
-      rotation={[-Math.PI / 2, 0, 0]}
-    >
-      <ringGeometry args={[0.45, 0.65, 32]} />
-      <meshBasicMaterial
-        color={burst.color}
-        transparent
-        opacity={0.9}
-        side={THREE.DoubleSide}
-        depthWrite={false}
-      />
-    </mesh>
+    <group position={burst.position}>
+      <GpuParticles kind="burst" count={72} size={0.13} spread={1}
+        color={burst.color} createdAt={burst.createdAt} />
+      <mesh ref={meshRef} position={[0, 0.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.45, 0.65, 32]} />
+        <meshBasicMaterial color={burst.color} transparent opacity={0.9}
+          side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
   );
 };
