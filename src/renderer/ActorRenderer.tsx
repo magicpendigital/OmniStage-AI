@@ -1,6 +1,6 @@
 import React, { Suspense, useRef, useState } from 'react';
 import { useFrame, ThreeEvent } from '@react-three/fiber';
-import { Html, useGLTF } from '@react-three/drei';
+import { Html, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { ActorNode } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
@@ -10,9 +10,6 @@ interface ActorRendererProps {
   isSelected: boolean;
 }
 
-/**
- * Optional Custom GLB Sub-Loader with Error Boundary Fallback
- */
 function CustomGlbModel({ url }: { url: string }) {
   const { scene } = useGLTF(url);
   return <primitive object={scene.clone()} />;
@@ -39,13 +36,125 @@ class GlbErrorBoundary extends React.Component<
  * Multi-Part Procedural PBR Composite Meshes (3–12 distinct parts per asset)
  * All models pivot at bottom-center (y = 0) so they sit flush on the studio floor.
  */
-function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
+function CompositeProceduralMesh({
+  actor,
+  unboxTapCount = 0,
+}: {
+  actor: ActorNode;
+  unboxTapCount?: number;
+}) {
   const primary = actor.primaryColor || '#06B6D4';
   const secondary = actor.secondaryColor || '#F59E0B';
   const metalness = actor.metalness ?? 0.8;
   const roughness = actor.roughness ?? 0.22;
 
   switch (actor.assetId) {
+    case 'mystery-gift-box': {
+      const glowBoost = 0.6 + unboxTapCount * 1.1;
+      const lidLift = unboxTapCount * 0.14;
+      return (
+        <group>
+          {/* 1: Main Luxury Vault Cube */}
+          <mesh position={[0, 0.72, 0]} castShadow receiveShadow>
+            <boxGeometry args={[1.42, 1.44, 1.42]} />
+            <meshStandardMaterial color={primary} metalness={0.65} roughness={0.28} />
+          </mesh>
+          {/* 2-3: Crossed Golden Satin Ribbons */}
+          <mesh position={[0, 0.72, 0]} castShadow>
+            <boxGeometry args={[1.46, 1.46, 0.26]} />
+            <meshStandardMaterial
+              color={secondary}
+              emissive={secondary}
+              emissiveIntensity={glowBoost}
+              metalness={0.92}
+              roughness={0.14}
+            />
+          </mesh>
+          <mesh position={[0, 0.72, 0]} castShadow>
+            <boxGeometry args={[0.26, 1.46, 1.46]} />
+            <meshStandardMaterial
+              color={secondary}
+              emissive={secondary}
+              emissiveIntensity={glowBoost}
+              metalness={0.92}
+              roughness={0.14}
+            />
+          </mesh>
+          {/* 4: Stepped Vault Lid (lifts slightly as user taps) */}
+          <group position={[0, 1.48 + lidLift, 0]}>
+            <mesh castShadow>
+              <boxGeometry args={[1.54, 0.24, 1.54]} />
+              <meshStandardMaterial color={primary} metalness={0.78} roughness={0.2} />
+            </mesh>
+            {/* 5-6: Top Ribbon Bow Loops */}
+            <mesh position={[-0.22, 0.24, 0]} rotation={[0, 0, Math.PI / 4]}>
+              <torusGeometry args={[0.2, 0.055, 14, 28]} />
+              <meshStandardMaterial
+                color={secondary}
+                emissive={secondary}
+                emissiveIntensity={glowBoost}
+                metalness={0.95}
+                roughness={0.12}
+              />
+            </mesh>
+            <mesh position={[0.22, 0.24, 0]} rotation={[0, 0, -Math.PI / 4]}>
+              <torusGeometry args={[0.2, 0.055, 14, 28]} />
+              <meshStandardMaterial
+                color={secondary}
+                emissive={secondary}
+                emissiveIntensity={glowBoost}
+                metalness={0.95}
+                roughness={0.12}
+              />
+            </mesh>
+          </group>
+          {/* 7: Internal Mystery Core Glow */}
+          <pointLight
+            position={[0, 1.2, 0]}
+            color={secondary}
+            intensity={1.5 + unboxTapCount * 2.5}
+            distance={4}
+          />
+        </group>
+      );
+    }
+
+    case 'hazard-laser-mine':
+      return (
+        <group position={[0, 0.58, 0]}>
+          {/* 1: Core Hazard Sphere */}
+          <mesh castShadow>
+            <icosahedronGeometry args={[0.42, 1]} />
+            <meshStandardMaterial color="#1E293B" metalness={0.9} roughness={0.25} />
+          </mesh>
+          {/* 2: Glowing Warning Equatorial Ring */}
+          <mesh rotation={[Math.PI / 2, 0, 0]}>
+            <torusGeometry args={[0.48, 0.05, 12, 32]} />
+            <meshStandardMaterial
+              color={primary}
+              emissive={primary}
+              emissiveIntensity={2.4}
+            />
+          </mesh>
+          {/* 3-6: Warning Spikes */}
+          {[
+            [0, 0.55, 0],
+            [0, -0.55, 0],
+            [0.55, 0, 0],
+            [-0.55, 0, 0],
+          ].map((pos, i) => (
+            <mesh key={i} position={pos as [number, number, number]}>
+              <octahedronGeometry args={[0.14, 0]} />
+              <meshStandardMaterial
+                color={secondary}
+                emissive={primary}
+                emissiveIntensity={1.6}
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+
     case 'cyber-mecha-bot':
       return (
         <group>
@@ -126,7 +235,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'fantasy-knight':
       return (
         <group>
-          {/* 1-2: Sabaton Greaves */}
           <mesh position={[-0.26, 0.42, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.15, 0.13, 0.84, 16]} />
             <meshStandardMaterial color="#94A3B8" metalness={0.92} roughness={0.22} />
@@ -135,12 +243,10 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
             <cylinderGeometry args={[0.15, 0.13, 0.84, 16]} />
             <meshStandardMaterial color="#94A3B8" metalness={0.92} roughness={0.22} />
           </mesh>
-          {/* 3: Royal Tunic & Cuirass */}
           <mesh position={[0, 1.32, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.46, 0.38, 1.05, 18]} />
             <meshStandardMaterial color={primary} metalness={0.65} roughness={0.35} />
           </mesh>
-          {/* 4-5: Golden Pauldrons */}
           <mesh position={[-0.58, 1.72, 0]} castShadow>
             <sphereGeometry args={[0.24, 18, 18]} />
             <meshStandardMaterial color={secondary} metalness={0.92} roughness={0.18} />
@@ -149,22 +255,18 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
             <sphereGeometry args={[0.24, 18, 18]} />
             <meshStandardMaterial color={secondary} metalness={0.92} roughness={0.18} />
           </mesh>
-          {/* 6: Greathelm */}
           <mesh position={[0, 2.1, 0]} castShadow>
             <cylinderGeometry args={[0.28, 0.3, 0.48, 20]} />
             <meshStandardMaterial color="#E2E8F0" metalness={0.95} roughness={0.15} />
           </mesh>
-          {/* 7: Helmet Plume */}
           <mesh position={[0, 2.46, -0.08]} rotation={[-0.3, 0, 0]} castShadow>
             <coneGeometry args={[0.16, 0.42, 14]} />
             <meshStandardMaterial color={secondary} roughness={0.5} metalness={0.2} />
           </mesh>
-          {/* 8: Tower Shield (Left Hand) */}
           <mesh position={[-0.74, 1.25, 0.28]} rotation={[0, -0.35, 0]} castShadow>
             <boxGeometry args={[0.12, 1.05, 0.68]} />
             <meshStandardMaterial color={primary} metalness={0.82} roughness={0.25} />
           </mesh>
-          {/* 9: Energy Broadsword (Right Hand) */}
           <group position={[0.78, 1.35, 0.35]} rotation={[0.45, 0, -0.15]}>
             <mesh position={[0, 0.55, 0]} castShadow>
               <boxGeometry args={[0.08, 1.25, 0.18]} />
@@ -187,7 +289,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'sports-sneaker-pro':
       return (
         <group>
-          {/* 1: Illuminated Showcase Plinth */}
           <mesh position={[0, 0.12, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[1.15, 1.25, 0.24, 32]} />
             <meshStandardMaterial color="#0F172A" metalness={0.8} roughness={0.25} />
@@ -196,14 +297,11 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
             <ringGeometry args={[1.02, 1.12, 32]} />
             <meshStandardMaterial color={secondary} emissive={secondary} emissiveIntensity={1.8} />
           </mesh>
-          {/* Sneaker Assembly floating above plinth */}
           <group position={[0, 0.62, 0]}>
-            {/* 2: Sculpted Foam Midsole */}
             <mesh position={[0, 0, 0]} castShadow receiveShadow>
               <boxGeometry args={[1.95, 0.28, 0.82]} />
               <meshStandardMaterial color="#F8FAFC" roughness={0.35} metalness={0.1} />
             </mesh>
-            {/* 3: Translucent Nitro Air Unit */}
             <mesh position={[-0.48, -0.02, 0]}>
               <boxGeometry args={[0.76, 0.16, 0.86]} />
               <meshPhysicalMaterial
@@ -215,22 +313,18 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
                 clearcoat={1}
               />
             </mesh>
-            {/* 4: Main Breathable Knit Upper */}
             <mesh position={[-0.12, 0.34, 0]} rotation={[0, 0, -0.14]} castShadow>
               <boxGeometry args={[1.45, 0.52, 0.76]} />
               <meshStandardMaterial color={primary} roughness={0.45} metalness={0.25} />
             </mesh>
-            {/* 5: Aerodynamic Toe Box */}
             <mesh position={[0.58, 0.2, 0]} castShadow>
               <boxGeometry args={[0.68, 0.28, 0.74]} />
               <meshStandardMaterial color={primary} roughness={0.35} metalness={0.3} />
             </mesh>
-            {/* 6: Carbon Heel Counter Clip */}
             <mesh position={[-0.78, 0.32, 0]} castShadow>
               <boxGeometry args={[0.32, 0.48, 0.8]} />
               <meshStandardMaterial color="#1E293B" metalness={0.85} roughness={0.2} />
             </mesh>
-            {/* 7: Dynamic Side Vector Stripe */}
             <mesh position={[0.05, 0.34, 0.39]} rotation={[0, 0, 0.18]}>
               <boxGeometry args={[0.95, 0.12, 0.04]} />
               <meshStandardMaterial
@@ -248,12 +342,10 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'luxury-perfume-bottle':
       return (
         <group>
-          {/* 1: Brushed Gold Base Pedestal */}
           <mesh position={[0, 0.1, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.72, 0.78, 0.2, 32]} />
             <meshStandardMaterial color="#1E293B" metalness={0.9} roughness={0.2} />
           </mesh>
-          {/* 2: Faceted Crystal Outer Flacon */}
           <mesh position={[0, 0.98, 0]} castShadow receiveShadow>
             <boxGeometry args={[1.18, 1.48, 0.66]} />
             <meshPhysicalMaterial
@@ -266,7 +358,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               reflectivity={1}
             />
           </mesh>
-          {/* 3: Inner Golden Amber Elixir Core */}
           <mesh position={[0, 0.88, 0]}>
             <boxGeometry args={[0.96, 1.12, 0.48]} />
             <meshStandardMaterial
@@ -277,17 +368,14 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               roughness={0.15}
             />
           </mesh>
-          {/* 4: Embossed Metallic Front Plaque */}
           <mesh position={[0, 0.98, 0.34]}>
             <boxGeometry args={[0.64, 0.56, 0.04]} />
             <meshStandardMaterial color={secondary} metalness={0.95} roughness={0.12} />
           </mesh>
-          {/* 5: Atomizer Gold Neck Collar */}
           <mesh position={[0, 1.84, 0]} castShadow>
             <cylinderGeometry args={[0.2, 0.22, 0.24, 24]} />
             <meshStandardMaterial color={primary} metalness={0.96} roughness={0.1} />
           </mesh>
-          {/* 6: Jewel-Cut Octagonal Stopper Cap */}
           <mesh position={[0, 2.16, 0]} castShadow>
             <octahedronGeometry args={[0.32, 0]} />
             <meshStandardMaterial color="#0F172A" metalness={0.92} roughness={0.14} />
@@ -298,17 +386,14 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'gold-coin-collectible':
       return (
         <group position={[0, 0.75, 0]}>
-          {/* 1: Main Coin Disc */}
           <mesh rotation={[Math.PI / 2, 0, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.58, 0.58, 0.16, 32]} />
             <meshStandardMaterial color={primary} metalness={0.95} roughness={0.14} />
           </mesh>
-          {/* 2: Raised Bevel Rim */}
           <mesh>
             <torusGeometry args={[0.54, 0.06, 16, 32]} />
             <meshStandardMaterial color={secondary} metalness={0.98} roughness={0.1} />
           </mesh>
-          {/* 3: Center Emblem Star */}
           <mesh position={[0, 0, 0.09]}>
             <octahedronGeometry args={[0.24, 0]} />
             <meshStandardMaterial
@@ -335,7 +420,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'plasma-gem':
       return (
         <group position={[0, 0.9, 0]}>
-          {/* 1: Octahedral Crystal Core */}
           <mesh castShadow>
             <octahedronGeometry args={[0.52, 0]} />
             <meshPhysicalMaterial
@@ -347,7 +431,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               clearcoat={1}
             />
           </mesh>
-          {/* 2-3: Orbiting Energy Gimbal Rings */}
           <mesh rotation={[Math.PI / 4, Math.PI / 4, 0]}>
             <torusGeometry args={[0.72, 0.03, 12, 36]} />
             <meshStandardMaterial
@@ -366,12 +449,10 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'gt-sports-car':
       return (
         <group>
-          {/* 1: Lower Aero Splitter & Chassis */}
           <mesh position={[0, 0.32, 0]} castShadow receiveShadow>
             <boxGeometry args={[1.65, 0.34, 3.3]} />
             <meshStandardMaterial color={primary} metalness={metalness} roughness={roughness} />
           </mesh>
-          {/* 2: Sculpted Cockpit Canopy */}
           <mesh position={[0, 0.64, -0.15]} castShadow>
             <boxGeometry args={[1.28, 0.34, 1.55]} />
             <meshPhysicalMaterial
@@ -381,12 +462,10 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               clearcoat={1}
             />
           </mesh>
-          {/* 3: Rear GT Aero Wing */}
           <mesh position={[0, 0.78, -1.48]} castShadow>
             <boxGeometry args={[1.58, 0.06, 0.32]} />
             <meshStandardMaterial color="#0F172A" metalness={0.85} roughness={0.2} />
           </mesh>
-          {/* 4-7: Four Alloy Wheels */}
           {[
             [-0.84, 0.28, 1.05],
             [0.84, 0.28, 1.05],
@@ -403,12 +482,10 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               <meshStandardMaterial color="#1E293B" metalness={0.7} roughness={0.4} />
             </mesh>
           ))}
-          {/* 8: Front LED Headlight Strip */}
           <mesh position={[0, 0.36, 1.66]}>
             <boxGeometry args={[1.38, 0.08, 0.04]} />
             <meshStandardMaterial color="#38BDF8" emissive="#38BDF8" emissiveIntensity={2.5} />
           </mesh>
-          {/* 9: Rear Diffuser Tail Light Strip */}
           <mesh position={[0, 0.4, -1.66]}>
             <boxGeometry args={[1.42, 0.08, 0.04]} />
             <meshStandardMaterial color="#EF4444" emissive="#EF4444" emissiveIntensity={2.5} />
@@ -419,17 +496,14 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     case 'scifi-warp-portal':
       return (
         <group>
-          {/* 1: Stepped Heavy Gate Pedestal */}
           <mesh position={[0, 0.16, 0]} castShadow receiveShadow>
             <boxGeometry args={[2.8, 0.32, 1.1]} />
             <meshStandardMaterial color="#1E293B" metalness={0.85} roughness={0.3} />
           </mesh>
-          {/* 2: Outer Metallic Stargate Ring */}
           <mesh position={[0, 1.78, 0]} castShadow>
             <torusGeometry args={[1.45, 0.18, 20, 48]} />
             <meshStandardMaterial color="#334155" metalness={0.9} roughness={0.22} />
           </mesh>
-          {/* 3: Inner Glowing Conduit Ring */}
           <mesh position={[0, 1.78, 0]}>
             <torusGeometry args={[1.25, 0.06, 16, 48]} />
             <meshStandardMaterial
@@ -438,7 +512,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               emissiveIntensity={2.2}
             />
           </mesh>
-          {/* 4: Swirling Quantum Event Horizon Disc */}
           <mesh position={[0, 1.78, 0]}>
             <circleGeometry args={[1.22, 40]} />
             <meshStandardMaterial
@@ -457,22 +530,18 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
     default:
       return (
         <group>
-          {/* 1: Grounded Stepped Studio Pedestal */}
           <mesh position={[0, 0.12, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.92, 1.05, 0.24, 32]} />
             <meshStandardMaterial color="#1E293B" metalness={0.85} roughness={0.25} />
           </mesh>
-          {/* 2: Luminous Calibration Rim */}
           <mesh position={[0, 0.25, 0]} rotation={[-Math.PI / 2, 0, 0]}>
             <ringGeometry args={[0.78, 0.88, 32]} />
             <meshStandardMaterial color={primary} emissive={primary} emissiveIntensity={1.6} />
           </mesh>
-          {/* 3: Brushed Pillar Core */}
           <mesh position={[0, 0.65, 0]} castShadow receiveShadow>
             <cylinderGeometry args={[0.42, 0.56, 0.82, 24]} />
             <meshStandardMaterial color="#0F172A" metalness={0.9} roughness={0.18} />
           </mesh>
-          {/* 4: Floating Faceted Hero Polyhedron */}
           <mesh position={[0, 1.55, 0]} castShadow>
             <icosahedronGeometry args={[0.48, 0]} />
             <meshPhysicalMaterial
@@ -482,7 +551,6 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
               clearcoat={1}
             />
           </mesh>
-          {/* 5: Outer Gyro Ring */}
           <mesh position={[0, 1.55, 0]} rotation={[Math.PI / 4, Math.PI / 4, 0]}>
             <torusGeometry args={[0.76, 0.04, 16, 40]} />
             <meshStandardMaterial
@@ -499,76 +567,112 @@ function CompositeProceduralMesh({ actor }: { actor: ActorNode }) {
 }
 
 export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected }) => {
-  const groupRef = useRef<THREE.Group>(null);
+  const outerGroupRef = useRef<THREE.Group>(null);
+  const animGroupRef = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
   const [clickPulse, setClickPulse] = useState(0);
 
   const selectActor = useStudioStore((s) => s.selectActor);
+  const transformMode = useStudioStore((s) => s.transformMode);
+  const isDraggingGizmo = useStudioStore((s) => s.isDraggingGizmo);
+  const setIsDraggingGizmo = useStudioStore((s) => s.setIsDraggingGizmo);
+  const updateActorTransform = useStudioStore((s) => s.updateActorTransform);
   const triggerActorInteraction = useStudioStore((s) => s.triggerActorInteraction);
   const isPlaying = useStudioStore((s) => s.isPlaying);
+  const currentTime = useStudioStore((s) => s.currentTime);
   const mode = useStudioStore((s) => s.sceneSpec.mode);
+  const unboxTapCount = useStudioStore((s) => s.unboxTapCounts[actor.id] || 0);
+
+  // Check timeline window visibility in Media mode
+  const isWithinTimelineWindow =
+    mode === 'game' ||
+    ((actor.startTime === undefined || currentTime >= actor.startTime) &&
+      (actor.endTime === undefined || currentTime <= actor.endTime));
 
   useFrame((state, delta) => {
-    if (!groupRef.current) return;
-    const g = groupRef.current;
+    if (!outerGroupRef.current || !animGroupRef.current) return;
+
+    // Sync outer group to SceneSpec when user is NOT actively dragging the TransformControls gizmo
+    if (!isDraggingGizmo) {
+      outerGroupRef.current.position.set(actor.position[0], actor.position[1], actor.position[2]);
+      outerGroupRef.current.rotation.set(actor.rotation[0], actor.rotation[1], actor.rotation[2]);
+      outerGroupRef.current.scale.set(actor.scale[0], actor.scale[1], actor.scale[2]);
+    }
+
+    const anim = animGroupRef.current;
     const speed = actor.animationSpeed ?? 1;
     const t = state.clock.getElapsedTime() * speed;
 
-    // Base target transforms from declarative SceneSpec
-    let targetX = actor.position[0];
-    let targetY = actor.position[1];
-    let targetZ = actor.position[2];
-    let targetRotX = actor.rotation[0];
-    let targetRotY = actor.rotation[1];
-    let targetRotZ = actor.rotation[2];
+    let offsetY = 0;
+    let offsetX = 0;
+    let offsetZ = 0;
+    let rotX = 0;
+    let rotY = 0;
+    let rotZ = 0;
+    let enterScale = 1.0;
+
+    // Enter Effect calculation during Media timeline playback
+    if (mode === 'media' && actor.startTime !== undefined && actor.enterEffect && actor.enterEffect !== 'none') {
+      const elapsedSinceStart = Math.max(0, currentTime - actor.startTime);
+      const enterProgress = Math.min(1, elapsedSinceStart / 0.6);
+      if (actor.enterEffect === 'pop-in') {
+        enterScale = THREE.MathUtils.smoothstep(enterProgress, 0, 1);
+      } else if (actor.enterEffect === 'slide-up') {
+        offsetY -= (1 - THREE.MathUtils.smoothstep(enterProgress, 0, 1)) * 1.5;
+      }
+    }
 
     if (isPlaying) {
       switch (actor.activeAnimation) {
         case 'bounce':
-          targetY += Math.abs(Math.sin(t * 3.2)) * 0.55;
+          offsetY += Math.abs(Math.sin(t * 3.2)) * 0.48;
           break;
         case 'float':
-          targetY += Math.sin(t * 2.0) * 0.18 + 0.12;
-          targetRotY += Math.sin(t * 0.9) * 0.25;
+          offsetY += Math.sin(t * 2.0) * 0.18 + 0.12;
+          rotY += Math.sin(t * 0.9) * 0.25;
           break;
         case 'spin':
-          targetRotY = actor.rotation[1] + t * 1.8;
+          rotY = t * 1.8;
           break;
         case 'walk':
-          targetX += Math.sin(t * 2.2) * 0.35;
-          targetRotZ = Math.sin(t * 4.4) * 0.08;
+          offsetY += Math.abs(Math.sin(t * 5.0)) * 0.12;
+          rotZ = Math.sin(t * 5.0) * 0.08;
           break;
         case 'attack':
-          targetRotY += Math.sin(t * 3.5) * 0.45;
-          targetZ += Math.max(0, Math.sin(t * 3.5)) * 0.28;
+          rotY += Math.sin(t * 3.8) * 0.48;
+          offsetZ += Math.max(0, Math.sin(t * 3.8)) * 0.32;
           break;
         case 'idle':
         default:
-          targetY += Math.sin(t * 1.5) * 0.04;
+          offsetY += Math.sin(t * 1.5) * 0.04;
           break;
       }
     }
 
-    // Interactive click jump-boost decay
+    // Interactive click jump-boost / unboxing shake
     if (clickPulse > 0.01) {
-      targetY += clickPulse * 0.65;
-      targetRotY += clickPulse * 1.5;
-      setClickPulse((prev) => Math.max(0, prev - delta * 3.2));
+      if (actor.onClickAction === 'unbox-tap' || actor.assetId === 'mystery-gift-box') {
+        // High-frequency unboxing shake
+        rotZ += Math.sin(state.clock.getElapsedTime() * 45) * clickPulse * 0.28;
+        rotX += Math.cos(state.clock.getElapsedTime() * 38) * clickPulse * 0.22;
+        offsetY += clickPulse * 0.35;
+      } else {
+        offsetY += clickPulse * 0.6;
+        rotY += clickPulse * 1.4;
+      }
+      setClickPulse((prev) => Math.max(0, prev - delta * 3.0));
     }
 
-    // Smooth exponential damping
-    g.position.x = THREE.MathUtils.damp(g.position.x, targetX, 8, delta);
-    g.position.y = THREE.MathUtils.damp(g.position.y, targetY, 8, delta);
-    g.position.z = THREE.MathUtils.damp(g.position.z, targetZ, 8, delta);
+    anim.position.x = THREE.MathUtils.damp(anim.position.x, offsetX, 10, delta);
+    anim.position.y = THREE.MathUtils.damp(anim.position.y, offsetY, 10, delta);
+    anim.position.z = THREE.MathUtils.damp(anim.position.z, offsetZ, 10, delta);
 
-    g.rotation.x = THREE.MathUtils.damp(g.rotation.x, targetRotX, 8, delta);
-    g.rotation.y = THREE.MathUtils.damp(g.rotation.y, targetRotY, 8, delta);
-    g.rotation.z = THREE.MathUtils.damp(g.rotation.z, targetRotZ, 8, delta);
+    anim.rotation.x = THREE.MathUtils.damp(anim.rotation.x, rotX, 10, delta);
+    anim.rotation.y = THREE.MathUtils.damp(anim.rotation.y, rotY, 10, delta);
+    anim.rotation.z = THREE.MathUtils.damp(anim.rotation.z, rotZ, 10, delta);
 
-    const pulseScale = hovered ? 1.04 : 1.0;
-    g.scale.x = THREE.MathUtils.damp(g.scale.x, actor.scale[0] * pulseScale, 10, delta);
-    g.scale.y = THREE.MathUtils.damp(g.scale.y, actor.scale[1] * pulseScale, 10, delta);
-    g.scale.z = THREE.MathUtils.damp(g.scale.z, actor.scale[2] * pulseScale, 10, delta);
+    const hoverScale = (hovered ? 1.05 : 1.0) * enterScale;
+    anim.scale.setScalar(THREE.MathUtils.damp(anim.scale.x, hoverScale, 10, delta));
   });
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
@@ -580,13 +684,16 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
     }
   };
 
-  if (actor.visible === false) return null;
+  if (actor.visible === false || !isWithinTimelineWindow) return null;
 
-  const fallbackMesh = <CompositeProceduralMesh actor={actor} />;
+  const fallbackMesh = <CompositeProceduralMesh actor={actor} unboxTapCount={unboxTapCount} />;
 
-  return (
+  // Attach interactive 3D TransformControls gizmo when selected and NOT actively playing Game Mode
+  const showTransformGizmo = isSelected && !(mode === 'game' && isPlaying);
+
+  const actorContent = (
     <group
-      ref={groupRef}
+      ref={outerGroupRef}
       position={actor.position}
       rotation={actor.rotation}
       scale={actor.scale}
@@ -597,37 +704,74 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
       }}
       onPointerOut={() => setHovered(false)}
     >
-      {actor.customGlbUrl ? (
-        <GlbErrorBoundary fallback={fallbackMesh}>
-          <Suspense fallback={fallbackMesh}>
-            <CustomGlbModel url={actor.customGlbUrl} />
-          </Suspense>
-        </GlbErrorBoundary>
-      ) : (
-        fallbackMesh
-      )}
+      <group ref={animGroupRef}>
+        {actor.customGlbUrl ? (
+          <GlbErrorBoundary fallback={fallbackMesh}>
+            <Suspense fallback={fallbackMesh}>
+              <CustomGlbModel url={actor.customGlbUrl} />
+            </Suspense>
+          </GlbErrorBoundary>
+        ) : (
+          fallbackMesh
+        )}
+      </group>
 
-      {/* Grounded Selection & Hover Indicator Ring */}
+      {/* Grounded Selection & Hover Indicator Ring + Wireframe Bounding Highlight */}
       {(isSelected || hovered) && (
-        <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.95, 1.06, 36]} />
-          <meshBasicMaterial
-            color={isSelected ? '#06B6D4' : '#F59E0B'}
-            transparent
-            opacity={isSelected ? 0.9 : 0.55}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
+        <>
+          <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[0.95, 1.08, 36]} />
+            <meshBasicMaterial
+              color={isSelected ? '#06B6D4' : '#F59E0B'}
+              transparent
+              opacity={isSelected ? 0.92 : 0.55}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+          {isSelected && (
+            <mesh position={[0, 1.15, 0]}>
+              <boxGeometry args={[1.7, 2.3, 1.7]} />
+              <meshBasicMaterial color="#06B6D4" wireframe transparent opacity={0.18} />
+            </mesh>
+          )}
+        </>
       )}
 
-      {/* Subtle Spatial Actor Label when Selected */}
-      {isSelected && (
+      {/* Spatial Actor Coordinate & Tap-to-Unbox Badge */}
+      {(isSelected || actor.assetId === 'mystery-gift-box') && (
         <Html position={[0, 2.75, 0]} center distanceFactor={10} zIndexRange={[10, 0]}>
-          <div className="pointer-events-none px-2 py-0.5 rounded bg-slate-950/90 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 whitespace-nowrap shadow-lg">
-            {actor.name} · [{actor.position.map((n) => n.toFixed(1)).join(', ')}]
+          <div className="pointer-events-none px-2.5 py-0.5 rounded bg-slate-950/90 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 whitespace-nowrap shadow-lg">
+            {actor.assetId === 'mystery-gift-box'
+              ? `TAP TO UNBOX (${unboxTapCount}/${actor.unboxTapsRequired || 3})`
+              : `${actor.name} · [${actor.position.map((n) => n.toFixed(1)).join(', ')}]`}
           </div>
         </Html>
       )}
     </group>
   );
+
+  if (showTransformGizmo) {
+    return (
+      <TransformControls
+        mode={transformMode}
+        onMouseDown={() => setIsDraggingGizmo(true)}
+        onMouseUp={(e: any) => {
+          setIsDraggingGizmo(false);
+          if (outerGroupRef.current) {
+            const obj = outerGroupRef.current;
+            updateActorTransform(
+              actor.id,
+              [obj.position.x, obj.position.y, obj.position.z],
+              [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+              [obj.scale.x, obj.scale.y, obj.scale.z]
+            );
+          }
+        }}
+      >
+        {actorContent}
+      </TransformControls>
+    );
+  }
+
+  return actorContent;
 };

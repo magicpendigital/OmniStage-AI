@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { Html, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { VFXNode } from '../types/scene.schema';
-import { useStudioStore } from '../state/useStudioStore';
+import { BurstVFXInstance, useStudioStore } from '../state/useStudioStore';
 
 interface VFXRendererProps {
   vfx: VFXNode;
@@ -14,15 +14,23 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
   const ring2Ref = useRef<THREE.Mesh>(null);
   const beamRef = useRef<THREE.Mesh>(null);
   const confettiGroupRef = useRef<THREE.Group>(null);
+
   const isPlaying = useStudioStore((s) => s.isPlaying);
+  const currentTime = useStudioStore((s) => s.currentTime);
+  const mode = useStudioStore((s) => s.sceneSpec.mode);
+
+  const isWithinWindow =
+    mode === 'game' ||
+    ((vfx.startTime === undefined || currentTime >= vfx.startTime) &&
+      (vfx.endTime === undefined || currentTime <= vfx.endTime));
 
   const confettiItems = useMemo(() => {
-    return Array.from({ length: 28 }).map((_, idx) => ({
+    return Array.from({ length: 32 }).map((_, idx) => ({
       id: idx,
       offset: [
-        (Math.sin(idx * 17.3) - 0.5) * 3.2,
-        ((idx * 0.43) % 2.6) + 0.4,
-        (Math.cos(idx * 23.1) - 0.5) * 3.2,
+        (Math.sin(idx * 17.3) - 0.5) * 3.4,
+        ((idx * 0.43) % 2.8) + 0.3,
+        (Math.cos(idx * 23.1) - 0.5) * 3.4,
       ] as [number, number, number],
       speed: 0.8 + (idx % 5) * 0.25,
       color: ['#FBBF24', '#06B6D4', '#EC4899', '#10B981', '#8B5CF6'][idx % 5],
@@ -30,7 +38,7 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
   }, []);
 
   useFrame((state) => {
-    if (!isPlaying) return;
+    if (!isPlaying || !isWithinWindow) return;
     const t = state.clock.getElapsedTime() * (vfx.intensity || 1);
 
     if (vfx.type === 'shockwave') {
@@ -42,7 +50,7 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
         mat.opacity = (1 - phase) * 0.85;
       }
       if (ring2Ref.current) {
-        const phase2 = ((t * 0.85) + 0.5) % 1;
+        const phase2 = (t * 0.85 + 0.5) % 1;
         const scale2 = 0.5 + phase2 * 3.2 * (vfx.scale ?? 1);
         ring2Ref.current.scale.set(scale2, scale2, 1);
         const mat2 = ring2Ref.current.material as THREE.MeshBasicMaterial;
@@ -56,19 +64,21 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
     }
 
     if (vfx.type === 'confetti' && confettiGroupRef.current) {
-      confettiGroupRef.current.rotation.y = t * 0.4;
+      confettiGroupRef.current.rotation.y = t * 0.55;
     }
   });
+
+  if (!isWithinWindow) return null;
 
   switch (vfx.type) {
     case 'sparkles':
       return (
         <group position={vfx.position}>
           <Sparkles
-            count={42}
-            scale={3.5 * (vfx.scale ?? 1)}
-            size={3.2 * (vfx.intensity || 1)}
-            speed={isPlaying ? 0.6 : 0}
+            count={46}
+            scale={3.6 * (vfx.scale ?? 1)}
+            size={3.4 * (vfx.intensity || 1)}
+            speed={isPlaying ? 0.65 : 0}
             color={vfx.color || '#38BDF8'}
           />
         </group>
@@ -142,11 +152,11 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
         <group ref={confettiGroupRef} position={vfx.position}>
           {confettiItems.map((item) => (
             <mesh key={item.id} position={item.offset} rotation={[item.id, item.id * 0.5, 0]}>
-              <boxGeometry args={[0.12, 0.04, 0.08]} />
+              <boxGeometry args={[0.13, 0.04, 0.09]} />
               <meshStandardMaterial
                 color={item.color}
                 emissive={item.color}
-                emissiveIntensity={0.6}
+                emissiveIntensity={0.65}
                 roughness={0.2}
               />
             </mesh>
@@ -157,4 +167,41 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
     default:
       return null;
   }
+};
+
+/**
+ * Transient Collision / Pickup Burst Effect Ring
+ */
+export const CollisionBurstRenderer: React.FC<{ burst: BurstVFXInstance }> = ({ burst }) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+    const age = (Date.now() - burst.createdAt) / 600;
+    if (age > 1) {
+      meshRef.current.visible = false;
+      return;
+    }
+    const scale = 0.4 + age * 2.6;
+    meshRef.current.scale.set(scale, scale, 1);
+    const mat = meshRef.current.material as THREE.MeshBasicMaterial;
+    mat.opacity = Math.max(0, (1 - age) * 0.9);
+  });
+
+  return (
+    <mesh
+      ref={meshRef}
+      position={[burst.position[0], 0.15, burst.position[2]]}
+      rotation={[-Math.PI / 2, 0, 0]}
+    >
+      <ringGeometry args={[0.45, 0.65, 32]} />
+      <meshBasicMaterial
+        color={burst.color}
+        transparent
+        opacity={0.9}
+        side={THREE.DoubleSide}
+        depthWrite={false}
+      />
+    </mesh>
+  );
 };

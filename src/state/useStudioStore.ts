@@ -13,6 +13,7 @@ import {
   LightingPresetId,
   SceneSpec,
   StudioMode,
+  TransformMode,
   Vector3Tuple,
   VFXNode,
   VFXType,
@@ -26,27 +27,40 @@ export interface FloatingScoreFeedback {
   createdAt: number;
 }
 
+export interface BurstVFXInstance {
+  id: string;
+  position: Vector3Tuple;
+  color: string;
+  createdAt: number;
+}
+
 interface StudioState {
   // Core SceneSpec + Undo/Redo History
   sceneSpec: SceneSpec;
   pastSpecs: SceneSpec[];
   futureSpecs: SceneSpec[];
 
-  // Selection & Active UI Tabs
+  // Phase 2 Selection & 3D Gizmo State
   selectedActorId: string | null;
   selectedVfxId: string | null;
+  transformMode: TransformMode;
+  isDraggingGizmo: boolean;
   isPublishModalOpen: boolean;
   isBottomDockCollapsed: boolean;
 
-  // Timeline & Playback State
+  // Timeline Sequencer & Playback State
   isPlaying: boolean;
+  isLooping: boolean;
   currentTime: number;
 
-  // Playable Game Runtime State
+  // Phase 2 Real Playable Game Runtime State
   gameScore: number;
   gameTimeRemaining: number;
   gameWon: boolean;
+  gameEnded: boolean; // Triggers Playable Ad End-Card Overlay
+  unboxTapCounts: Record<string, number>;
   scorePopups: FloatingScoreFeedback[];
+  burstEffects: BurstVFXInstance[];
 
   // AI Agent & Vision QA State
   chatMessages: ChatMessage[];
@@ -71,21 +85,36 @@ interface StudioState {
   setLightingPreset: (presetId: LightingPresetId) => void;
   setCameraMode: (mode: CameraMode) => void;
 
+  // Phase 2 Gizmo & Actor Transform/Property Actions
   selectActor: (id: string | null) => void;
-  spawnAsset: (assetId: string, customGlbUrl?: string, customName?: string) => void;
+  setTransformMode: (mode: TransformMode) => void;
+  setIsDraggingGizmo: (dragging: boolean) => void;
+  updateActorTransform: (
+    actorId: string,
+    position: Vector3Tuple,
+    rotation: Vector3Tuple,
+    scale: Vector3Tuple
+  ) => void;
+  updateActorProperty: (actorId: string, partialProps: Partial<ActorNode>) => void;
   updateActor: (actorId: string, patch: Partial<ActorNode>) => void;
+  duplicateActor: (actorId: string) => void;
+  spawnAsset: (assetId: string, customGlbUrl?: string, customName?: string) => void;
   removeActor: (actorId: string) => void;
 
   spawnVFX: (type: VFXType) => void;
   removeVFX: (vfxId: string) => void;
 
-  // Playback & Game Runtime Actions
+  // Playback & Playable Game Runtime Actions
   togglePlay: () => void;
   setIsPlaying: (playing: boolean) => void;
+  toggleLoop: () => void;
   setCurrentTime: (time: number) => void;
   advanceTimeline: (deltaSeconds: number) => void;
+  movePlayerActor: (dx: number, dz: number) => void;
+  handlePlayerCollision: (targetActorId: string) => void;
   triggerActorInteraction: (actor: ActorNode) => void;
   resetGameSession: () => void;
+  dismissEndCard: () => void;
 
   // Agent & Vision QA Actions
   addChatMessage: (msg: ChatMessage) => void;
@@ -106,13 +135,13 @@ function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
   if (existingActors.length === 0) return [0, 0, 0];
   const candidateOffsets: Vector3Tuple[] = [
     [0, 0, 0],
-    [-2.2, 0, 0.8],
-    [2.2, 0, 0.8],
-    [0, 0, -2.2],
+    [-2.0, 0, 0.6],
+    [2.0, 0, 0.6],
+    [0, 0, -2.0],
     [-1.8, 0, -1.6],
     [1.8, 0, -1.6],
-    [-3.2, 0, 0],
-    [3.2, 0, 0],
+    [-3.0, 0, 0],
+    [3.0, 0, 0],
   ];
   for (const candidate of candidateOffsets) {
     const tooClose = existingActors.some((a) => {
@@ -123,7 +152,7 @@ function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
     if (!tooClose) return candidate;
   }
   const angle = (existingActors.length * 1.1) % (Math.PI * 2);
-  const radius = 2.4 + (existingActors.length % 3) * 0.7;
+  const radius = 2.2 + (existingActors.length % 3) * 0.7;
   return [
     Number((Math.cos(angle) * radius).toFixed(2)),
     0,
@@ -138,25 +167,34 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   selectedActorId: initialSpec.actors[0]?.id ?? null,
   selectedVfxId: null,
+  transformMode: 'translate',
+  isDraggingGizmo: false,
   isPublishModalOpen: false,
   isBottomDockCollapsed: false,
 
   isPlaying: true,
+  isLooping: true,
   currentTime: 0,
 
   gameScore: 0,
   gameTimeRemaining: initialSpec.gameRules.timeLimitSeconds,
   gameWon: false,
+  gameEnded: false,
+  unboxTapCounts: {},
   scorePopups: [],
+  burstEffects: [],
 
   chatMessages: [
     {
       id: 'msg-welcome',
       role: 'assistant',
       content:
-        'Welcome to OmniStage AI. Your Clean Studio Stage is initialized with a grounded Calibration Monolith. Ask me to build a playable mini-game, spawn 3D products, choreograph camera flythroughs, or run a Vision QA check.',
+        'OmniStage AI Phase 2 is active. Click any 3D actor to manipulate it with Move [W], Rotate [E], and Scale [R] Gizmos, scrub the cinematic camera timeline, or test the 4 One-Click Starter Templates in the Left Drawer.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      diffSummary: ['Initialized Clean Studio Stage (16:9)', 'Mounted Studio Calibration Monolith at [0, 0, 0]'],
+      diffSummary: [
+        'Enabled 3D TransformControls Gizmos (Translate / Rotate / Scale)',
+        'Activated CatmullRomCurve3 Camera Sequencer & Bounding-Box Game Loop',
+      ],
     },
   ],
   isAgentThinking: false,
@@ -175,6 +213,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       futureSpecs: [],
       sceneSpec: cloneSceneSpec(nextSpec),
       gameTimeRemaining: nextSpec.gameRules.timeLimitSeconds,
+      gameScore: 0,
+      gameWon: false,
+      gameEnded: false,
+      unboxTapCounts: {},
     })),
 
   loadTemplate: (templateId) => {
@@ -187,8 +229,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       sceneSpec: cloned,
       selectedActorId: cloned.actors[0]?.id ?? null,
       currentTime: 0,
+      isPlaying: true,
       gameScore: 0,
       gameWon: false,
+      gameEnded: false,
+      unboxTapCounts: {},
+      burstEffects: [],
       gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
       latestVisionReport: null,
     }));
@@ -228,6 +274,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         sceneSpec: nextSpec,
         gameScore: 0,
         gameWon: false,
+        gameEnded: false,
+        unboxTapCounts: {},
         gameTimeRemaining: nextSpec.gameRules.timeLimitSeconds,
       };
     }),
@@ -256,6 +304,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         fogFar: preset.fogFar,
         groundGrid: preset.groundGrid,
         groundColor: preset.groundColor,
+        reflectivePedestal: preset.reflectivePedestal,
         ambientIntensity: preset.ambientIntensity,
         keyLightColor: preset.keyLightColor,
         keyLightIntensity: preset.keyLightIntensity,
@@ -272,12 +321,18 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.camera.mode = mode;
-      if (mode === 'isometric-game') {
-        nextSpec.camera.position = [0, 5.4, 8.2];
-        nextSpec.camera.target = [0, 1.0, 0];
-      } else if (mode === 'orbit') {
-        nextSpec.camera.position = [0, 2.8, 6.4];
+      if (mode === 'top-down-isometric' || mode === 'isometric-game') {
+        nextSpec.camera.position = [0, 6.2, 8.2];
+        nextSpec.camera.target = [0, 0.9, 0];
+      } else if (mode === 'orbit-360' || mode === 'orbit') {
+        nextSpec.camera.position = [0, 2.6, 6.4];
         nextSpec.camera.target = [0, 1.1, 0];
+      } else if (mode === 'dolly-zoom-in') {
+        nextSpec.camera.position = [0, 2.4, 5.8];
+        nextSpec.camera.target = [0, 1.1, 0];
+      } else if (mode === 'crane-reveal') {
+        nextSpec.camera.position = [-2.4, 1.2, 5.2];
+        nextSpec.camera.target = [0, 1.3, 0];
       }
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
@@ -287,6 +342,74 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }),
 
   selectActor: (id) => set({ selectedActorId: id }),
+  setTransformMode: (transformMode) => set({ transformMode }),
+  setIsDraggingGizmo: (isDraggingGizmo) => set({ isDraggingGizmo }),
+
+  updateActorTransform: (actorId, position, rotation, scale) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.actors.findIndex((a) => a.id === actorId);
+      if (idx === -1) return state;
+      nextSpec.actors[idx] = {
+        ...nextSpec.actors[idx],
+        position: [
+          Number(position[0].toFixed(2)),
+          Number(Math.max(0, position[1]).toFixed(2)),
+          Number(position[2].toFixed(2)),
+        ],
+        rotation: [
+          Number(rotation[0].toFixed(2)),
+          Number(rotation[1].toFixed(2)),
+          Number(rotation[2].toFixed(2)),
+        ],
+        scale: [
+          Number(Math.max(0.2, scale[0]).toFixed(2)),
+          Number(Math.max(0.2, scale[1]).toFixed(2)),
+          Number(Math.max(0.2, scale[2]).toFixed(2)),
+        ],
+      };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateActorProperty: (actorId, partialProps) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.actors.findIndex((a) => a.id === actorId);
+      if (idx === -1) return state;
+      nextSpec.actors[idx] = { ...nextSpec.actors[idx], ...partialProps };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateActor: (actorId, patch) => get().updateActorProperty(actorId, patch),
+
+  duplicateActor: (actorId) =>
+    set((state) => {
+      const source = state.sceneSpec.actors.find((a) => a.id === actorId);
+      if (!source) return state;
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const newPos = findUnoccupiedPosition(nextSpec.actors);
+      const copy: ActorNode = {
+        ...JSON.parse(JSON.stringify(source)),
+        id: `actor-${Date.now().toString(36)}`,
+        name: `${source.name} Copy`,
+        position: newPos,
+      };
+      nextSpec.actors.push(copy);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedActorId: copy.id,
+      };
+    }),
 
   spawnAsset: (assetId, customGlbUrl, customName) =>
     set((state) => {
@@ -310,6 +433,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         physicsRole: entry.defaultPhysicsRole,
         onClickAction: entry.defaultClickAction,
         scoreValue: entry.defaultScoreValue,
+        startTime: 0,
+        endTime: nextSpec.durationSeconds || 8,
+        enterEffect: 'pop-in',
+        unboxTapsRequired: entry.assetId === 'mystery-gift-box' ? 3 : undefined,
+        revealAssetId: entry.assetId === 'mystery-gift-box' ? 'sports-sneaker-pro' : undefined,
       };
       nextSpec.actors.push(newActor);
       return {
@@ -317,19 +445,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         futureSpecs: [],
         sceneSpec: nextSpec,
         selectedActorId: newActor.id,
-      };
-    }),
-
-  updateActor: (actorId, patch) =>
-    set((state) => {
-      const nextSpec = cloneSceneSpec(state.sceneSpec);
-      const idx = nextSpec.actors.findIndex((a) => a.id === actorId);
-      if (idx === -1) return state;
-      nextSpec.actors[idx] = { ...nextSpec.actors[idx], ...patch };
-      return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
-        futureSpecs: [],
-        sceneSpec: nextSpec,
       };
     }),
 
@@ -342,7 +457,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         futureSpecs: [],
         sceneSpec: nextSpec,
         selectedActorId:
-          state.selectedActorId === actorId ? (nextSpec.actors[0]?.id ?? null) : state.selectedActorId,
+          state.selectedActorId === actorId
+            ? (nextSpec.actors[0]?.id ?? null)
+            : state.selectedActorId,
       };
     }),
 
@@ -365,6 +482,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         intensity: 1.2,
         scale: 1,
         labelText: type === 'floating-3d-badge' ? 'SPECIAL OFFER · PLAY NOW' : undefined,
+        startTime: 0,
+        endTime: nextSpec.durationSeconds || 8,
+        enterEffect: 'pop-in',
       };
       nextSpec.vfx.push(newVfx);
       return {
@@ -388,65 +508,297 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
+  toggleLoop: () => set((state) => ({ isLooping: !state.isLooping })),
   setCurrentTime: (currentTime) => set({ currentTime }),
 
   advanceTimeline: (deltaSeconds) =>
     set((state) => {
       if (!state.isPlaying) return state;
       const duration = Math.max(2, state.sceneSpec.durationSeconds || 8);
-      const nextTime = (state.currentTime + deltaSeconds) % duration;
+      let nextTime = state.currentTime + deltaSeconds;
+      let nextPlaying: boolean = state.isPlaying;
 
-      // Also tick game timer if in game mode and not yet won
+      if (nextTime >= duration) {
+        if (state.isLooping) {
+          nextTime = nextTime % duration;
+        } else {
+          nextTime = duration;
+          nextPlaying = false;
+        }
+      }
+
+      // Tick playable game timer when in Game Mode
       let nextRemaining = state.gameTimeRemaining;
-      if (state.sceneSpec.mode === 'game' && !state.gameWon) {
+      let nextEnded = state.gameEnded;
+      let nextWon = state.gameWon;
+
+      if (state.sceneSpec.mode === 'game' && !state.gameEnded) {
         nextRemaining = Math.max(0, state.gameTimeRemaining - deltaSeconds);
-        if (nextRemaining === 0 && state.sceneSpec.gameRules.winCondition === 'survive-timer') {
-          return {
-            currentTime: nextTime,
-            gameTimeRemaining: 0,
-            gameWon: true,
-          };
+        if (nextRemaining === 0) {
+          nextEnded = true;
+          if (state.sceneSpec.gameRules.winCondition === 'survive-timer') {
+            nextWon = true;
+          }
         }
       }
 
       return {
         currentTime: nextTime,
+        isPlaying: nextPlaying,
         gameTimeRemaining: nextRemaining,
+        gameEnded: nextEnded,
+        gameWon: nextWon,
       };
     }),
 
+  movePlayerActor: (dx, dz) =>
+    set((state) => {
+      if (state.sceneSpec.mode !== 'game' || state.gameEnded) return state;
+      const playerIdx = state.sceneSpec.actors.findIndex((a) => a.physicsRole === 'player');
+      if (playerIdx === -1) return state;
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const player = nextSpec.actors[playerIdx];
+      const nextX = Math.max(-3.6, Math.min(3.6, player.position[0] + dx));
+      const nextZ = Math.max(-3.6, Math.min(3.6, player.position[2] + dz));
+      const heading = Math.atan2(dx, dz);
+      player.position = [Number(nextX.toFixed(2)), player.position[1], Number(nextZ.toFixed(2))];
+      player.rotation = [0, Number(heading.toFixed(2)), 0];
+      return { sceneSpec: nextSpec };
+    }),
+
+  handlePlayerCollision: (targetActorId) => {
+    const state = get();
+    if (state.sceneSpec.mode !== 'game' || state.gameEnded) return;
+    const target = state.sceneSpec.actors.find((a) => a.id === targetActorId);
+    if (!target || target.visible === false) return;
+
+    if (target.physicsRole === 'collectible') {
+      const pts = target.scoreValue ?? 25;
+      const nextScore = state.gameScore + pts;
+      const targetScore = state.sceneSpec.gameRules.targetScore || 100;
+      const won = nextScore >= targetScore;
+
+      // Respawn collectible at a random arena coordinate so player can keep collecting or win
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.actors.findIndex((a) => a.id === targetActorId);
+      const burstPos: Vector3Tuple = [...target.position];
+
+      if (idx !== -1) {
+        const rx = Number(((Math.random() - 0.5) * 4.4).toFixed(2));
+        const rz = Number(((Math.random() - 0.5) * 4.4).toFixed(2));
+        nextSpec.actors[idx].position = [rx, 0, rz];
+      }
+
+      const popup: FloatingScoreFeedback = {
+        id: `pop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        text: `+${pts} PTS · ${target.name}`,
+        color: target.primaryColor || '#FBBF24',
+        createdAt: Date.now(),
+      };
+
+      const burst: BurstVFXInstance = {
+        id: `burst-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        position: burstPos,
+        color: target.primaryColor || '#FBBF24',
+        createdAt: Date.now(),
+      };
+
+      set((s) => ({
+        sceneSpec: nextSpec,
+        gameScore: nextScore,
+        gameWon: s.gameWon || won,
+        gameEnded: s.gameEnded || won,
+        scorePopups: [...s.scorePopups.slice(-4), popup],
+        burstEffects: [...s.burstEffects.slice(-5), burst],
+      }));
+    } else if (target.physicsRole === 'hazard') {
+      const penalty = 10;
+      const nextScore = Math.max(0, state.gameScore - penalty);
+      // Push player slightly away from hazard
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const pIdx = nextSpec.actors.findIndex((a) => a.physicsRole === 'player');
+      if (pIdx !== -1) {
+        const p = nextSpec.actors[pIdx];
+        const dx = p.position[0] - target.position[0] || 0.8;
+        const dz = p.position[2] - target.position[2] || 0.8;
+        const len = Math.hypot(dx, dz) || 1;
+        p.position = [
+          Number((p.position[0] + (dx / len) * 1.1).toFixed(2)),
+          0,
+          Number((p.position[2] + (dz / len) * 1.1).toFixed(2)),
+        ];
+      }
+
+      const popup: FloatingScoreFeedback = {
+        id: `pop-haz-${Date.now()}`,
+        text: `-${penalty} PTS · HAZARD HIT!`,
+        color: '#EF4444',
+        createdAt: Date.now(),
+      };
+
+      set((s) => ({
+        sceneSpec: nextSpec,
+        gameScore: nextScore,
+        scorePopups: [...s.scorePopups.slice(-4), popup],
+      }));
+    }
+  },
+
   triggerActorInteraction: (actor) => {
     const state = get();
-    const pts = actor.scoreValue ?? 15;
+
+    // Special Tap-to-Unbox Mini-Game Mechanic (3 taps -> Confetti Explosion + Product Reveal!)
+    if (actor.onClickAction === 'unbox-tap' || actor.assetId === 'mystery-gift-box') {
+      const currentTaps = (state.unboxTapCounts[actor.id] || 0) + 1;
+      const required = actor.unboxTapsRequired || 3;
+
+      if (currentTaps < required) {
+        const popup: FloatingScoreFeedback = {
+          id: `pop-unbox-${Date.now()}`,
+          text: `UNBOXING TAP ${currentTaps}/${required} · KEEP TAPPING!`,
+          color: '#A855F7',
+          createdAt: Date.now(),
+        };
+        const burst: BurstVFXInstance = {
+          id: `burst-${Date.now()}`,
+          position: [...actor.position],
+          color: '#FBBF24',
+          createdAt: Date.now(),
+        };
+        set((s) => ({
+          selectedActorId: actor.id,
+          gameScore: s.gameScore + 25,
+          unboxTapCounts: { ...s.unboxTapCounts, [actor.id]: currentTaps },
+          scorePopups: [...s.scorePopups.slice(-4), popup],
+          burstEffects: [...s.burstEffects.slice(-5), burst],
+        }));
+        return;
+      }
+
+      // 3rd Tap Reached! Transform Mystery Box into Revealed Hero Product + Spawn Confetti!
+      const revealId = actor.revealAssetId || 'sports-sneaker-pro';
+      const revealEntry = ASSET_REGISTRY[revealId] || ASSET_REGISTRY['sports-sneaker-pro'];
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const aIdx = nextSpec.actors.findIndex((a) => a.id === actor.id);
+      if (aIdx !== -1) {
+        nextSpec.actors[aIdx] = {
+          ...nextSpec.actors[aIdx],
+          name: `UNBOXED: ${revealEntry.name}`,
+          assetId: revealEntry.assetId,
+          primaryColor: revealEntry.defaultPrimaryColor,
+          secondaryColor: revealEntry.defaultSecondaryColor,
+          activeAnimation: 'spin',
+          onClickAction: 'trigger-cta',
+          scale: [1.3, 1.3, 1.3],
+        };
+      }
+      nextSpec.vfx.push({
+        id: `vfx-confetti-${Date.now()}`,
+        name: 'Unboxing Confetti Explosion',
+        type: 'confetti',
+        position: [actor.position[0], 0.8, actor.position[2]],
+        color: '#FBBF24',
+        intensity: 1.6,
+        scale: 1.5,
+      });
+
+      const winScore = Math.max(state.gameScore + 50, state.sceneSpec.gameRules.targetScore || 100);
+      const popup: FloatingScoreFeedback = {
+        id: `pop-unbox-win-${Date.now()}`,
+        text: `UNBOXED ${revealEntry.name.toUpperCase()}! +50 PTS`,
+        color: '#10B981',
+        createdAt: Date.now(),
+      };
+
+      set((s) => ({
+        sceneSpec: nextSpec,
+        selectedActorId: actor.id,
+        gameScore: winScore,
+        gameWon: true,
+        gameEnded: true,
+        unboxTapCounts: { ...s.unboxTapCounts, [actor.id]: required },
+        scorePopups: [...s.scorePopups.slice(-4), popup],
+      }));
+      return;
+    }
+
+    // Standard Collectible / Destroy / Trigger CTA Click Actions
+    const pts = actor.scoreValue ?? 20;
     const nextScore = state.gameScore + pts;
-    const targetScore = state.sceneSpec.gameRules.targetScore || 50;
-    const won = nextScore >= targetScore;
+    const targetScore = state.sceneSpec.gameRules.targetScore || 100;
+    const won =
+      state.sceneSpec.mode === 'game' &&
+      (nextScore >= targetScore ||
+        actor.onClickAction === 'trigger-cta' ||
+        actor.onClickAction === 'cta-redirect');
+
+    const nextSpec = cloneSceneSpec(state.sceneSpec);
+    if (
+      state.sceneSpec.mode === 'game' &&
+      (actor.onClickAction === 'collect' ||
+        actor.onClickAction === 'collect-score' ||
+        actor.onClickAction === 'destroy')
+    ) {
+      const idx = nextSpec.actors.findIndex((a) => a.id === actor.id);
+      if (idx !== -1) {
+        if (actor.onClickAction === 'destroy') {
+          nextSpec.actors[idx].visible = false;
+        } else {
+          // Respawn collectible at new position
+          nextSpec.actors[idx].position = [
+            Number(((Math.random() - 0.5) * 4.2).toFixed(2)),
+            0,
+            Number(((Math.random() - 0.5) * 4.2).toFixed(2)),
+          ];
+        }
+      }
+    }
 
     const popup: FloatingScoreFeedback = {
       id: `pop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      text:
-        actor.onClickAction === 'cta-redirect'
-          ? `CTA CLICKED · +${pts} PTS`
-          : `+${pts} PTS · ${actor.name}`,
+      text: `+${pts} PTS · ${actor.name}`,
       color: actor.primaryColor || '#F59E0B',
       createdAt: Date.now(),
     };
 
+    const burst: BurstVFXInstance = {
+      id: `burst-${Date.now()}`,
+      position: [...actor.position],
+      color: actor.primaryColor || '#06B6D4',
+      createdAt: Date.now(),
+    };
+
     set((s) => ({
+      sceneSpec: nextSpec,
       selectedActorId: actor.id,
       gameScore: nextScore,
       gameWon: s.gameWon || won,
+      gameEnded: s.gameEnded || won,
       scorePopups: [...s.scorePopups.slice(-4), popup],
+      burstEffects: [...s.burstEffects.slice(-5), burst],
     }));
   },
 
   resetGameSession: () =>
-    set((state) => ({
-      gameScore: 0,
-      gameWon: false,
-      gameTimeRemaining: state.sceneSpec.gameRules.timeLimitSeconds || 30,
-      scorePopups: [],
-    })),
+    set((state) => {
+      // If current template is in SCENE_TEMPLATES, restore initial collectibles/unbox state cleanly
+      const tpl = SCENE_TEMPLATES[state.sceneSpec.id];
+      const restoredSpec = tpl ? cloneSceneSpec(tpl) : cloneSceneSpec(state.sceneSpec);
+      restoredSpec.mode = state.sceneSpec.mode;
+      restoredSpec.actors.forEach((a) => (a.visible = true));
+      return {
+        sceneSpec: restoredSpec,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+        unboxTapCounts: {},
+        gameTimeRemaining: restoredSpec.gameRules.timeLimitSeconds || 15,
+        scorePopups: [],
+        burstEffects: [],
+      };
+    }),
+
+  dismissEndCard: () => set({ gameEnded: false }),
 
   addChatMessage: (msg) =>
     set((state) => ({

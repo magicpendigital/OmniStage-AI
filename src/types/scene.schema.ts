@@ -1,12 +1,14 @@
 /**
- * CORE CONTRACT: SceneSpec & Multi-Coding-Agent Schema Definitions
- * All 3D rendering, AI agent mutations, Vision QA diagnostics, and HTML5 exports
- * strictly adhere to this declarative schema.
+ * CORE CONTRACT: SceneSpec & Multi-Coding-Agent Schema Definitions (Phase 2)
+ * All 3D rendering, gizmo manipulation, camera sequencing, playable game loops,
+ * AI agent mutations, Vision QA diagnostics, and HTML5 exports strictly adhere to this schema.
  */
 
 export type StudioMode = 'game' | 'media';
 
 export type AspectRatioPreset = '16:9' | '9:16' | '1:1';
+
+export type TransformMode = 'translate' | 'rotate' | 'scale';
 
 export type LightingPresetId =
   | 'clean-apple-studio'
@@ -15,6 +17,11 @@ export type LightingPresetId =
   | 'arcade-vibrant';
 
 export type CameraMode =
+  | 'orbit-360'
+  | 'dolly-zoom-in'
+  | 'crane-reveal'
+  | 'top-down-isometric'
+  | 'first-person-follow'
   | 'orbit'
   | 'cinematic-flythrough'
   | 'follow-target'
@@ -28,14 +35,21 @@ export type AnimationType =
   | 'attack'
   | 'float';
 
-export type PhysicsRole = 'static' | 'dynamic' | 'collectible' | 'player';
+export type PhysicsRole = 'static' | 'dynamic' | 'collectible' | 'player' | 'hazard';
 
 export type ActorClickAction =
   | 'none'
+  | 'collect'
   | 'collect-score'
+  | 'destroy'
+  | 'bounce'
   | 'jump-boost'
   | 'trigger-vfx'
-  | 'cta-redirect';
+  | 'trigger-cta'
+  | 'cta-redirect'
+  | 'unbox-tap';
+
+export type EnterEffect = 'pop-in' | 'slide-up' | 'fade' | 'none';
 
 export type VFXType =
   | 'sparkles'
@@ -47,7 +61,7 @@ export type VFXType =
 export type Vector3Tuple = [number, number, number];
 
 export interface CameraKeyframe {
-  id: string;
+  id?: string;
   time: number; // Seconds (0 to duration)
   position: Vector3Tuple;
   target: Vector3Tuple;
@@ -72,6 +86,7 @@ export interface EnvironmentConfig {
   fogFar: number;
   groundGrid: boolean;
   groundColor: string;
+  reflectivePedestal?: boolean;
   ambientIntensity: number;
   keyLightColor: string;
   keyLightIntensity: number;
@@ -96,6 +111,13 @@ export interface ActorNode {
   onClickAction: ActorClickAction;
   scoreValue?: number;
   visible?: boolean;
+  // Phase 2 Timeline Visibility & Enter Effect Windows
+  startTime?: number;
+  endTime?: number;
+  enterEffect?: EnterEffect;
+  // Phase 2 Tap-to-Unbox Mini-Game Mechanics
+  unboxTapsRequired?: number;
+  revealAssetId?: string;
 }
 
 export interface VFXNode {
@@ -107,6 +129,9 @@ export interface VFXNode {
   intensity: number;
   scale?: number;
   labelText?: string; // Used when type === 'floating-3d-badge'
+  startTime?: number;
+  endTime?: number;
+  enterEffect?: EnterEffect;
 }
 
 export interface MarketingOverlayConfig {
@@ -121,7 +146,7 @@ export interface MarketingOverlayConfig {
 }
 
 export interface GameRule {
-  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer';
+  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer' | 'unbox-reveal';
   targetScore: number;
   timeLimitSeconds: number;
   instructions: string;
@@ -183,6 +208,16 @@ export interface SemanticAssetEntry {
   supportedAnimations: AnimationType[];
 }
 
+export interface ActorCoordinateSummary {
+  id: string;
+  name: string;
+  assetId: string;
+  physicsRole: PhysicsRole;
+  worldPosition: Vector3Tuple;
+  scale: Vector3Tuple;
+  boundingBox: BoundingBoxSpec;
+}
+
 export interface VisionQAIssue {
   id: string;
   severity: 'high' | 'medium' | 'low';
@@ -197,6 +232,7 @@ export interface VisionQAReport {
   overallScore: number;
   summary: string;
   screenshotDataUrl?: string;
+  actorCoordinates?: ActorCoordinateSummary[];
   issues: VisionQAIssue[];
   proposedSceneSpec: SceneSpec;
   applied?: boolean;

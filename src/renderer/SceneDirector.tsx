@@ -1,11 +1,12 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, Grid, OrbitControls } from '@react-three/drei';
+import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useStudioStore } from '../state/useStudioStore';
+import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorRenderer } from './ActorRenderer';
-import { VFXRenderer } from './VFXRenderer';
+import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -13,13 +14,20 @@ const _camPosVec = new THREE.Vector3();
 export const SceneDirector: React.FC = () => {
   const { gl, scene, camera } = useThree();
   const controlsRef = useRef<any>(null);
+  const pressedKeysRef = useRef<Set<string>>(new Set());
+  const lastCollisionTimeRef = useRef<Record<string, number>>({});
 
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
+  const isDraggingGizmo = useStudioStore((s) => s.isDraggingGizmo);
   const selectActor = useStudioStore((s) => s.selectActor);
+  const setTransformMode = useStudioStore((s) => s.setTransformMode);
   const advanceTimeline = useStudioStore((s) => s.advanceTimeline);
+  const movePlayerActor = useStudioStore((s) => s.movePlayerActor);
+  const handlePlayerCollision = useStudioStore((s) => s.handlePlayerCollision);
   const currentTime = useStudioStore((s) => s.currentTime);
   const isPlaying = useStudioStore((s) => s.isPlaying);
+  const burstEffects = useStudioStore((s) => s.burstEffects);
 
   // Initialize procedural studio PMREM environment reflection once
   useEffect(() => {
@@ -32,6 +40,35 @@ export const SceneDirector: React.FC = () => {
       envTexture.dispose();
     };
   }, [gl, scene]);
+
+  // Keyboard Listeners: WASD / Arrows for Playable Game Player + W/E/R for 3D Gizmo Modes
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const key = e.key.toLowerCase();
+      pressedKeysRef.current.add(key);
+
+      // When not in active Game Mode, W / E / R switch TransformControls Gizmo modes
+      if (useStudioStore.getState().sceneSpec.mode !== 'game') {
+        if (key === 'w') setTransformMode('translate');
+        else if (key === 'e') setTransformMode('rotate');
+        else if (key === 'r') setTransformMode('scale');
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      pressedKeysRef.current.delete(e.key.toLowerCase());
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [setTransformMode]);
 
   // Sync background color & horizon fog with SceneSpec
   useEffect(() => {
@@ -57,63 +94,150 @@ export const SceneDirector: React.FC = () => {
     }
   }, [camera, sceneSpec.camera.fov]);
 
-  // Per-frame Timeline Clock & Camera Choreography
+  // Precompute CatmullRomCurve3 splines for custom camera keyframes
+  const keyframeCurves = useMemo(() => {
+    const kfs = sceneSpec.camera.keyframes || [];
+    if (kfs.length < 2) return null;
+    const sorted = [...kfs].sort((a, b) => a.time - b.time);
+    const posPoints = sorted.map((k) => new THREE.Vector3(...k.position));
+    const targetPoints = sorted.map((k) => new THREE.Vector3(...k.target));
+    return {
+      posCurve: new THREE.CatmullRomCurve3(posPoints),
+      targetCurve: new THREE.CatmullRomCurve3(targetPoints),
+    };
+  }, [sceneSpec.camera.keyframes]);
+
+  // Per-frame Timeline Sequencer, Camera Track Interpolation & Playable Bounding-Box Collision Loop
   useFrame((_, delta) => {
     const clampedDelta = Math.min(delta, 0.1);
     advanceTimeline(clampedDelta);
 
+    const duration = Math.max(2, sceneSpec.durationSeconds || 8);
+    const progress = THREE.MathUtils.clamp(currentTime / duration, 0, 1);
     const camMode = sceneSpec.camera.mode;
-    const keyframes = sceneSpec.camera.keyframes || [];
 
-    if (camMode === 'cinematic-flythrough' && keyframes.length >= 2 && isPlaying) {
-      // Interpolate between keyframes based on currentTime
-      const sorted = [...keyframes].sort((a, b) => a.time - b.time);
-      let k0 = sorted[0];
-      let k1 = sorted[sorted.length - 1];
+    // 1. REAL PLAYABLE GAME LOOP: Player Keyboard Movement + Bounding-Sphere Collision Detection
+    if (sceneSpec.mode === 'game' && isPlaying) {
+      const keys = pressedKeysRef.current;
+      let moveX = 0;
+      let moveZ = 0;
+      const moveSpeed = 4.2 * clampedDelta;
 
-      for (let i = 0; i < sorted.length - 1; i++) {
-        if (currentTime >= sorted[i].time && currentTime <= sorted[i + 1].time) {
-          k0 = sorted[i];
-          k1 = sorted[i + 1];
-          break;
+      if (keys.has('w') || keys.has('arrowup')) moveZ -= moveSpeed;
+      if (keys.has('s') || keys.has('arrowdown')) moveZ += moveSpeed;
+      if (keys.has('a') || keys.has('arrowleft')) moveX -= moveSpeed;
+      if (keys.has('d') || keys.has('arrowright')) moveX += moveSpeed;
+
+      if (moveX !== 0 || moveZ !== 0) {
+        movePlayerActor(moveX, moveZ);
+      }
+
+      // Real-time Bounding-Box / Sphere Collision Check between Player and Collectibles/Hazards
+      const currentActors = useStudioStore.getState().sceneSpec.actors;
+      const player = currentActors.find((a) => a.physicsRole === 'player');
+      if (player) {
+        const playerBBox = ASSET_REGISTRY[player.assetId]?.boundingBox || {
+          width: 1.4,
+          height: 2.0,
+          depth: 1.4,
+        };
+        const playerRadius = Math.max(playerBBox.width, playerBBox.depth) * 0.42;
+        const now = performance.now();
+
+        for (const other of currentActors) {
+          if (other.id === player.id || other.visible === false) continue;
+          if (other.physicsRole !== 'collectible' && other.physicsRole !== 'hazard') continue;
+
+          const otherBBox = ASSET_REGISTRY[other.assetId]?.boundingBox || {
+            width: 1.0,
+            height: 1.2,
+            depth: 1.0,
+          };
+          const otherRadius = Math.max(otherBBox.width, otherBBox.depth) * 0.45;
+          const distXZ = Math.hypot(
+            player.position[0] - other.position[0],
+            player.position[2] - other.position[2]
+          );
+
+          if (distXZ < playerRadius + otherRadius) {
+            const lastHit = lastCollisionTimeRef.current[other.id] || 0;
+            if (now - lastHit > 450) {
+              lastCollisionTimeRef.current[other.id] = now;
+              handlePlayerCollision(other.id);
+            }
+          }
         }
       }
+    }
 
-      const span = Math.max(0.001, k1.time - k0.time);
-      const alpha = THREE.MathUtils.clamp((currentTime - k0.time) / span, 0, 1);
-      const smoothAlpha = THREE.MathUtils.smoothstep(alpha, 0, 1);
-
-      _camPosVec.set(
-        THREE.MathUtils.lerp(k0.position[0], k1.position[0], smoothAlpha),
-        THREE.MathUtils.lerp(k0.position[1], k1.position[1], smoothAlpha),
-        THREE.MathUtils.lerp(k0.position[2], k1.position[2], smoothAlpha)
-      );
-      _targetVec.set(
-        THREE.MathUtils.lerp(k0.target[0], k1.target[0], smoothAlpha),
-        THREE.MathUtils.lerp(k0.target[1], k1.target[1], smoothAlpha),
-        THREE.MathUtils.lerp(k0.target[2], k1.target[2], smoothAlpha)
-      );
-
-      camera.position.lerp(_camPosVec, 0.08);
-      if (controlsRef.current) {
-        controlsRef.current.target.lerp(_targetVec, 0.08);
-        controlsRef.current.update();
-      } else {
-        camera.lookAt(_targetVec);
-      }
-    } else if (camMode === 'follow-target') {
-      const targetActor =
-        sceneSpec.actors.find((a) => a.id === sceneSpec.camera.followActorId) ||
-        sceneSpec.actors.find((a) => a.id === selectedActorId) ||
-        sceneSpec.actors[0];
-      if (targetActor && controlsRef.current) {
-        _targetVec.set(
-          targetActor.position[0],
-          targetActor.position[1] + 1.1,
-          targetActor.position[2]
-        );
-        controlsRef.current.target.lerp(_targetVec, 0.08);
-        controlsRef.current.update();
+    // 2. CINEMATIC CAMERA SEQUENCER (Media Mode or Active Camera Tracks)
+    if (isPlaying && !isDraggingGizmo && sceneSpec.mode === 'media') {
+      if (camMode === 'orbit-360') {
+        const angle = progress * Math.PI * 2;
+        const radius = 6.2;
+        _camPosVec.set(Math.sin(angle) * radius, 2.45, Math.cos(angle) * radius);
+        _targetVec.set(0, 1.15, 0);
+        camera.position.lerp(_camPosVec, 0.08);
+        if (controlsRef.current) {
+          controlsRef.current.target.lerp(_targetVec, 0.08);
+          controlsRef.current.update();
+        }
+      } else if (camMode === 'dolly-zoom-in') {
+        const zDist = THREE.MathUtils.lerp(6.8, 3.6, progress);
+        const yHeight = THREE.MathUtils.lerp(2.7, 1.65, progress);
+        _camPosVec.set(Math.sin(progress * 0.8) * 1.1, yHeight, zDist);
+        _targetVec.set(0, 1.1, 0);
+        camera.position.lerp(_camPosVec, 0.08);
+        if (controlsRef.current) {
+          controlsRef.current.target.lerp(_targetVec, 0.08);
+          controlsRef.current.update();
+        }
+      } else if (camMode === 'crane-reveal') {
+        const yHeight = THREE.MathUtils.lerp(0.85, 4.4, progress);
+        const xPan = THREE.MathUtils.lerp(-2.6, 2.6, progress);
+        _camPosVec.set(xPan, yHeight, 5.8);
+        _targetVec.set(0, 1.3, 0);
+        camera.position.lerp(_camPosVec, 0.08);
+        if (controlsRef.current) {
+          controlsRef.current.target.lerp(_targetVec, 0.08);
+          controlsRef.current.update();
+        }
+      } else if (camMode === 'top-down-isometric' || camMode === 'isometric-game') {
+        _camPosVec.set(0, 6.2, 8.2);
+        _targetVec.set(0, 0.9, 0);
+        camera.position.lerp(_camPosVec, 0.08);
+        if (controlsRef.current) {
+          controlsRef.current.target.lerp(_targetVec, 0.08);
+          controlsRef.current.update();
+        }
+      } else if (camMode === 'first-person-follow' || camMode === 'follow-target') {
+        const targetActor =
+          sceneSpec.actors.find((a) => a.id === sceneSpec.camera.followActorId) ||
+          sceneSpec.actors.find((a) => a.id === selectedActorId) ||
+          sceneSpec.actors[0];
+        if (targetActor && controlsRef.current) {
+          _camPosVec.set(
+            targetActor.position[0],
+            targetActor.position[1] + 2.2,
+            targetActor.position[2] + 3.8
+          );
+          _targetVec.set(
+            targetActor.position[0],
+            targetActor.position[1] + 1.2,
+            targetActor.position[2]
+          );
+          camera.position.lerp(_camPosVec, 0.08);
+          controlsRef.current.target.lerp(_targetVec, 0.08);
+          controlsRef.current.update();
+        }
+      } else if (camMode === 'cinematic-flythrough' && keyframeCurves) {
+        keyframeCurves.posCurve.getPointAt(progress, _camPosVec);
+        keyframeCurves.targetCurve.getPointAt(progress, _targetVec);
+        camera.position.lerp(_camPosVec, 0.1);
+        if (controlsRef.current) {
+          controlsRef.current.target.lerp(_targetVec, 0.1);
+          controlsRef.current.update();
+        }
       }
     }
   });
@@ -147,37 +271,83 @@ export const SceneDirector: React.FC = () => {
       />
 
       {/* Cool Fill Light */}
-      <directionalLight position={[-5.0, 4.0, 3.5]} color="#93C5FD" intensity={0.85} />
+      <directionalLight position={[-5.0, 4.0, 3.5]} color="#93C5FD" intensity={0.9} />
 
       {/* High-Contrast Rim / Backlight */}
       <spotLight
         position={[0, 6.5, -6.5]}
         color={env.rimLightColor || '#38BDF8'}
-        intensity={3.2}
+        intensity={3.4}
         angle={0.65}
         penumbra={0.8}
       />
 
-      {/* Ground Plane & Contact Shadows */}
+      {/* Subtle Ambient Studio Sparkle Dust */}
+      <Sparkles
+        count={24}
+        scale={10}
+        size={1.6}
+        speed={0.25}
+        opacity={0.35}
+        color={env.rimLightColor || '#38BDF8'}
+      />
+
+      {/* Studio Floor Plane */}
       <mesh
-        position={[0, -0.01, 0]}
+        position={[0, -0.02, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
         receiveShadow
+        onClick={(e) => {
+          // In Game Mode, clicking the arena floor moves the Player actor toward that spot!
+          if (sceneSpec.mode === 'game' && isPlaying) {
+            e.stopPropagation();
+            const player = sceneSpec.actors.find((a) => a.physicsRole === 'player');
+            if (player) {
+              const dx = (e.point.x - player.position[0]) * 0.45;
+              const dz = (e.point.z - player.position[2]) * 0.45;
+              movePlayerActor(dx, dz);
+            }
+          }
+        }}
       >
         <planeGeometry args={[60, 60]} />
         <meshStandardMaterial
           color={env.groundColor || '#0F172A'}
-          roughness={0.85}
-          metalness={0.15}
+          roughness={env.reflectivePedestal ? 0.25 : 0.8}
+          metalness={env.reflectivePedestal ? 0.65 : 0.15}
           polygonOffset
           polygonOffsetFactor={1}
           polygonOffsetUnits={1}
         />
       </mesh>
 
+      {/* Optional Commercial Reflective Studio Pedestal Disc */}
+      {env.reflectivePedestal && (
+        <group position={[0, 0.005, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+            <circleGeometry args={[3.2, 64]} />
+            <meshPhysicalMaterial
+              color={env.groundColor || '#0F172A'}
+              metalness={0.85}
+              roughness={0.12}
+              clearcoat={1}
+              reflectivity={0.9}
+            />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
+            <ringGeometry args={[3.14, 3.22, 64]} />
+            <meshBasicMaterial
+              color={env.rimLightColor || '#38BDF8'}
+              transparent
+              opacity={0.65}
+            />
+          </mesh>
+        </group>
+      )}
+
       {env.groundGrid && (
         <Grid
-          position={[0, 0.005, 0]}
+          position={[0, 0.008, 0]}
           args={[30, 30]}
           cellSize={1}
           cellThickness={0.6}
@@ -191,10 +361,10 @@ export const SceneDirector: React.FC = () => {
       )}
 
       <ContactShadows
-        position={[0, 0.01, 0]}
-        opacity={0.5}
+        position={[0, 0.012, 0]}
+        opacity={0.55}
         scale={16}
-        blur={2.2}
+        blur={2.0}
         far={5}
         color="#000000"
       />
@@ -213,14 +383,20 @@ export const SceneDirector: React.FC = () => {
         <VFXRenderer key={vfx.id} vfx={vfx} />
       ))}
 
-      {/* Interactive Camera Controls */}
+      {/* Real-time Playable Collision & Tap Bursts */}
+      {burstEffects.map((b) => (
+        <CollisionBurstRenderer key={b.id} burst={b} />
+      ))}
+
+      {/* Interactive Camera Controls (Automatically yields when dragging 3D Gizmo) */}
       <OrbitControls
         ref={controlsRef}
         makeDefault
+        enabled={!isDraggingGizmo}
         enableDamping
         dampingFactor={0.07}
         maxPolarAngle={Math.PI / 2 - 0.04}
-        minDistance={2.2}
+        minDistance={2.0}
         maxDistance={22}
         target={sceneSpec.camera.target}
       />

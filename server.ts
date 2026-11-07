@@ -69,10 +69,10 @@ Return a JSON object with:
     }
   });
 
-  // 2. Multimodal Vision QA Endpoint (WebGL Canvas Base64 PNG + SceneSpec JSON)
+  // 2. Multimodal Vision QA Endpoint (WebGL Canvas Base64 PNG + Actor Coordinates + SceneSpec JSON)
   app.post('/api/agent/vision-qa', async (req, res) => {
     try {
-      const { screenshotDataUrl, sceneSpec } = req.body;
+      const { screenshotDataUrl, actorCoordinates, sceneSpec } = req.body;
       const ai = getGenAIClient();
       if (!ai || !screenshotDataUrl) {
         res.status(503).json({ error: 'Vision QA fallback active' });
@@ -92,11 +92,15 @@ Return a JSON object with:
               },
             },
             {
-              text: `Inspect this 3D WebGL viewport screenshot and its current SceneSpec JSON:\n${JSON.stringify(
+              text: `Inspect this 3D WebGL viewport screenshot, the Actor World Coordinates & Bounding Boxes summary:\n${JSON.stringify(
+                actorCoordinates || [],
+                null,
+                2
+              )}\n\nand the full SceneSpec JSON:\n${JSON.stringify(
                 sceneSpec,
                 null,
                 2
-              )}\n\nReturn a JSON object with:
+              )}\n\nDetect any overlapping objects, off-frame cameras, ungrounded actors, or low-contrast lighting, and return a JSON object with:
 {
   "overallScore": 88,
   "summary": "Diagnostic summary of framing, actor spacing, and lighting contrast",

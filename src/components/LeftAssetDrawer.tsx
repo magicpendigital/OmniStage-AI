@@ -21,7 +21,8 @@ import { LightingPresetId } from '../types/scene.schema';
 type DrawerTab = 'templates' | 'assets' | 'lighting' | 'vfx';
 
 export const LeftAssetDrawer: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<DrawerTab>('assets');
+  // Default to 'templates' tab so the 4 One-Click Starter Templates are immediately accessible
+  const [activeTab, setActiveTab] = useState<DrawerTab>('templates');
   const [customGlbUrl, setCustomGlbUrl] = useState('');
   const [customGlbName, setCustomGlbName] = useState('');
 
@@ -29,6 +30,8 @@ export const LeftAssetDrawer: React.FC = () => {
   const loadTemplate = useStudioStore((s) => s.loadTemplate);
   const spawnAsset = useStudioStore((s) => s.spawnAsset);
   const setLightingPreset = useStudioStore((s) => s.setLightingPreset);
+  const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
+  const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
   const spawnVFX = useStudioStore((s) => s.spawnVFX);
   const removeVFX = useStudioStore((s) => s.removeVFX);
 
@@ -50,7 +53,7 @@ export const LeftAssetDrawer: React.FC = () => {
       <div className="p-3.5 border-b border-slate-800/90">
         <div className="flex items-center justify-between mb-2.5">
           <h2 className="font-display font-semibold text-xs uppercase tracking-wider text-slate-300">
-            Semantic Asset Library
+            Studio Library & Templates
           </h2>
           <span className="text-[11px] font-mono text-slate-400 tabular-nums">
             {sceneSpec.actors.length} Actors · {sceneSpec.vfx.length} VFX
@@ -59,8 +62,8 @@ export const LeftAssetDrawer: React.FC = () => {
 
         <div className="grid grid-cols-4 gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800/80">
           {[
-            { id: 'assets', label: '3D Models', icon: <Box className="w-3.5 h-3.5" /> },
-            { id: 'templates', label: 'Scenes', icon: <FolderKanban className="w-3.5 h-3.5" /> },
+            { id: 'templates', label: 'Templates', icon: <FolderKanban className="w-3.5 h-3.5" /> },
+            { id: 'assets', label: '3D Assets', icon: <Box className="w-3.5 h-3.5" /> },
             { id: 'lighting', label: 'Studios', icon: <SunMedium className="w-3.5 h-3.5" /> },
             { id: 'vfx', label: 'VFX', icon: <SparklesIcon className="w-3.5 h-3.5" /> },
           ].map((tab) => {
@@ -85,7 +88,60 @@ export const LeftAssetDrawer: React.FC = () => {
 
       {/* Scrollable Content Area */}
       <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
-        {/* TAB 1: SEMANTIC 3D ASSETS */}
+        {/* TAB 1: 1-CLICK STARTER SCENE TEMPLATES */}
+        {activeTab === 'templates' && (
+          <div className="space-y-2.5">
+            <div className="text-[11px] font-mono text-slate-400">
+              1-Click Pre-Built Playable Games & 3D Commercials:
+            </div>
+            {Object.values(SCENE_TEMPLATES).map((tpl) => {
+              const isCurrent = sceneSpec.id === tpl.id;
+              return (
+                <div
+                  key={tpl.id}
+                  className={`p-3 rounded-lg border transition-colors ${
+                    isCurrent
+                      ? 'bg-slate-900 border-cyan-500/60 shadow-md'
+                      : 'bg-slate-900/75 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-slate-100 leading-snug">
+                      {tpl.title}
+                    </h3>
+                  </div>
+                  <div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-cyan-400">
+                    <span>{tpl.aspectRatio}</span>
+                    <span>·</span>
+                    <span>{tpl.mode.toUpperCase()}</span>
+                    <span>·</span>
+                    <span>{tpl.camera.mode}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+                    {tpl.description}
+                  </p>
+                  <div className="mt-3 flex items-center justify-between pt-2 border-t border-slate-800/80">
+                    <span className="text-[10px] font-mono text-slate-400 tabular-nums">
+                      {tpl.actors.length} Actors · {tpl.vfx.length} VFX · {tpl.durationSeconds}s
+                    </span>
+                    <button
+                      onClick={() => loadTemplate(tpl.id)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                        isCurrent
+                          ? 'bg-cyan-500 text-slate-950'
+                          : 'bg-slate-800 hover:bg-cyan-500 hover:text-slate-950 text-slate-200'
+                      }`}
+                    >
+                      {isCurrent ? 'Active Scene' : 'Load Scene'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* TAB 2: SEMANTIC 3D ASSETS */}
         {activeTab === 'assets' && (
           <>
             <div className="space-y-2.5">
@@ -116,7 +172,7 @@ export const LeftAssetDrawer: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Semantic Metadata Footer (Unboxed clean text with separators) */}
+                  {/* Semantic Metadata Footer */}
                   <div className="pt-1.5 border-t border-slate-800/80 flex items-center gap-1.5 text-[10px] font-mono text-slate-400 tabular-nums overflow-x-auto whitespace-nowrap">
                     <span className="capitalize text-slate-300">{asset.category}</span>
                     <span>·</span>
@@ -164,89 +220,69 @@ export const LeftAssetDrawer: React.FC = () => {
           </>
         )}
 
-        {/* TAB 2: STARTER SCENE TEMPLATES */}
-        {activeTab === 'templates' && (
-          <div className="space-y-2.5">
-            {Object.values(SCENE_TEMPLATES).map((tpl) => {
-              const isCurrent = sceneSpec.id === tpl.id;
-              return (
-                <div
-                  key={tpl.id}
-                  className={`p-3 rounded-lg border transition-colors ${
-                    isCurrent
-                      ? 'bg-slate-900 border-cyan-500/60'
-                      : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-semibold text-slate-100">{tpl.title}</h3>
-                    <span className="text-[11px] font-mono text-cyan-400">
-                      {tpl.aspectRatio} · {tpl.mode.toUpperCase()}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-                    {tpl.description}
-                  </p>
-                  <div className="mt-3 flex items-center justify-between">
-                    <span className="text-[11px] font-mono text-slate-400">
-                      {tpl.actors.length} Actors · {tpl.vfx.length} VFX
-                    </span>
-                    <button
-                      onClick={() => loadTemplate(tpl.id)}
-                      className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-                        isCurrent
-                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                          : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                      }`}
-                    >
-                      {isCurrent ? 'Reload Stage' : 'Load Template'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* TAB 3: LIGHTING STUDIOS */}
+        {/* TAB 3: LIGHTING STUDIOS & FLOOR OPTIONS */}
         {activeTab === 'lighting' && (
-          <div className="space-y-2.5">
-            {(Object.keys(LIGHTING_PRESETS) as LightingPresetId[]).map((presetKey) => {
-              const preset = LIGHTING_PRESETS[presetKey];
-              const active = sceneSpec.environment.presetId === preset.presetId;
-              return (
-                <button
-                  key={preset.presetId}
-                  onClick={() => setLightingPreset(preset.presetId)}
-                  className={`w-full text-left p-3 rounded-lg border transition-colors ${
-                    active
-                      ? 'bg-slate-900 border-cyan-500/60'
-                      : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-3 h-3 rounded-sm"
-                        style={{ backgroundColor: preset.previewAccent }}
-                      />
-                      <span className="text-xs font-semibold text-slate-100">{preset.name}</span>
+          <div className="space-y-3">
+            {/* Reflective Studio Pedestal Toggle */}
+            <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold text-slate-100">
+                  Reflective Studio Pedestal
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Commercial clearcoat podium under hero objects
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={Boolean(sceneSpec.environment.reflectivePedestal)}
+                onChange={(e) => {
+                  const next = JSON.parse(JSON.stringify(sceneSpec));
+                  next.environment.reflectivePedestal = e.target.checked;
+                  setSceneSpec(next);
+                }}
+                className="w-4 h-4 accent-cyan-400 cursor-pointer"
+              />
+            </div>
+
+            <div className="space-y-2.5">
+              {(Object.keys(LIGHTING_PRESETS) as LightingPresetId[]).map((presetKey) => {
+                const preset = LIGHTING_PRESETS[presetKey];
+                const active = sceneSpec.environment.presetId === preset.presetId;
+                return (
+                  <button
+                    key={preset.presetId}
+                    onClick={() => setLightingPreset(preset.presetId)}
+                    className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                      active
+                        ? 'bg-slate-900 border-cyan-500/60'
+                        : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-3 h-3 rounded-sm"
+                          style={{ backgroundColor: preset.previewAccent }}
+                        />
+                        <span className="text-xs font-semibold text-slate-100">{preset.name}</span>
+                      </div>
+                      {active && (
+                        <span className="text-[10px] font-mono text-cyan-400 uppercase">Active</span>
+                      )}
                     </div>
-                    {active && (
-                      <span className="text-[10px] font-mono text-cyan-400 uppercase">Active</span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-1">{preset.subtitle}</p>
-                  <div className="mt-2 flex items-center gap-2 text-[10px] font-mono text-slate-400">
-                    <span>Key {preset.keyLightColor}</span>
-                    <span>·</span>
-                    <span>Rim {preset.rimLightColor}</span>
-                    <span>·</span>
-                    <span>BG {preset.backgroundColor}</span>
-                  </div>
-                </button>
-              );
-            })}
+                    <p className="text-[11px] text-slate-400 mt-1">{preset.subtitle}</p>
+                    <div className="mt-2 flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                      <span>Key {preset.keyLightColor}</span>
+                      <span>·</span>
+                      <span>Rim {preset.rimLightColor}</span>
+                      <span>·</span>
+                      <span>BG {preset.backgroundColor}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 

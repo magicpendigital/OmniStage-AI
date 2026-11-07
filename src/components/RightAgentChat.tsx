@@ -12,15 +12,15 @@ import {
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { mutateSceneWithAgent, runVisionQAInspection } from '../agent/studioAgent';
-import { ActorClickAction, AnimationType } from '../types/scene.schema';
+import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
 
 type RightTab = 'chat' | 'inspector' | 'json';
 
 const QUICK_PROMPTS = [
-  'Build a 9:16 Cyber Mecha coin collector playable game',
-  'Create a Sunset Golden Hour sneaker commercial showcase',
-  'Spawn a Red GT Hypercar and make all actors spin',
-  'Load the Quantum Warp Gate RPG boss raid with laser VFX',
+  'Load Luxury Product 3D Commercial (9:16 orbit-360)',
+  'Load Cyberpunk Mecha Showcase (16:9 crane-reveal)',
+  'Load Coin Rush Playable Ad (9:16 WASD game)',
+  'Load Tap-to-Unbox Mini-Game (1:1 mystery box)',
 ];
 
 export const RightAgentChat: React.FC = () => {
@@ -42,7 +42,7 @@ export const RightAgentChat: React.FC = () => {
   const setLatestVisionReport = useStudioStore((s) => s.setLatestVisionReport);
   const applyVisionFixes = useStudioStore((s) => s.applyVisionFixes);
   const selectActor = useStudioStore((s) => s.selectActor);
-  const updateActor = useStudioStore((s) => s.updateActor);
+  const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
   const removeActor = useStudioStore((s) => s.removeActor);
 
   const selectedActor =
@@ -89,7 +89,7 @@ export const RightAgentChat: React.FC = () => {
       addChatMessage({
         id: `msg-vqa-${Date.now()}`,
         role: 'assistant',
-        content: `Vision QA Spatial Audit complete (${report.overallScore}/100). Found ${report.issues.length} optimization item(s). Review the diagnostic card and click "Apply Recommended Fixes" when ready.`,
+        content: `Vision QA Spatial Audit complete (${report.overallScore}/100). Analyzed WebGL render + ${report.actorCoordinates?.length || sceneSpec.actors.length} actor coordinates. Click "Apply Recommended Fixes" below to auto-correct the stage.`,
         timestamp: report.timestamp,
         visionReport: report,
       });
@@ -179,7 +179,7 @@ export const RightAgentChat: React.FC = () => {
                   </div>
                 )}
 
-                {/* Vision QA Diagnostic Report Card with One-Click Apply Fixes */}
+                {/* Vision QA Diagnostic Report Card with Coordinate Telemetry & One-Click Apply Fixes */}
                 {msg.visionReport && (
                   <div className="mt-3 p-3 rounded-lg bg-slate-950/90 border border-cyan-500/40 space-y-2.5">
                     <div className="flex items-center justify-between">
@@ -201,6 +201,28 @@ export const RightAgentChat: React.FC = () => {
                         />
                       </div>
                     )}
+
+                    {/* Actor World Coordinates Inspected */}
+                    {msg.visionReport.actorCoordinates &&
+                      msg.visionReport.actorCoordinates.length > 0 && (
+                        <div className="p-2 rounded bg-slate-900/90 border border-slate-800/90 space-y-1">
+                          <div className="text-[10px] font-mono uppercase text-slate-400">
+                            Inspected World Coordinates & BBoxes:
+                          </div>
+                          {msg.visionReport.actorCoordinates.map((ac) => (
+                            <div
+                              key={ac.id}
+                              className="flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums"
+                            >
+                              <span className="truncate max-w-[140px]">{ac.name}</span>
+                              <span className="text-cyan-300">
+                                [{ac.worldPosition.map((v) => v.toFixed(1)).join(', ')}] ·{' '}
+                                {ac.boundingBox.width}×{ac.boundingBox.depth}m
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                     <div className="space-y-1.5">
                       {msg.visionReport.issues.map((issue) => (
@@ -278,7 +300,7 @@ export const RightAgentChat: React.FC = () => {
               type="text"
               value={promptInput}
               onChange={(e) => setPromptInput(e.target.value)}
-              placeholder="Ask AI to spawn actors, change lighting, or animate..."
+              placeholder="Ask AI to spawn actors, change camera, or animate..."
               className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
             />
             <button
@@ -293,7 +315,7 @@ export const RightAgentChat: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: LIVE ACTOR & MARKETING INSPECTOR */}
+      {/* TAB 2: LIVE ACTOR & TIMELINE WINDOW INSPECTOR */}
       {activeTab === 'inspector' && (
         <div className="flex-1 overflow-y-auto p-3.5 space-y-4 text-xs">
           {/* Actor Selector Dropdown */}
@@ -332,7 +354,10 @@ export const RightAgentChat: React.FC = () => {
                 <span className="text-[11px] font-mono text-slate-400">Position [X, Y, Z] (m)</span>
                 <div className="grid grid-cols-3 gap-1.5">
                   {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
-                    <div key={axis} className="flex items-center bg-slate-950 rounded border border-slate-800 px-2 py-1">
+                    <div
+                      key={axis}
+                      className="flex items-center bg-slate-950 rounded border border-slate-800 px-2 py-1"
+                    >
                       <span className="text-[10px] font-mono text-slate-400 mr-1.5">{axis}</span>
                       <input
                         type="number"
@@ -341,7 +366,7 @@ export const RightAgentChat: React.FC = () => {
                         onChange={(e) => {
                           const nextPos = [...selectedActor.position] as [number, number, number];
                           nextPos[idx] = parseFloat(e.target.value) || 0;
-                          updateActor(selectedActor.id, { position: nextPos });
+                          updateActorProperty(selectedActor.id, { position: nextPos });
                         }}
                         className="w-full bg-transparent text-xs font-mono text-slate-100 focus:outline-none tabular-nums"
                       />
@@ -350,59 +375,56 @@ export const RightAgentChat: React.FC = () => {
                 </div>
               </div>
 
-              {/* Uniform Scale */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                  <span>Scale Factor</span>
-                  <span>{selectedActor.scale[0].toFixed(2)}x</span>
+              {/* Timeline Window: startTime, endTime & enterEffect */}
+              <div className="grid grid-cols-3 gap-1.5 pt-1">
+                <div>
+                  <span className="text-[10px] font-mono text-slate-400 block mb-1">Start (s)</span>
+                  <input
+                    type="number"
+                    step={0.5}
+                    min={0}
+                    max={sceneSpec.durationSeconds}
+                    value={selectedActor.startTime ?? 0}
+                    onChange={(e) =>
+                      updateActorProperty(selectedActor.id, {
+                        startTime: parseFloat(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 tabular-nums"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min={0.4}
-                  max={2.4}
-                  step={0.05}
-                  value={selectedActor.scale[0]}
-                  onChange={(e) => {
-                    const s = parseFloat(e.target.value);
-                    updateActor(selectedActor.id, { scale: [s, s, s] });
-                  }}
-                  className="w-full accent-cyan-400 cursor-pointer"
-                />
-              </div>
-
-              {/* Primary & Secondary PBR Colors */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <span className="text-[11px] font-mono text-slate-400">Primary Finish</span>
-                  <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded border border-slate-800">
-                    <input
-                      type="color"
-                      value={selectedActor.primaryColor}
-                      onChange={(e) =>
-                        updateActor(selectedActor.id, { primaryColor: e.target.value })
-                      }
-                      className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
-                    />
-                    <span className="font-mono text-[11px] text-slate-300">
-                      {selectedActor.primaryColor}
-                    </span>
-                  </div>
+                <div>
+                  <span className="text-[10px] font-mono text-slate-400 block mb-1">End (s)</span>
+                  <input
+                    type="number"
+                    step={0.5}
+                    min={0.5}
+                    max={sceneSpec.durationSeconds}
+                    value={selectedActor.endTime ?? sceneSpec.durationSeconds}
+                    onChange={(e) =>
+                      updateActorProperty(selectedActor.id, {
+                        endTime: parseFloat(e.target.value) || sceneSpec.durationSeconds,
+                      })
+                    }
+                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 tabular-nums"
+                  />
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[11px] font-mono text-slate-400">Accent / Emissive</span>
-                  <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded border border-slate-800">
-                    <input
-                      type="color"
-                      value={selectedActor.secondaryColor || '#F59E0B'}
-                      onChange={(e) =>
-                        updateActor(selectedActor.id, { secondaryColor: e.target.value })
-                      }
-                      className="w-6 h-6 rounded cursor-pointer bg-transparent border-0"
-                    />
-                    <span className="font-mono text-[11px] text-slate-300">
-                      {selectedActor.secondaryColor || '#F59E0B'}
-                    </span>
-                  </div>
+                <div>
+                  <span className="text-[10px] font-mono text-slate-400 block mb-1">Enter FX</span>
+                  <select
+                    value={selectedActor.enterEffect ?? 'pop-in'}
+                    onChange={(e) =>
+                      updateActorProperty(selectedActor.id, {
+                        enterEffect: e.target.value as EnterEffect,
+                      })
+                    }
+                    className="w-full px-1.5 py-1 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
+                  >
+                    <option value="pop-in">pop-in</option>
+                    <option value="slide-up">slide-up</option>
+                    <option value="fade">fade</option>
+                    <option value="none">none</option>
+                  </select>
                 </div>
               </div>
 
@@ -412,7 +434,7 @@ export const RightAgentChat: React.FC = () => {
                 <select
                   value={selectedActor.activeAnimation}
                   onChange={(e) =>
-                    updateActor(selectedActor.id, {
+                    updateActorProperty(selectedActor.id, {
                       activeAnimation: e.target.value as AnimationType,
                     })
                   }
@@ -436,30 +458,32 @@ export const RightAgentChat: React.FC = () => {
                 <select
                   value={selectedActor.onClickAction}
                   onChange={(e) =>
-                    updateActor(selectedActor.id, {
+                    updateActorProperty(selectedActor.id, {
                       onClickAction: e.target.value as ActorClickAction,
                     })
                   }
                   className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
                 >
-                  <option value="collect-score">Collect Score (+PTS)</option>
-                  <option value="jump-boost">Jump Boost Impulse</option>
-                  <option value="trigger-vfx">Trigger VFX Pulse</option>
-                  <option value="cta-redirect">Open Marketing CTA</option>
-                  <option value="none">Static / None</option>
+                  <option value="collect">collect (+PTS & Respawn)</option>
+                  <option value="unbox-tap">unbox-tap (3x Tap Product Reveal)</option>
+                  <option value="destroy">destroy (Remove Obstacle)</option>
+                  <option value="bounce">bounce (Jump Impulse)</option>
+                  <option value="trigger-vfx">trigger-vfx</option>
+                  <option value="trigger-cta">trigger-cta (Open End-Card)</option>
+                  <option value="none">none</option>
                 </select>
               </div>
             </div>
           ) : (
             <div className="p-4 rounded-lg bg-slate-900/60 border border-slate-800 text-slate-400 text-center">
-              No actor selected. Spawn an asset from the Left Drawer.
+              No actor selected. Click any actor in the 3D stage or spawn one from the Left Drawer.
             </div>
           )}
 
           {/* Marketing CTA Banner Editor */}
           <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-2.5">
             <span className="text-[11px] font-mono uppercase text-amber-400 block">
-              Marketing Overlay & CTA
+              End-Card & Marketing CTA Overlay
             </span>
             <input
               type="text"
