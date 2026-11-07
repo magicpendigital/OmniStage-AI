@@ -1,6 +1,6 @@
-import React, { useMemo, useRef } from 'react';
+import React, { Suspense, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Sky, Stars } from '@react-three/drei';
+import { Environment, Sky, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStudioStore } from '../state/useStudioStore';
 import { ScatterLayerSpec, TerrainType, WeatherType } from '../types/scene.schema';
@@ -450,16 +450,34 @@ const ScatterObjectsLayer: React.FC<{
 export const WorldRenderer: React.FC = () => {
   const world = useStudioStore((s) => s.sceneSpec.world) ?? DEFAULT_WORLD_SPEC;
 
+  const hdri = world.hdri?.url ? world.hdri : undefined;
+  const hdriBackground = Boolean(hdri?.showBackground);
+
   const showDaySky =
-    world.skybox === 'daylight-sky' ||
+    !hdriBackground &&
+    (world.skybox === 'daylight-sky' ||
     world.skybox === 'sunset-atmosphere' ||
-    world.skybox === 'overcast';
+    world.skybox === 'overcast');
 
   const showStars =
-    world.skybox === 'night-stars' || world.skybox === 'cyber-void';
+    !hdriBackground && (world.skybox === 'night-stars' || world.skybox === 'cyber-void');
 
   return (
     <group name="OmniStageWorld">
+      {/* External HDRI image-based lighting (Poly Haven via /api/assets proxy). Suspense keeps the
+          stage rendering with the procedural RoomEnvironment while the .hdr streams in. */}
+      {hdri && (
+        <Suspense fallback={null}>
+          <Environment
+            key={hdri.url}
+            files={hdri.url}
+            background={hdriBackground}
+            environmentIntensity={hdri.intensity ?? 1}
+            backgroundIntensity={hdri.intensity ?? 1}
+          />
+        </Suspense>
+      )}
+
       {showDaySky && (
         <Sky
           distance={450000}

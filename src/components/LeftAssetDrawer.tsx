@@ -27,6 +27,7 @@ import {
   SCENE_TEMPLATES,
 } from '../registry/assetRegistry';
 import { useStudioStore } from '../state/useStudioStore';
+import { OnlineAssetBrowser } from './OnlineAssetBrowser';
 import {
   LightingPresetId,
   ScatterObjectType,
@@ -706,6 +707,9 @@ export const LeftAssetDrawer: React.FC = () => {
                 Instantly mounts local 3D skeletal models or 2D sprites onto the stage
               </div>
             </div>
+
+            {/* Online Asset Hub: Poly Pizza / Sketchfab / Poly Haven (models + HDRI) via server proxy */}
+            <OnlineAssetBrowser />
 
             {/* Category Filter Pills */}
             <div className="grid grid-cols-4 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-[11px]">

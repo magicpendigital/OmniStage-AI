@@ -13,6 +13,13 @@ import {
 } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
 
+export {
+  detectStoryboardIntent,
+  generateStoryboardWithAgent,
+  normalizeGeneratedSceneSpec,
+} from './storyboardAgent';
+export type { StoryboardIntent, StoryboardGenerationResult } from './storyboardAgent';
+
 export interface AgentMutationResult {
   assistantMessage: string;
   diffSummary: string[];

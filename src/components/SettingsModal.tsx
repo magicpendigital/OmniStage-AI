@@ -4,6 +4,7 @@ import {
   Cpu,
   Database,
   Globe,
+  KeyRound,
   RotateCcw,
   Settings,
   ShieldCheck,
@@ -203,6 +204,54 @@ export const SettingsModal: React.FC = () => {
                     </label>
                   );
                 })}
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 space-y-3">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                  <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Asset Hub API Keys</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Stored only in this browser (localStorage) and sent to the studio server per request, which calls
+                  the provider on your behalf so models and HDRIs load without CORS errors.
+                </p>
+                <div className="space-y-1">
+                  <label className="block text-slate-300">
+                    Poly Pizza API key{' '}
+                    <a href="https://poly.pizza/settings/api" target="_blank" rel="noreferrer" className="text-cyan-400 underline">
+                      (get one)
+                    </a>{' '}
+                    — required to search
+                  </label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={settings.polyPizzaApiKey}
+                    onChange={(e) => updateSettings({ polyPizzaApiKey: e.target.value })}
+                    placeholder="x-auth-token"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-slate-300">
+                    Sketchfab API token{' '}
+                    <a href="https://sketchfab.com/settings/password" target="_blank" rel="noreferrer" className="text-cyan-400 underline">
+                      (get one)
+                    </a>{' '}
+                    — search is public, token needed to download GLB
+                  </label>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={settings.sketchfabApiToken}
+                    onChange={(e) => updateSettings({ sketchfabApiToken: e.target.value })}
+                    placeholder="Sketchfab API token"
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Poly Haven (CC0 models & HDRIs) needs no key.
+                </p>
               </div>
 
               <div className="space-y-1.5 pt-2">

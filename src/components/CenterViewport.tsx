@@ -56,6 +56,8 @@ export const CenterViewport: React.FC = () => {
   const setCameraMode = useStudioStore((s) => s.setCameraMode);
   const resetGameSession = useStudioStore((s) => s.resetGameSession);
   const dismissEndCard = useStudioStore((s) => s.dismissEndCard);
+  const advanceToNextScene = useStudioStore((s) => s.advanceToNextScene);
+  const scenes = useStudioStore((s) => s.scenes);
   const setBottomDockCollapsed = useStudioStore((s) => s.setBottomDockCollapsed);
   const setVisionRunning = useStudioStore((s) => s.setVisionRunning);
   const setLatestVisionReport = useStudioStore((s) => s.setLatestVisionReport);
@@ -420,6 +422,19 @@ export const CenterViewport: React.FC = () => {
                     </span>
                   </div>
                 </div>
+
+                {gameWon &&
+                  sceneSpec.sequence?.nextSceneId &&
+                  scenes.some((s) => s.id === sceneSpec.sequence?.nextSceneId) && (
+                    <button
+                      onClick={() => advanceToNextScene()}
+                      className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-display font-bold text-xs uppercase tracking-wider text-slate-950 transition-colors"
+                    >
+                      {sceneSpec.sequence.kind === 'game-levels'
+                        ? `Next Level → ${sceneSpec.sequence.index + 2}/${sceneSpec.sequence.total}`
+                        : 'Next Scene →'}
+                    </button>
+                  )}
 
                 <div className="w-full flex flex-col sm:flex-row gap-2.5 pt-1">
                   <button

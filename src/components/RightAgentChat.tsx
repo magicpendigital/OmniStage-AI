@@ -10,8 +10,14 @@ import {
   Trash2,
   Wand2,
 } from 'lucide-react';
-import { useStudioStore } from '../state/useStudioStore';
-import { mutateSceneWithAgent, runVisionQAInspection } from '../agent/studioAgent';
+import { StoryboardJobState, useStudioStore } from '../state/useStudioStore';
+import type { StoryboardIntent } from '../agent/studioAgent';
+import {
+  detectStoryboardIntent,
+  generateStoryboardWithAgent,
+  mutateSceneWithAgent,
+  runVisionQAInspection,
+} from '../agent/studioAgent';
 import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
 
 type RightTab = 'chat' | 'inspector' | 'json';
@@ -21,6 +27,8 @@ const QUICK_PROMPTS = [
   'Build a Cyberpunk Rain City with a dancing Expressive Robot (.glb)',
   'Create a 2D Neon Platformer Game with jump physics & star pickups',
   'Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)',
+  'Làm một bộ phim 3D gồm 3 cảnh về chú robot phiêu lưu trong rừng',
+  'Tạo game 2D vượt chướng ngại vật 3 màn',
 ];
 
 export const RightAgentChat: React.FC = () => {
@@ -31,6 +39,11 @@ export const RightAgentChat: React.FC = () => {
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
   const chatMessages = useStudioStore((s) => s.chatMessages);
   const isAgentThinking = useStudioStore((s) => s.isAgentThinking);
+  const storyboardJob = useStudioStore((s) => s.storyboardJob);
+  const settings = useStudioStore((s) => s.settings);
+  const setStoryboardJob = useStudioStore((s) => s.setStoryboardJob);
+  const appendStoryboardScene = useStudioStore((s) => s.appendStoryboardScene);
+  const linkStoryboardScenes = useStudioStore((s) => s.linkStoryboardScenes);
   const isVisionRunning = useStudioStore((s) => s.isVisionRunning);
   const latestVisionReport = useStudioStore((s) => s.latestVisionReport);
   const canvasElement = useStudioStore((s) => s.canvasElement);
@@ -61,6 +74,13 @@ export const RightAgentChat: React.FC = () => {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     });
 
+    // Multi-step storyboard: "phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...
+    const storyboardIntent = detectStoryboardIntent(query);
+    if (storyboardIntent) {
+      await runStoryboardGeneration(query, storyboardIntent);
+      return;
+    }
+
     setAgentThinking(true);
     try {
       const prevSnapshot = JSON.parse(JSON.stringify(sceneSpec));
@@ -77,6 +97,63 @@ export const RightAgentChat: React.FC = () => {
       });
     } finally {
       setAgentThinking(false);
+    }
+  };
+
+  const runStoryboardGeneration = async (query: string, intent: StoryboardIntent) => {
+    setAgentThinking(true);
+    let job: StoryboardJobState = {
+      storyboardId: 'pending',
+      title: 'Planning storyboard',
+      status: 'planning',
+      total: intent.sceneCount,
+      completed: 0,
+      currentLabel: 'Planning storyboard beats',
+      source: 'local',
+    };
+    setStoryboardJob(job);
+    const patchJob = (patch: Partial<StoryboardJobState>) => {
+      job = { ...job, ...patch };
+      setStoryboardJob(job);
+    };
+
+    try {
+      const result = await generateStoryboardWithAgent(query, intent, settings, {
+        onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
+        onProgress: (p) =>
+          patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
+        onScene: (scene, index) => {
+          if (job.storyboardId === 'pending' && scene.sequence) {
+            patchJob({ storyboardId: scene.sequence.storyboardId });
+          }
+          // Show each scene on stage as soon as it is authored
+          appendStoryboardScene(scene, true);
+          patchJob({ completed: index + 1 });
+        },
+      });
+      linkStoryboardScenes(result.storyboardId, true);
+      patchJob({ status: 'done', completed: result.scenes.length, currentLabel: 'Storyboard ready' });
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: result.assistantMessage,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        diffSummary: result.diffSummary,
+      });
+    } catch (e: any) {
+      patchJob({ status: 'error', error: e?.message || 'Storyboard generation failed' });
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: `Storyboard generation stopped: ${e?.message || 'unknown error'}.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+    } finally {
+      setAgentThinking(false);
+      const finishedJob = job;
+      setTimeout(() => {
+        if (useStudioStore.getState().storyboardJob === finishedJob) setStoryboardJob(null);
+      }, 4000);
     }
   };
 
@@ -263,7 +340,39 @@ export const RightAgentChat: React.FC = () => {
               </div>
             ))}
 
-            {isAgentThinking && (
+            {storyboardJob && (
+              <div className="p-3 rounded-lg bg-slate-900/90 border border-fuchsia-500/40 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-fuchsia-200 truncate">{storyboardJob.title}</span>
+                  <span className="font-mono text-[10px] text-slate-400 shrink-0">
+                    {storyboardJob.completed}/{storyboardJob.total} · {storyboardJob.source}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-fuchsia-400 transition-all"
+                    style={{
+                      width: `${Math.round(
+                        ((storyboardJob.status === 'planning' ? 0.15 : storyboardJob.completed) /
+                          Math.max(1, storyboardJob.total)) *
+                          100
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="font-mono text-[11px] text-slate-300">
+                  {storyboardJob.status === 'planning' && 'Step 1 · Planning storyboard beats…'}
+                  {storyboardJob.status === 'generating' &&
+                    `Step 2 · Authoring scene ${Math.min(storyboardJob.completed + 1, storyboardJob.total)}: ${storyboardJob.currentLabel}`}
+                  {storyboardJob.status === 'done' && 'All scenes linked into the storyboard.'}
+                  {storyboardJob.status === 'error' && (
+                    <span className="text-rose-300">{storyboardJob.error}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isAgentThinking && !storyboardJob && (
               <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs font-mono text-cyan-300">
                 Computing declarative SceneSpec mutations...
               </div>
