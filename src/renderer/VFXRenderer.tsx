@@ -1,12 +1,58 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Html, Sparkles } from '@react-three/drei';
+import { Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { VFXNode } from '../types/scene.schema';
 import { BurstVFXInstance, useStudioStore } from '../state/useStudioStore';
 
 interface VFXRendererProps {
   vfx: VFXNode;
+}
+
+function FloatingPromoBadgeSprite({
+  labelText,
+  accentColor,
+}: {
+  labelText: string;
+  accentColor: string;
+}) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+      ctx.strokeStyle = accentColor || '#F59E0B';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(8, 8, canvas.width - 16, canvas.height - 16, 18);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = '800 28px "Space Grotesk", Inter, sans-serif';
+      ctx.fillStyle = '#F8FAFC';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`★ ${labelText.toUpperCase()}`.slice(0, 34), canvas.width / 2, canvas.height / 2 + 2);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }, [labelText, accentColor]);
+
+  useEffect(() => {
+    return () => {
+      texture.dispose();
+    };
+  }, [texture]);
+
+  return (
+    <sprite scale={[3.4, 0.52, 1]}>
+      <spriteMaterial map={texture} transparent depthTest={false} />
+    </sprite>
+  );
 }
 
 export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
@@ -130,20 +176,10 @@ export const VFXRenderer: React.FC<VFXRendererProps> = ({ vfx }) => {
     case 'floating-3d-badge':
       return (
         <group position={vfx.position}>
-          <Html center distanceFactor={9} zIndexRange={[20, 0]}>
-            <div
-              className="px-3.5 py-1.5 rounded-md border text-xs font-display font-bold tracking-wider uppercase whitespace-nowrap shadow-xl"
-              style={{
-                backgroundColor: '#090D16E6',
-                borderColor: vfx.color || '#F59E0B',
-                color: '#F8FAFC',
-                boxShadow: `0 0 20px ${vfx.color || '#F59E0B'}40`,
-              }}
-            >
-              <span style={{ color: vfx.color || '#F59E0B' }}>★ </span>
-              {vfx.labelText || 'LIMITED DROP · 50% OFF'}
-            </div>
-          </Html>
+          <FloatingPromoBadgeSprite
+            labelText={vfx.labelText || 'LIMITED DROP · 50% OFF'}
+            accentColor={vfx.color || '#F59E0B'}
+          />
         </group>
       );
 

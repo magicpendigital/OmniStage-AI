@@ -129,6 +129,7 @@ interface StudioState {
   switchScene: (sceneId: string) => void;
   duplicateScene: (sceneId: string) => void;
   deleteScene: (sceneId: string) => void;
+  loadProjectBundle: (scenes: SceneSpec[], activeSceneId?: string) => void;
   loadTemplate: (templateId: string) => void;
   undo: () => void;
   redo: () => void;
@@ -397,6 +398,28 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         scenes: remaining,
         activeSceneId: nextActive.id,
         sceneSpec: cloneSceneSpec(nextActive),
+      };
+    }),
+
+  loadProjectBundle: (bundleScenes, preferredActiveId) =>
+    set((state) => {
+      if (!Array.isArray(bundleScenes) || bundleScenes.length === 0) return state;
+      const sanitized = bundleScenes.map((s) => cloneSceneSpec(s));
+      const active =
+        sanitized.find((s) => s.id === preferredActiveId) || sanitized[0];
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        scenes: sanitized,
+        activeSceneId: active.id,
+        sceneSpec: cloneSceneSpec(active),
+        selectedActorId: active.actors[0]?.id ?? null,
+        selectedNode2DId: active.nodes2D[0]?.id ?? null,
+        currentTime: 0,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+        gameTimeRemaining: active.gameRules.timeLimitSeconds,
       };
     }),
 

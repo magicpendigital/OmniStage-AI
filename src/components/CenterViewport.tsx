@@ -72,11 +72,16 @@ export const CenterViewport: React.FC = () => {
     : null;
   const duration = Math.max(2, sceneSpec.durationSeconds || 8);
 
+  const getActiveCanvas = (): HTMLCanvasElement | null => {
+    if (canvasElement && canvasElement.isConnected) return canvasElement;
+    return document.querySelector('canvas');
+  };
+
   const handleRunVisionQA = async () => {
     if (isVisionRunning) return;
     setVisionRunning(true);
     try {
-      const report = await runVisionQAInspection(canvasElement, sceneSpec);
+      const report = await runVisionQAInspection(getActiveCanvas(), sceneSpec);
       setLatestVisionReport(report);
       addChatMessage({
         id: `msg-vision-${Date.now()}`,
@@ -91,9 +96,10 @@ export const CenterViewport: React.FC = () => {
   };
 
   const handleQuickRecord5s = async () => {
-    if (isRecordingVideo || !canvasElement) return;
+    const activeCanvas = getActiveCanvas();
+    if (isRecordingVideo || !activeCanvas) return;
     setRecordingState(true, 0);
-    await recordCanvasVideoWebM(canvasElement, 5, sceneSpec.title, (ratio) => {
+    await recordCanvasVideoWebM(activeCanvas, 5, sceneSpec.title, (ratio) => {
       setRecordingState(true, Math.round(ratio * 100));
     });
     setRecordingState(false, 0);
@@ -545,29 +551,46 @@ export const CenterViewport: React.FC = () => {
                         />
                       </div>
 
-                      {/* Visual Actor/VFX Cue Track Markers */}
+                      {/* Visual 3D Actor / 2D Layer Cue Track Markers */}
                       <div className="relative h-2 w-full bg-slate-900/90 rounded overflow-hidden flex items-center">
-                        {sceneSpec.actors.map((act) => {
-                          const st = act.startTime ?? 0;
-                          const et = act.endTime ?? duration;
-                          const leftPct = Math.min(100, Math.max(0, (st / duration) * 100));
-                          const widthPct = Math.min(
-                            100 - leftPct,
-                            Math.max(4, ((et - st) / duration) * 100)
-                          );
-                          return (
-                            <div
-                              key={act.id}
-                              title={`${act.name}: ${st.toFixed(1)}s – ${et.toFixed(1)}s`}
-                              style={{
-                                left: `${leftPct}%`,
-                                width: `${widthPct}%`,
-                                backgroundColor: act.primaryColor || '#06B6D4',
-                              }}
-                              className="absolute top-0.5 bottom-0.5 rounded-sm opacity-65"
-                            />
-                          );
-                        })}
+                        {is2D
+                          ? (sceneSpec.nodes2D || []).map((node, idx, arr) => {
+                              const widthPct = Math.max(12, 100 / Math.max(1, arr.length));
+                              const leftPct = Math.min(100 - widthPct, idx * widthPct);
+                              return (
+                                <div
+                                  key={node.id}
+                                  title={`2D Layer: ${node.name} (${node.type})`}
+                                  style={{
+                                    left: `${leftPct}%`,
+                                    width: `${widthPct}%`,
+                                    backgroundColor: node.fill || '#EC4899',
+                                  }}
+                                  className="absolute top-0.5 bottom-0.5 rounded-sm opacity-65"
+                                />
+                              );
+                            })
+                          : sceneSpec.actors.map((act) => {
+                              const st = act.startTime ?? 0;
+                              const et = act.endTime ?? duration;
+                              const leftPct = Math.min(100, Math.max(0, (st / duration) * 100));
+                              const widthPct = Math.min(
+                                100 - leftPct,
+                                Math.max(4, ((et - st) / duration) * 100)
+                              );
+                              return (
+                                <div
+                                  key={act.id}
+                                  title={`${act.name}: ${st.toFixed(1)}s – ${et.toFixed(1)}s`}
+                                  style={{
+                                    left: `${leftPct}%`,
+                                    width: `${widthPct}%`,
+                                    backgroundColor: act.primaryColor || '#06B6D4',
+                                  }}
+                                  className="absolute top-0.5 bottom-0.5 rounded-sm opacity-65"
+                                />
+                              );
+                            })}
                       </div>
                     </div>
                   </div>

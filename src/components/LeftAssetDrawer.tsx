@@ -82,6 +82,7 @@ export const LeftAssetDrawer: React.FC = () => {
   const switchScene = useStudioStore((s) => s.switchScene);
   const duplicateScene = useStudioStore((s) => s.duplicateScene);
   const deleteScene = useStudioStore((s) => s.deleteScene);
+  const loadProjectBundle = useStudioStore((s) => s.loadProjectBundle);
   const loadTemplate = useStudioStore((s) => s.loadTemplate);
 
   const is2D = sceneSpec.engineType === '2d';
@@ -126,7 +127,9 @@ export const LeftAssetDrawer: React.FC = () => {
         try {
           const text = await file.text();
           const parsed = JSON.parse(text);
-          if (parsed && parsed.actors && parsed.environment) {
+          if (parsed && Array.isArray(parsed.scenes) && parsed.scenes.length > 0) {
+            loadProjectBundle(parsed.scenes, parsed.activeSceneId || parsed.id);
+          } else if (parsed && (parsed.actors || parsed.nodes2D) && parsed.environment) {
             setSceneSpec(parsed);
           }
         } catch {

@@ -1,40 +1,61 @@
-# AGENTS.md — Multi-Coding-Agent (MCA) Contract & Handoff Guide
+# AGENTS.md — Multi-Coding-Agent (MCA) Contract & Phase 3 Handoff Guide
 
-Welcome to **OmniStage AI**, an Agentic 3D Game & Programmatic Media Studio engineered for a **Multi-Coding-Agent (MCA)** workflow across Google AI Studio, Claude Code, Antigravity, and Codex.
+Welcome to **OmniStage AI (Phase 3)**, an Agentic **3D WebGL & 2D Vector/Sprite Game & Programmatic Media Authoring Engine** engineered for a **Multi-Coding-Agent (MCA)** workflow across Google AI Studio, Claude Code, Antigravity, and Codex.
 
 ---
 
 ## 1. Core Architectural Invariant (Contract-First Design)
 
-1. **Declarative State Driven (`SceneSpec`)**:
-   - The 3D WebGL stage (`src/renderer/*`) is 100% driven by the `SceneSpec` contract defined in `src/types/scene.schema.ts`.
-   - **NEVER** generate or eval raw Three.js code strings at runtime. All AI agent operations, user inspector edits, and Vision QA fixes MUST mutate the central `SceneSpec` state via `src/state/useStudioStore.ts`.
-2. **Strict Separation of Concerns**:
-   - `src/types/scene.schema.ts` — Single source of truth for data structures (`SceneSpec`, `ActorNode`, `CameraRig`, `LightingPreset`, `VFXNode`, `TimelineTrack`, `GameRule`, `VisionQAReport`).
-   - `src/registry/assetRegistry.ts` — Semantic 3D asset metadata (bounding boxes, attachment sockets, supported procedural animations, composite 3D geometry specs) and starter scene templates.
-   - `src/state/useStudioStore.ts` — Central Zustand state store with full Undo/Redo history stack, timeline clock, game score/timer runtime, and atomic mutation actions.
-   - `src/renderer/*` — Pure React Three Fiber (`@react-three/fiber`) rendering components (`StageCanvas`, `SceneDirector`, `ActorRenderer`, `VFXRenderer`) that subscribe to `SceneSpec`.
-   - `src/agent/*` & `server.ts` — Gemini AI integration (`/api/agent/mutate` and `/api/agent/vision-qa`) translating natural language prompts and WebGL canvas screenshots into validated `SceneSpec` diffs.
-   - `src/exporter/mediaExporter.ts` — Deterministic media exporter for 4K PNG snapshots, 60fps `.webm` video streams (`MediaRecorder`), and self-contained HTML5 Playable Ad bundles.
+1. **Declarative State Driven (`SceneSpec` + Multi-Scene `scenes[]`)**:
+   - Both the **3D WebGL Stage** (`src/renderer/StageCanvas.tsx`) and the **2D Vector/Sprite Stage** (`src/renderer/StageCanvas2D.tsx`) are 100% driven by the `SceneSpec` contract defined in `src/types/scene.schema.ts`.
+   - **NEVER** generate or `eval` raw Three.js or Canvas2D code strings at runtime. All AI agent operations, user outliner/inspector edits, World Terrain Builder updates, and Vision QA fixes MUST mutate the central `SceneSpec` state via `src/state/useStudioStore.ts`.
+2. **Strict Separation of Concerns (Phase 3 Module Map)**:
+   - `src/types/scene.schema.ts` — Single source of truth for data structures (`SceneSpec`, `EngineType` (`'3d' | '2d'`), `WorldSpec`, `TerrainType`, `WeatherType`, `ScatterObjectSpec`, `ActorNode`, `Node2D`, `Physics2DRole`, `CameraRig`, `LightingPreset`, `VFXNode`, `GameRule`, `VisionQAReport`, `SettingsConfig`).
+   - `src/registry/assetRegistry.ts` — Semantic 3D & 2D library:
+     - **Real Rigged GLTF/GLB Models** loaded from verified CORS-safe CDNs (`RobotExpressive.glb`, `Soldier.glb`, `Horse.glb`, `Flamingo.glb`, `Parrot.glb`, `Fox.glb`, `DamagedHelmet.glb`) with embedded skeletal animation clip metadata (`availableClips`, `defaultClip`).
+     - **Composite Multi-Part 3D PBR Assets** with explicit `boundingBox` and `attachmentSockets`.
+     - **2D Vector/Sprite Authoring Presets (`PRESETS_2D`)** for 2D Platformer characters, solid platforms, collectible stars, kinetic typography, and parallax backgrounds.
+     - **Blank Canvas Builders (`createBlankSceneSpec('3d' | '2d')`)** for from-scratch authoring alongside optional starter templates (`SCENE_TEMPLATES`).
+   - `src/state/useStudioStore.ts` — Central Zustand state store managing:
+     - **Multi-Scene Storyboard (`scenes: SceneSpec[]`, `activeSceneId`)** with `createNewBlankScene`, `switchScene`, `duplicateScene`, `deleteScene`, and `loadProjectBundle`.
+     - **Undo/Redo History Stack** (`pastSpecs`, `futureSpecs`), timeline playback clock (`currentTime`, `isPlaying`, `isLooping`), and playable game runtime (`gameScore`, `gameTimeRemaining`, `gameWon`, `gameEnded`).
+     - **World Environment Builder Mutations** (`updateWorld`, `updateTerrain`, `updateClouds`, `updateWeather`, `addScatterLayer`, `removeScatterLayer`).
+     - **3D Actor & Custom Asset Mutations** (`spawnAsset`, `registerAndSpawnCustomAsset`, `registerActorClips`, `updateActorTransform`, `updateActorProperty`).
+     - **2D Node Authoring Mutations** (`spawnPreset2D`, `addCustomNode2D`, `updateNode2D`, `duplicateNode2D`, `removeNode2D`).
+     - **Persistent Studio Settings (`SettingsConfig`)** synced with `localStorage` (`updateSettings`, `resetSettings`).
+   - `src/renderer/*` — Dual-Engine Renderers:
+     - `StageCanvas.tsx` & `SceneDirector.tsx`: React Three Fiber (`@react-three/fiber`) 3D viewport, camera keyframe sequencer (`orbit-360`, `dolly-zoom-in`, `crane-reveal`, `top-down-isometric`, `first-person-follow`, `cinematic-flythrough`), WASD 3D player movement, and bounding-sphere collision loop.
+     - `WorldRenderer.tsx`: Procedural 3D vertex-displaced terrains (`flat`, `hills`, `mountains`, `islands`, `canyon`, `city-grid`, `snow-peaks`, `dunes`), animated water plane, `<Sky>`, `<Stars>`, volumetric `<Clouds>`, weather particle systems (`rain`, `snow`, `embers`, `fireflies`), and instanced environment scatter (`pine-tree`, `palm-tree`, `lowpoly-rock`, `sci-fi-pillar`, `crystal-cluster`, `building-block`).
+     - `ActorRenderer.tsx`: Renders real rigged `.glb` models via `useGLTF`, `SkeletonUtils.clone`, and `useAnimations` (with automatic skeletal clip discovery and cross-fade playback), composite PBR groups, interactive 3D gizmos (`TransformControls`), and pure WebGL `THREE.CanvasTexture` sprite badges.
+     - `VFXRenderer.tsx`: Renders ambient and click-burst 3D particle systems plus WebGL sprite promo badges.
+     - `StageCanvas2D.tsx`: Interactive `1000x600` HTML5 2D Vector/Sprite & Platformer engine supporting drag-to-move, corner resize handles, WASD/Arrow 2D platformer gravity & jumping, AABB platform collision, star collection, and kinetic typography.
+   - `src/components/*` — Pro Dark Workstation UI:
+     - `TopNavBar.tsx` (with `3D WebGL` / `2D Vector` engine switcher, multi-scene storyboard selector, `Examples` modal trigger, and `Settings` modal trigger).
+     - `LeftAssetDrawer.tsx` (4 from-scratch authoring tabs: `Hierarchy`, `World`, `Library`, and `Import` for `.glb`, `.gltf`, `.svg`, `.png`, `.json`).
+     - `CenterViewport.tsx` (dual-engine viewport frame, 3D skeletal clip & gizmo toolbar, 2D node inspector toolbar, timeline sequencer dock, and playable end-card overlay).
+     - `RightAgentChat.tsx` (AI Director chat, quick-prompt chips, and interactive Vision QA report card).
+     - `PublishModal.tsx` & `SettingsModal.tsx`.
+   - `src/agent/*` & `server.ts` — Gemini AI integration (`/api/agent/mutate` and `/api/agent/vision-qa`) with support for custom provider/model overrides from `SettingsModal.tsx` via request headers (`x-ai-model`, `x-ai-key`, `x-ai-base-url`).
+   - `src/exporter/mediaExporter.ts` — Unified 3D/2D media exporter for PNG snapshots, 60fps `.webm` video streams (`MediaRecorder`), multi-scene `.scenespec.json` project bundles, and self-contained HTML5 Playable Ad bundles supporting both `'3d'` and `'2d'` scenes.
 
 ---
 
 ## 2. Downstream Agent Responsibilities
 
-### A. Claude Code (Gameplay & Physics Logic Expansion)
-- **Primary Scope**: `src/types/scene.schema.ts`, `src/state/useStudioStore.ts`, `src/renderer/ActorRenderer.tsx`
+### A. Claude Code (Gameplay, Multi-Scene Logic & Physics Expansion)
+- **Primary Scope**: `src/types/scene.schema.ts`, `src/state/useStudioStore.ts`, `src/renderer/ActorRenderer.tsx`, `src/renderer/StageCanvas2D.tsx`
 - **Rules**:
-  - When adding new `onClickAction` or `physicsRole` behaviors, register the union literal in `scene.schema.ts` first, then implement the deterministic handler in `ActorRenderer.tsx` and `useStudioStore.ts`.
-  - Respect each asset's `boundingBox` and `attachmentSockets` from `assetRegistry.ts` so spawned objects sit flush on `y = 0` without ground clipping.
+  - When adding new 3D `onClickAction` / `physicsRole` or 2D `Physics2DRole` behaviors, register the union literal in `scene.schema.ts` first, then implement deterministic handlers in `ActorRenderer.tsx`, `StageCanvas2D.tsx`, and `useStudioStore.ts`.
+  - Use multi-scene transitions (`switchScene`, `scenes[]`) when implementing multi-level progression (e.g., advancing from Level 1 to Level 2 upon reaching `gameRules.targetScore`).
 
 ### B. Antigravity (Ad Network Bundler & Playable HTML5 Compiler)
 - **Primary Scope**: `src/exporter/mediaExporter.ts`, `src/components/PublishModal.tsx`
 - **Rules**:
-  - Consume `exportPlayableBundle(sceneSpec)` to package single-file HTML5 Playable Ads compliant with **TikTok Playable Ads**, **Meta Interactive Ads**, and **Telegram Mini Apps** (`window.openAppStore` / CTA bridge hooks).
-  - Never introduce external unhosted texture or `.glb` dependencies that break offline sandboxed ad validation.
+  - Consume `exportStandalonePlayableHTML(sceneSpec, targetNetwork, scenes)` to package single-file HTML5 Playable Ads compliant with **TikTok Playable Ads (MRAID 3.0)**, **Meta Interactive Ads (`FbPlayableAd.onCTAClick`)**, and **Telegram Mini Apps**.
+  - Ensure both `'3d'` and `'2d'` engine modes and all scenes in `scenes[]` remain playable inside the exported standalone HTML file without `window.alert` or `window.open`.
 
-### C. Codex (Procedural Asset & Shader Authoring)
-- **Primary Scope**: `src/registry/assetRegistry.ts`, `src/renderer/ActorRenderer.tsx`, `src/renderer/VFXRenderer.tsx`
+### C. Codex (Procedural World Shaders, Rigged GLTF & 2D Vector Authoring)
+- **Primary Scope**: `src/registry/assetRegistry.ts`, `src/renderer/WorldRenderer.tsx`, `src/renderer/ActorRenderer.tsx`, `src/renderer/VFXRenderer.tsx`
 - **Rules**:
-  - Every built-in asset must be represented as a multi-part `THREE.Group` (3–12 distinct sub-meshes across primary hull, secondary read, and accent details) with calibrated PBR `metalness` and `roughness` values.
-  - Every new asset entry in `ASSET_REGISTRY` must define accurate `boundingBox: { width, height, depth }` and `attachmentSockets` coordinates.
+  - Maintain pure WebGL `<sprite>` badges (`THREE.CanvasTexture`) inside R3F components rather than DOM `<Html>` portals to guarantee zero React 19 synchronous root unmount race conditions.
+  - Verify all external `.glb` URLs in `ASSET_REGISTRY` return HTTP `200 OK` with CORS headers enabled, and provide `SkeletonUtils.clone` support for multi-instance skeletal rigs.

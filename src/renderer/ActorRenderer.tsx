@@ -1,6 +1,6 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, ThreeEvent } from '@react-three/fiber';
-import { Html, TransformControls, useAnimations, useGLTF } from '@react-three/drei';
+import { TransformControls, useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ActorNode } from '../types/scene.schema';
@@ -10,6 +10,56 @@ import { useStudioStore } from '../state/useStudioStore';
 interface ActorRendererProps {
   actor: ActorNode;
   isSelected: boolean;
+}
+
+function CanvasBadgeSprite({
+  text,
+  position,
+  borderColor = '#06B6D4',
+  textColor = '#67E8F9',
+}: {
+  text: string;
+  position: [number, number, number];
+  borderColor?: string;
+  textColor?: string;
+}) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 72;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(9, 13, 22, 0.9)';
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(6, 6, canvas.width - 12, canvas.height - 12, 14);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.font = '600 22px "JetBrains Mono", monospace';
+      ctx.fillStyle = textColor;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text.slice(0, 38), canvas.width / 2, canvas.height / 2 + 1);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }, [text, borderColor, textColor]);
+
+  useEffect(() => {
+    return () => {
+      texture.dispose();
+    };
+  }, [texture]);
+
+  return (
+    <sprite position={position} scale={[2.6, 0.36, 1]}>
+      <spriteMaterial map={texture} transparent depthTest={false} />
+    </sprite>
+  );
 }
 
 function RiggedGltfModel({
@@ -76,15 +126,20 @@ function RiggedGltfModel({
 }
 
 class GlbErrorBoundary extends React.Component<
-  { fallback: React.ReactNode; children: React.ReactNode },
+  { resetKey?: string; fallback: React.ReactNode; children: React.ReactNode },
   { hasError: boolean }
 > {
-  constructor(props: { fallback: React.ReactNode; children: React.ReactNode }) {
+  constructor(props: { resetKey?: string; fallback: React.ReactNode; children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false };
   }
   static getDerivedStateFromError() {
     return { hasError: true };
+  }
+  componentDidUpdate(prevProps: { resetKey?: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
   }
   render() {
     if (this.state.hasError) return this.props.fallback;
@@ -767,7 +822,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
     >
       <group ref={animGroupRef}>
         {gltfUrl ? (
-          <GlbErrorBoundary fallback={fallbackMesh}>
+          <GlbErrorBoundary resetKey={gltfUrl} fallback={fallbackMesh}>
             <Suspense fallback={fallbackMesh}>
               <RiggedGltfModel url={gltfUrl} actor={actor} />
             </Suspense>
@@ -798,15 +853,16 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
         </>
       )}
 
-      {/* Spatial Actor Coordinate & Tap-to-Unbox Badge */}
+      {/* Spatial Actor Coordinate & Tap-to-Unbox Badge (Pure WebGL Sprite) */}
       {(isSelected || actor.assetId === 'mystery-gift-box') && (
-        <Html position={[0, 2.75, 0]} center distanceFactor={10} zIndexRange={[10, 0]}>
-          <div className="pointer-events-none px-2.5 py-0.5 rounded bg-slate-950/90 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 whitespace-nowrap shadow-lg">
-            {actor.assetId === 'mystery-gift-box'
+        <CanvasBadgeSprite
+          position={[0, 2.75, 0]}
+          text={
+            actor.assetId === 'mystery-gift-box'
               ? `TAP TO UNBOX (${unboxTapCount}/${actor.unboxTapsRequired || 3})`
-              : `${actor.name} · [${actor.position.map((n) => n.toFixed(1)).join(', ')}]`}
-          </div>
-        </Html>
+              : `${actor.name} · [${actor.position.map((n) => n.toFixed(1)).join(', ')}]`
+          }
+        />
       )}
     </group>
   );

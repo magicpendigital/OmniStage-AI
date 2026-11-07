@@ -9,6 +9,7 @@ import {
 } from '../types/scene.schema';
 
 const THREE_CDN = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@dev/examples/models/gltf';
+const KHRONOS_CDN = 'https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/2.0';
 
 export const DEFAULT_WORLD_SPEC: WorldSpec = {
   skybox: 'studio-hdri',
@@ -185,7 +186,7 @@ export const ASSET_REGISTRY: Record<string, SemanticAssetEntry> = {
     category: 'gltf-rigged',
     description:
       'Khronos rigged low-poly Fox with Survey, Walk, and Run skeletal animation clips.',
-    modelUrl: `${THREE_CDN}/Fox/glTF-Binary/Fox.glb`,
+    modelUrl: `${KHRONOS_CDN}/Fox/glTF-Binary/Fox.glb`,
     defaultScale: 0.025,
     embeddedClips: ['Survey', 'Walk', 'Run'],
     defaultClip: 'Survey',
@@ -278,10 +279,10 @@ export const ASSET_REGISTRY: Record<string, SemanticAssetEntry> = {
   },
   'gltf-damaged-helmet': {
     assetId: 'gltf-damaged-helmet',
-    name: 'Sci-Fi Battle Helmet (.GLTF)',
+    name: 'Sci-Fi Battle Helmet (.GLB)',
     category: 'gltf-rigged',
     description: 'Khronos reference high-detail PBR sci-fi helmet with emissive visor.',
-    modelUrl: `${THREE_CDN}/DamagedHelmet/glTF/DamagedHelmet.gltf`,
+    modelUrl: `${KHRONOS_CDN}/DamagedHelmet/glTF-Binary/DamagedHelmet.glb`,
     defaultScale: 1.15,
     embeddedClips: [],
     defaultPrimaryColor: '#F59E0B',
@@ -1008,7 +1009,7 @@ export const SCENE_TEMPLATES: Record<string, SceneSpec> = {
         id: 'actor-wild-fox',
         name: 'Arctic Fox (.GLB)',
         assetId: 'gltf-fox',
-        modelUrl: `${THREE_CDN}/Fox/glTF-Binary/Fox.glb`,
+        modelUrl: `${KHRONOS_CDN}/Fox/glTF-Binary/Fox.glb`,
         position: [-1.2, 0, 0.5],
         rotation: [0, 0.4, 0],
         scale: [1, 1, 1],
