@@ -1,12 +1,26 @@
-import { ASSET_REGISTRY, LIGHTING_PRESETS, VFX_PRESETS } from '../registry/assetRegistry';
+import {
+  ASSET_REGISTRY,
+  LIGHTING_PRESETS,
+  PRESET_2D_ASSETS,
+  VFX_PRESETS,
+} from '../registry/assetRegistry';
 
-export function buildAgentSystemPrompt(): string {
+export function buildAgentSystemPrompt(customRules?: string): string {
   const assetSummary = Object.values(ASSET_REGISTRY)
     .map(
       (a) =>
-        `- assetId: "${a.assetId}" (${a.name}, category: ${a.category}) | bbox: ${a.boundingBox.width}x${a.boundingBox.height}x${a.boundingBox.depth}m | animations: [${a.supportedAnimations.join(', ')}] | defaultColor: ${a.defaultPrimaryColor}`
+        `- assetId: "${a.assetId}" (${a.name}, category: ${a.category}) | ${
+          a.modelUrl
+            ? `GLTF URL: "${a.modelUrl}" | embeddedClips: [${(a.embeddedClips || []).join(', ')}]`
+            : 'Procedural PBR'
+        } | bbox: ${a.boundingBox.width}x${a.boundingBox.height}x${a.boundingBox.depth}m`
     )
     .join('\n');
+
+  const preset2DSummary = PRESET_2D_ASSETS.map(
+    (p) =>
+      `- 2D Preset "${p.id}": ${p.name} (type: ${p.nodeTemplate.type}, role: ${p.nodeTemplate.physics2D})`
+  ).join('\n');
 
   const lightingSummary = Object.values(LIGHTING_PRESETS)
     .map((l) => `- presetId: "${l.presetId}" (${l.name}): ${l.subtitle}`)
@@ -14,11 +28,20 @@ export function buildAgentSystemPrompt(): string {
 
   const vfxSummary = VFX_PRESETS.map((v) => `- type: "${v.type}" (${v.name})`).join('\n');
 
-  return `You are the OmniStage AI Spatial & Game Director Agent.
-You NEVER write raw Three.js code. Instead, you mutate the declarative SceneSpec JSON contract.
+  return `You are the OmniStage AI Spatial, World & Dual-Engine (3D/2D) Game Director Agent.
+You NEVER write raw Three.js or imperative Canvas code. Instead, you author and mutate the declarative SceneSpec JSON contract from scratch.
 
-AVAILABLE SEMANTIC 3D ASSETS (assetRegistry.ts):
+AVAILABLE 3D RIGGED GLTF & PROCEDURAL ASSETS (assetRegistry.ts):
 ${assetSummary}
+
+AVAILABLE 2D ENGINE VECTOR & SPRITE PRESETS:
+${preset2DSummary}
+
+AVAILABLE 3D WORLD & ENVIRONMENT OPTIONS (sceneSpec.world):
+- skybox: 'daylight-sky' | 'sunset-atmosphere' | 'night-stars' | 'cyber-void' | 'studio-hdri' | 'overcast'
+- terrain.type: 'flat-grid' | 'grassy-hills' | 'desert-dunes' | 'snow-mountains' | 'ocean-island' | 'city-asphalt' | 'none'
+- weather.type: 'clear' | 'rain' | 'snow' | 'floating-embers' | 'foggy-mist'
+- scatterObjects[].type: 'pine-trees' | 'cyber-buildings' | 'rocks-boulders' | 'street-lights' | 'ancient-pillars' | 'crystal-clusters'
 
 AVAILABLE LIGHTING STUDIO PRESETS:
 ${lightingSummary}
@@ -26,16 +49,12 @@ ${lightingSummary}
 AVAILABLE VFX NODE TYPES:
 ${vfxSummary}
 
-SPATIAL POSITIONING & DESIGN RULES:
-1. Ground Alignment: All 3D actors pivot at bottom-center (y = 0). Place grounded actors with position[1] = 0 unless intentionally floating.
-2. Non-Overlapping Layout: Keep horizontal spacing >= 1.6 units between actors on the X/Z plane so bounding boxes never clip.
-3. Aspect Ratio Framing:
-   - For '9:16' (TikTok/Reels vertical playable ads), keep actors within X in [-2.0, 2.0] and pull camera Z to [7.0, 9.0].
-   - For '16:9' (Landscape), actors can span X in [-3.5, 3.5] with camera Z around [5.5, 7.5].
-4. Playable Game Mechanics:
-   - Set actor onClickAction to 'collect-score', 'jump-boost', 'trigger-vfx', or 'cta-redirect'.
-   - Set mode to 'game' for playable ads/mini-games or 'media' for programmatic 3D product videos.
-
+AUTHORING & SPATIAL DESIGN RULES:
+1. Engine Selection: Set engineType to '3d' for 3D WebGL worlds/commercials/games, or '2d' for 2D vector motion graphics, kinetic typography, and 2D platformer games (populating nodes2D[]).
+2. Rigged GLTF Characters: When spawning rigged GLTF models (e.g. "gltf-robot-expressive", "gltf-soldier", "gltf-fox", "gltf-horse"), always include their modelUrl, availableClips, and an appropriate activeClip (e.g. "Dance", "Running", "Run", "Walk").
+3. Rich World Authoring: When the user asks for an outdoor, nature, desert, snow, island, or cyberpunk city scene, configure sceneSpec.world (terrain, skybox, clouds, weather, and scatterObjects) so the environment feels alive.
+4. Ground Alignment & Spacing: Keep 3D actors grounded at position[1] = 0 with >= 1.6m horizontal clearance on the X/Z plane.
+${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY valid JSON matching the requested response schema with:
 - assistantMessage: concise, helpful explanation of the changes made.
 - diffSummary: array of 2-4 short bullet strings describing exact mutations.
@@ -45,7 +64,7 @@ Return ONLY valid JSON matching the requested response schema with:
 export function buildVisionQASystemPrompt(): string {
   return `You are the OmniStage AI Multimodal Vision QA Inspector.
 You receive:
-1. A live screenshot PNG captured from the 3D WebGL stage.
+1. A live screenshot PNG captured from the 3D WebGL or 2D Canvas stage.
 2. The current declarative SceneSpec JSON.
 
 Analyze both the visual render and the spatial coordinates for:

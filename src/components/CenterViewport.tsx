@@ -4,6 +4,7 @@ import {
   ChevronUp,
   Copy,
   Eye,
+  Lock,
   Maximize2,
   Move,
   Pause,
@@ -13,17 +14,20 @@ import {
   RotateCw,
   Trash2,
   Trophy,
+  Unlock,
   Video,
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
+import { StageCanvas2D } from '../renderer/StageCanvas2D';
 import { useStudioStore } from '../state/useStudioStore';
-import { AnimationType, CameraMode, TransformMode } from '../types/scene.schema';
+import { AnimationType, CameraMode, Physics2DRole, TransformMode } from '../types/scene.schema';
 import { runVisionQAInspection } from '../agent/studioAgent';
 import { recordCanvasVideoWebM } from '../exporter/mediaExporter';
 
 export const CenterViewport: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
+  const selectedNode2DId = useStudioStore((s) => s.selectedNode2DId);
   const transformMode = useStudioStore((s) => s.transformMode);
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const isLooping = useStudioStore((s) => s.isLooping);
@@ -43,6 +47,9 @@ export const CenterViewport: React.FC = () => {
   const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
   const duplicateActor = useStudioStore((s) => s.duplicateActor);
   const removeActor = useStudioStore((s) => s.removeActor);
+  const updateNode2D = useStudioStore((s) => s.updateNode2D);
+  const duplicateNode2D = useStudioStore((s) => s.duplicateNode2D);
+  const removeNode2D = useStudioStore((s) => s.removeNode2D);
   const togglePlay = useStudioStore((s) => s.togglePlay);
   const toggleLoop = useStudioStore((s) => s.toggleLoop);
   const setCurrentTime = useStudioStore((s) => s.setCurrentTime);
@@ -56,7 +63,13 @@ export const CenterViewport: React.FC = () => {
   const setRecordingState = useStudioStore((s) => s.setRecordingState);
   const setPublishModalOpen = useStudioStore((s) => s.setPublishModalOpen);
 
-  const selectedActor = sceneSpec.actors.find((a) => a.id === selectedActorId) || null;
+  const is2D = sceneSpec.engineType === '2d';
+  const selectedActor = !is2D
+    ? sceneSpec.actors.find((a) => a.id === selectedActorId) || null
+    : null;
+  const selectedNode2D = is2D
+    ? (sceneSpec.nodes2D || []).find((n) => n.id === selectedNode2DId) || null
+    : null;
   const duration = Math.max(2, sceneSpec.durationSeconds || 8);
 
   const handleRunVisionQA = async () => {
@@ -100,24 +113,37 @@ export const CenterViewport: React.FC = () => {
 
   return (
     <main className="flex-1 h-full bg-[#060911] relative flex flex-col items-center justify-center overflow-hidden">
-      {/* Aspect-Ratio Framed 3D Viewport Stage */}
+      {/* Aspect-Ratio Framed 3D or 2D Viewport Stage */}
       <div className="flex-1 w-full h-full flex items-center justify-center p-3 overflow-hidden">
         <div
           className={`relative rounded-xl overflow-hidden border border-slate-800/90 shadow-2xl bg-[#0B101B] transition-all duration-300 ${getStageFrameClass()}`}
         >
-          {/* R3F WebGL Canvas */}
-          <StageCanvas />
+          {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas */}
+          {is2D ? <StageCanvas2D /> : <StageCanvas />}
 
           {/* Top Bar Inside Viewport: Scene Info + Playable Score/Timer */}
           <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between pointer-events-none z-10 gap-2">
             <div className="px-3 py-1.5 rounded-lg bg-[#090D16E6] border border-slate-800 flex items-center gap-2 text-xs truncate">
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                  is2D
+                    ? 'bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40'
+                    : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                }`}
+              >
+                {is2D ? '2D' : '3D'}
+              </span>
               <span className="font-display font-semibold text-slate-100 truncate">
                 {sceneSpec.title}
               </span>
               <span className="text-slate-500">·</span>
               <span className="font-mono text-cyan-400 tabular-nums">{sceneSpec.aspectRatio}</span>
-              <span className="text-slate-500">·</span>
-              <span className="font-mono text-slate-400">{sceneSpec.camera.mode}</span>
+              {!is2D && (
+                <>
+                  <span className="text-slate-500">·</span>
+                  <span className="font-mono text-slate-400">{sceneSpec.camera.mode}</span>
+                </>
+              )}
             </div>
 
             {sceneSpec.mode === 'game' && (
@@ -146,9 +172,9 @@ export const CenterViewport: React.FC = () => {
             )}
           </div>
 
-          {/* PHASE 2 FLOATING ACTOR INSPECTOR & GIZMO TOOLBAR */}
+          {/* 3D FLOATING ACTOR INSPECTOR & SKELETAL CLIP TOOLBAR */}
           {selectedActor && (
-            <div className="absolute top-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-xl bg-[#090D16F2] border border-cyan-500/40 shadow-2xl flex items-center gap-2.5 z-20 max-w-[95%] overflow-x-auto">
+            <div className="absolute top-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-xl bg-[#090D16F2] border border-cyan-500/40 shadow-2xl flex items-center gap-2 z-20 max-w-[95%] overflow-x-auto">
               <span className="text-xs font-semibold text-cyan-300 whitespace-nowrap pr-1 border-r border-slate-800">
                 {selectedActor.name}
               </span>
@@ -177,6 +203,43 @@ export const CenterViewport: React.FC = () => {
                 ))}
               </div>
 
+              {/* Skeletal Animation Clip Selector (for Rigged GLTF/GLB Models) */}
+              {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
+                <select
+                  value={selectedActor.activeClip || selectedActor.availableClips[0]}
+                  onChange={(e) =>
+                    updateActorProperty(selectedActor.id, { activeClip: e.target.value })
+                  }
+                  title="Select Embedded GLTF Skeletal Animation Clip"
+                  className="px-2 py-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-[11px] font-mono text-emerald-300 focus:outline-none focus:border-emerald-400"
+                >
+                  {selectedActor.availableClips.map((clip) => (
+                    <option key={clip} value={clip}>
+                      Clip: {clip}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {/* Procedural Motion Selector */}
+              <select
+                value={selectedActor.activeAnimation}
+                onChange={(e) =>
+                  updateActorProperty(selectedActor.id, {
+                    activeAnimation: e.target.value as AnimationType,
+                  })
+                }
+                className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
+              >
+                {(['idle', 'bounce', 'spin', 'walk', 'attack', 'float'] as AnimationType[]).map(
+                  (anim) => (
+                    <option key={anim} value={anim}>
+                      Motion: {anim}
+                    </option>
+                  )
+                )}
+              </select>
+
               {/* Color Swatch Picker */}
               <label
                 title="Change Actor Primary Color"
@@ -195,27 +258,25 @@ export const CenterViewport: React.FC = () => {
                 </span>
               </label>
 
-              {/* Active Animation Selector */}
-              <select
-                value={selectedActor.activeAnimation}
-                onChange={(e) =>
-                  updateActorProperty(selectedActor.id, {
-                    activeAnimation: e.target.value as AnimationType,
-                  })
-                }
-                className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-              >
-                {(['idle', 'bounce', 'spin', 'walk', 'attack', 'float'] as AnimationType[]).map(
-                  (anim) => (
-                    <option key={anim} value={anim}>
-                      Anim: {anim}
-                    </option>
-                  )
-                )}
-              </select>
-
-              {/* Duplicate & Delete Buttons */}
+              {/* Lock, Duplicate & Delete Buttons */}
               <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
+                <button
+                  onClick={() =>
+                    updateActorProperty(selectedActor.id, { locked: !selectedActor.locked })
+                  }
+                  title={selectedActor.locked ? 'Unlock Actor Transform' : 'Lock Actor Transform'}
+                  className={`p-1.5 rounded transition-colors ${
+                    selectedActor.locked
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-slate-900 hover:bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {selectedActor.locked ? (
+                    <Lock className="w-3.5 h-3.5" />
+                  ) : (
+                    <Unlock className="w-3.5 h-3.5" />
+                  )}
+                </button>
                 <button
                   onClick={() => duplicateActor(selectedActor.id)}
                   title="Duplicate Actor"
@@ -226,6 +287,74 @@ export const CenterViewport: React.FC = () => {
                 <button
                   onClick={() => removeActor(selectedActor.id)}
                   title="Delete Actor"
+                  className="p-1.5 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 2D FLOATING NODE INSPECTOR */}
+          {selectedNode2D && (
+            <div className="absolute top-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-xl bg-[#090D16F2] border border-fuchsia-500/40 shadow-2xl flex items-center gap-2 z-20 max-w-[95%] overflow-x-auto">
+              <span className="text-xs font-semibold text-fuchsia-300 whitespace-nowrap pr-1 border-r border-slate-800">
+                {selectedNode2D.name}
+              </span>
+
+              {selectedNode2D.type === 'text-kinetic' && (
+                <input
+                  type="text"
+                  value={selectedNode2D.text || ''}
+                  onChange={(e) => updateNode2D(selectedNode2D.id, { text: e.target.value })}
+                  placeholder="Text content..."
+                  className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-slate-100 w-36 focus:outline-none focus:border-fuchsia-400"
+                />
+              )}
+
+              <label
+                title="2D Node Fill Color"
+                className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800 cursor-pointer shrink-0"
+              >
+                <input
+                  type="color"
+                  value={selectedNode2D.fill}
+                  onChange={(e) => updateNode2D(selectedNode2D.id, { fill: e.target.value })}
+                  className="w-4 h-4 rounded cursor-pointer bg-transparent border-0"
+                />
+                <span className="text-[10px] font-mono text-slate-300">
+                  {selectedNode2D.fill}
+                </span>
+              </label>
+
+              <select
+                value={selectedNode2D.physics2D}
+                onChange={(e) =>
+                  updateNode2D(selectedNode2D.id, {
+                    physics2D: e.target.value as Physics2DRole,
+                  })
+                }
+                className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-fuchsia-400"
+              >
+                <option value="none">Role: None / UI</option>
+                <option value="player-platformer">Role: 2D Platformer Player</option>
+                <option value="player-topdown">Role: 2D Top-Down Player</option>
+                <option value="static-platform">Role: Solid Platform</option>
+                <option value="collectible">Role: Collectible (+PTS)</option>
+                <option value="bouncing">Role: Bouncing Orb</option>
+              </select>
+
+              <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
+                <button
+                  onClick={() => duplicateNode2D(selectedNode2D.id)}
+                  title="Duplicate 2D Layer"
+                  className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-fuchsia-300 transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => removeNode2D(selectedNode2D.id)}
+                  title="Delete 2D Layer"
                   className="p-1.5 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -253,7 +382,7 @@ export const CenterViewport: React.FC = () => {
             ))}
           </div>
 
-          {/* PHASE 2 PLAYABLE AD END-CARD OVERLAY (Triggered on Win or Timer Expiry) */}
+          {/* PLAYABLE AD END-CARD OVERLAY (Triggered on Win or Timer Expiry) */}
           {sceneSpec.mode === 'game' && gameEnded && (
             <div className="absolute inset-0 bg-black/75 flex items-center justify-center p-6 z-30">
               <div className="w-full max-w-md p-6 rounded-2xl bg-[#090D16] border-2 border-amber-400/80 shadow-2xl flex flex-col items-center text-center space-y-4">
@@ -313,7 +442,7 @@ export const CenterViewport: React.FC = () => {
             </div>
           )}
 
-          {/* Programmatic Marketing CTA Banner (When End-Card is not covering) */}
+          {/* Programmatic Marketing CTA Banner */}
           {sceneSpec.marketingOverlay.enabled && !gameEnded && (
             <div
               className={`absolute left-1/2 -translate-x-1/2 w-[min(460px,92%)] px-4 py-2.5 rounded-xl bg-[#090D16EB] border border-slate-800 shadow-xl flex items-center justify-between gap-4 z-10 transition-all ${
@@ -346,7 +475,7 @@ export const CenterViewport: React.FC = () => {
             </div>
           )}
 
-          {/* PHASE 2 INTERACTIVE TIMELINE SEQUENCER & CAMERA TRACK DOCK */}
+          {/* INTERACTIVE TIMELINE SEQUENCER & CAMERA TRACK DOCK */}
           <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(900px,96%)] z-20 flex flex-col items-center">
             <button
               onClick={() => setBottomDockCollapsed(!isBottomDockCollapsed)}
@@ -443,24 +572,26 @@ export const CenterViewport: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Camera Track Selector Dropdown */}
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
-                      Camera:
-                    </span>
-                    <select
-                      value={sceneSpec.camera.mode}
-                      onChange={(e) => setCameraMode(e.target.value as CameraMode)}
-                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
-                    >
-                      <option value="orbit-360">orbit-360 (Turntable)</option>
-                      <option value="dolly-zoom-in">dolly-zoom-in (Hero Push)</option>
-                      <option value="crane-reveal">crane-reveal (Sweep Up)</option>
-                      <option value="top-down-isometric">top-down-isometric (Arena)</option>
-                      <option value="first-person-follow">first-person-follow</option>
-                      <option value="cinematic-flythrough">cinematic-flythrough (Spline)</option>
-                    </select>
-                  </div>
+                  {/* Camera Track Selector Dropdown (3D Engine) */}
+                  {!is2D && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
+                        Camera:
+                      </span>
+                      <select
+                        value={sceneSpec.camera.mode}
+                        onChange={(e) => setCameraMode(e.target.value as CameraMode)}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
+                      >
+                        <option value="orbit-360">orbit-360 (Turntable)</option>
+                        <option value="dolly-zoom-in">dolly-zoom-in (Hero Push)</option>
+                        <option value="crane-reveal">crane-reveal (Sweep Up)</option>
+                        <option value="top-down-isometric">top-down-isometric (Arena)</option>
+                        <option value="first-person-follow">first-person-follow</option>
+                        <option value="cinematic-flythrough">cinematic-flythrough (Spline)</option>
+                      </select>
+                    </div>
+                  )}
 
                   {/* Record 5s WebM & Visual QA Snapshot Triggers */}
                   <div className="flex items-center gap-2 shrink-0">

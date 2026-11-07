@@ -17,10 +17,10 @@ import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.sch
 type RightTab = 'chat' | 'inspector' | 'json';
 
 const QUICK_PROMPTS = [
-  'Load Luxury Product 3D Commercial (9:16 orbit-360)',
-  'Load Cyberpunk Mecha Showcase (16:9 crane-reveal)',
-  'Load Coin Rush Playable Ad (9:16 WASD game)',
-  'Load Tap-to-Unbox Mini-Game (1:1 mystery box)',
+  'Build a 3D Forest Valley with pine trees, boulders & a running Fox (.glb)',
+  'Build a Cyberpunk Rain City with a dancing Expressive Robot (.glb)',
+  'Create a 2D Neon Platformer Game with jump physics & star pickups',
+  'Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)',
 ];
 
 export const RightAgentChat: React.FC = () => {
@@ -428,9 +428,31 @@ export const RightAgentChat: React.FC = () => {
                 </div>
               </div>
 
+              {/* Embedded GLTF Skeletal Animation Clip (if available on rigged model) */}
+              {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
+                <div className="space-y-1">
+                  <span className="text-[11px] font-mono text-emerald-400">
+                    GLTF Skeletal Animation Clip ({selectedActor.availableClips.length})
+                  </span>
+                  <select
+                    value={selectedActor.activeClip || selectedActor.availableClips[0]}
+                    onChange={(e) =>
+                      updateActorProperty(selectedActor.id, { activeClip: e.target.value })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/40 text-xs font-mono text-emerald-200"
+                  >
+                    {selectedActor.availableClips.map((clip) => (
+                      <option key={clip} value={clip}>
+                        {clip}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Procedural Animation Loop */}
               <div className="space-y-1">
-                <span className="text-[11px] font-mono text-slate-400">Procedural Animation</span>
+                <span className="text-[11px] font-mono text-slate-400">Procedural Motion Offset</span>
                 <select
                   value={selectedActor.activeAnimation}
                   onChange={(e) =>

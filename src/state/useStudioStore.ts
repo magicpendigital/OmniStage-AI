@@ -2,7 +2,10 @@ import { create } from 'zustand';
 import {
   ASSET_REGISTRY,
   cloneSceneSpec,
+  createBlankSceneSpec,
+  DEFAULT_WORLD_SPEC,
   LIGHTING_PRESETS,
+  PRESET_2D_ASSETS,
   SCENE_TEMPLATES,
 } from '../registry/assetRegistry';
 import {
@@ -10,14 +13,20 @@ import {
   AspectRatioPreset,
   CameraMode,
   ChatMessage,
+  EngineType,
   LightingPresetId,
+  Node2D,
+  ScatterObjectType,
   SceneSpec,
+  SemanticAssetEntry,
+  SettingsConfig,
   StudioMode,
   TransformMode,
   Vector3Tuple,
   VFXNode,
   VFXType,
   VisionQAReport,
+  WorldSpec,
 } from '../types/scene.schema';
 
 export interface FloatingScoreFeedback {
@@ -34,30 +43,69 @@ export interface BurstVFXInstance {
   createdAt: number;
 }
 
+const SETTINGS_STORAGE_KEY = 'omnistage_studio_settings_v3';
+
+export const DEFAULT_SETTINGS: SettingsConfig = {
+  geminiModel: 'gemini-3.8-flash',
+  customSystemPrompt: '',
+  customAssetManifestUrl: '',
+  enableThreeOfficialCdn: true,
+  enableSketchfabHub: true,
+  enablePolyPizzaHub: true,
+  enablePolyHavenHub: true,
+  defaultEngine: '3d',
+  renderQuality: 'high',
+  fpsCap: 60,
+  enableShadows: true,
+  enableBloom: true,
+  physicsGravity: 9.8,
+};
+
+function loadInitialSettings(): SettingsConfig {
+  if (typeof window === 'undefined') return DEFAULT_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
 interface StudioState {
-  // Core SceneSpec + Undo/Redo History
+  // Multi-Scene Storyboard & Active SceneSpec
+  scenes: SceneSpec[];
+  activeSceneId: string;
   sceneSpec: SceneSpec;
   pastSpecs: SceneSpec[];
   futureSpecs: SceneSpec[];
 
-  // Phase 2 Selection & 3D Gizmo State
+  // Custom Imported Assets in Current Session
+  customRegistryAssets: SemanticAssetEntry[];
+
+  // Selection & Gizmo State (3D & 2D)
   selectedActorId: string | null;
+  selectedNode2DId: string | null;
   selectedVfxId: string | null;
   transformMode: TransformMode;
   isDraggingGizmo: boolean;
   isPublishModalOpen: boolean;
+  isSettingsModalOpen: boolean;
   isBottomDockCollapsed: boolean;
+
+  // Persistent Studio Settings
+  settings: SettingsConfig;
 
   // Timeline Sequencer & Playback State
   isPlaying: boolean;
   isLooping: boolean;
   currentTime: number;
 
-  // Phase 2 Real Playable Game Runtime State
+  // Playable Game Runtime State
   gameScore: number;
   gameTimeRemaining: number;
   gameWon: boolean;
-  gameEnded: boolean; // Triggers Playable Ad End-Card Overlay
+  gameEnded: boolean;
   unboxTapCounts: Record<string, number>;
   scorePopups: FloatingScoreFeedback[];
   burstEffects: BurstVFXInstance[];
@@ -68,14 +116,19 @@ interface StudioState {
   isVisionRunning: boolean;
   latestVisionReport: VisionQAReport | null;
 
-  // WebGL Canvas Ref Registration (for Snapshot & MediaRecorder)
+  // WebGL / 2D Canvas Ref Registration (for Snapshot & MediaRecorder)
   canvasElement: HTMLCanvasElement | null;
   isRecordingVideo: boolean;
   recordingProgress: number;
 
-  // Actions
+  // Actions — Multi-Scene & Engine Authoring
   setCanvasElement: (el: HTMLCanvasElement | null) => void;
   setSceneSpec: (nextSpec: SceneSpec, summary?: string[]) => void;
+  setEngineType: (engineType: EngineType) => void;
+  createNewBlankScene: (engineType: EngineType, title?: string) => void;
+  switchScene: (sceneId: string) => void;
+  duplicateScene: (sceneId: string) => void;
+  deleteScene: (sceneId: string) => void;
   loadTemplate: (templateId: string) => void;
   undo: () => void;
   redo: () => void;
@@ -85,7 +138,15 @@ interface StudioState {
   setLightingPreset: (presetId: LightingPresetId) => void;
   setCameraMode: (mode: CameraMode) => void;
 
-  // Phase 2 Gizmo & Actor Transform/Property Actions
+  // World & Environment Builder Actions
+  updateWorld: (patch: Partial<WorldSpec>) => void;
+  updateTerrain: (patch: Partial<WorldSpec['terrain']>) => void;
+  updateClouds: (patch: Partial<WorldSpec['clouds']>) => void;
+  updateWeather: (patch: Partial<WorldSpec['weather']>) => void;
+  addScatterLayer: (type: ScatterObjectType) => void;
+  removeScatterLayer: (id: string) => void;
+
+  // 3D Actor & Custom GLB Actions
   selectActor: (id: string | null) => void;
   setTransformMode: (mode: TransformMode) => void;
   setIsDraggingGizmo: (dragging: boolean) => void;
@@ -97,10 +158,21 @@ interface StudioState {
   ) => void;
   updateActorProperty: (actorId: string, partialProps: Partial<ActorNode>) => void;
   updateActor: (actorId: string, patch: Partial<ActorNode>) => void;
+  registerActorClips: (actorId: string, clipNames: string[]) => void;
   duplicateActor: (actorId: string) => void;
   spawnAsset: (assetId: string, customGlbUrl?: string, customName?: string) => void;
+  registerAndSpawnCustomAsset: (name: string, url: string, fileType: 'glb' | 'svg' | 'image') => void;
   removeActor: (actorId: string) => void;
 
+  // 2D Node Authoring Actions
+  selectNode2D: (id: string | null) => void;
+  spawnPreset2D: (presetId: string) => void;
+  addCustomNode2D: (node: Omit<Node2D, 'id'>) => void;
+  updateNode2D: (nodeId: string, patch: Partial<Node2D>) => void;
+  duplicateNode2D: (nodeId: string) => void;
+  removeNode2D: (nodeId: string) => void;
+
+  // VFX Actions
   spawnVFX: (type: VFXType) => void;
   removeVFX: (vfxId: string) => void;
 
@@ -113,23 +185,28 @@ interface StudioState {
   movePlayerActor: (dx: number, dz: number) => void;
   handlePlayerCollision: (targetActorId: string) => void;
   triggerActorInteraction: (actor: ActorNode) => void;
+  addGameScore: (points: number, label: string, color?: string) => void;
   resetGameSession: () => void;
   dismissEndCard: () => void;
 
-  // Agent & Vision QA Actions
+  // Agent, Vision QA & Settings Actions
   addChatMessage: (msg: ChatMessage) => void;
   setAgentThinking: (thinking: boolean) => void;
   setVisionRunning: (running: boolean) => void;
   setLatestVisionReport: (report: VisionQAReport | null) => void;
   applyVisionFixes: (report: VisionQAReport) => void;
+  updateSettings: (patch: Partial<SettingsConfig>) => void;
 
-  // UI & Export Modals
+  // UI Modals
   setPublishModalOpen: (open: boolean) => void;
+  setSettingsModalOpen: (open: boolean) => void;
   setBottomDockCollapsed: (collapsed: boolean) => void;
   setRecordingState: (recording: boolean, progress?: number) => void;
 }
 
-const initialSpec = cloneSceneSpec(SCENE_TEMPLATES['clean-studio-starter']);
+// Launch with a clean From-Scratch 3D Authoring Scene + a secondary 2D Scene in the Storyboard!
+const initialScene3D = createBlankSceneSpec('3d', 'Scene 1 · 3D Authoring Stage');
+const initialScene2D = createBlankSceneSpec('2d', 'Scene 2 · 2D Vector & Platformer Stage');
 
 function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
   if (existingActors.length === 0) return [0, 0, 0];
@@ -161,23 +238,31 @@ function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
 }
 
 export const useStudioStore = create<StudioState>((set, get) => ({
-  sceneSpec: initialSpec,
+  scenes: [initialScene3D, initialScene2D],
+  activeSceneId: initialScene3D.id,
+  sceneSpec: cloneSceneSpec(initialScene3D),
   pastSpecs: [],
   futureSpecs: [],
 
-  selectedActorId: initialSpec.actors[0]?.id ?? null,
+  customRegistryAssets: [],
+
+  selectedActorId: initialScene3D.actors[0]?.id ?? null,
+  selectedNode2DId: null,
   selectedVfxId: null,
   transformMode: 'translate',
   isDraggingGizmo: false,
   isPublishModalOpen: false,
+  isSettingsModalOpen: false,
   isBottomDockCollapsed: false,
+
+  settings: loadInitialSettings(),
 
   isPlaying: true,
   isLooping: true,
   currentTime: 0,
 
   gameScore: 0,
-  gameTimeRemaining: initialSpec.gameRules.timeLimitSeconds,
+  gameTimeRemaining: initialScene3D.gameRules.timeLimitSeconds,
   gameWon: false,
   gameEnded: false,
   unboxTapCounts: {},
@@ -186,14 +271,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   chatMessages: [
     {
-      id: 'msg-welcome',
+      id: 'msg-welcome-v3',
       role: 'assistant',
       content:
-        'OmniStage AI Phase 2 is active. Click any 3D actor to manipulate it with Move [W], Rotate [E], and Scale [R] Gizmos, scrub the cinematic camera timeline, or test the 4 One-Click Starter Templates in the Left Drawer.',
+        'Welcome to OmniStage AI (Phase 3 Dual-Engine Authoring Studio). You are on a clean 3D Authoring Stage with a rigged Expressive AI Robot (.GLB). Use the Left Panel to inspect the Scene Graph, sculpt 3D Terrains & Weather, import local .GLB / .SVG files, or switch between the 3D WebGL Engine and 2D Vector/Platformer Engine.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       diffSummary: [
-        'Enabled 3D TransformControls Gizmos (Translate / Rotate / Scale)',
-        'Activated CatmullRomCurve3 Camera Sequencer & Bounding-Box Game Loop',
+        'Initialized Blank 3D Authoring Stage with rigged RobotExpressive.glb',
+        'Enabled World Terrain Builder, 2D Vector/Sprite Engine & Multi-Scene Storyboard',
       ],
     },
   ],
@@ -208,36 +293,137 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setCanvasElement: (el) => set({ canvasElement: el }),
 
   setSceneSpec: (nextSpec) =>
-    set((state) => ({
-      pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
-      futureSpecs: [],
-      sceneSpec: cloneSceneSpec(nextSpec),
-      gameTimeRemaining: nextSpec.gameRules.timeLimitSeconds,
-      gameScore: 0,
-      gameWon: false,
-      gameEnded: false,
-      unboxTapCounts: {},
-    })),
+    set((state) => {
+      const cloned = cloneSceneSpec(nextSpec);
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? cloned : s));
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: cloned,
+        scenes: updatedScenes,
+        gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+        unboxTapCounts: {},
+      };
+    }),
+
+  setEngineType: (engineType) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.engineType = engineType;
+      if (engineType === '2d' && nextSpec.nodes2D.length === 0) {
+        const blank2d = createBlankSceneSpec('2d');
+        nextSpec.nodes2D = blank2d.nodes2D;
+      }
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+        selectedNode2DId: nextSpec.nodes2D[0]?.id ?? null,
+      };
+    }),
+
+  createNewBlankScene: (engineType, title) =>
+    set((state) => {
+      const newScene = createBlankSceneSpec(
+        engineType,
+        title || `Scene ${state.scenes.length + 1} · ${engineType.toUpperCase()} Stage`
+      );
+      const nextScenes = [...state.scenes, newScene];
+      return {
+        scenes: nextScenes,
+        activeSceneId: newScene.id,
+        sceneSpec: cloneSceneSpec(newScene),
+        pastSpecs: [],
+        futureSpecs: [],
+        selectedActorId: newScene.actors[0]?.id ?? null,
+        selectedNode2DId: newScene.nodes2D[0]?.id ?? null,
+        currentTime: 0,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+      };
+    }),
+
+  switchScene: (sceneId) =>
+    set((state) => {
+      // Save current sceneSpec into scenes array before switching
+      const savedScenes = state.scenes.map((s) =>
+        s.id === state.activeSceneId ? cloneSceneSpec(state.sceneSpec) : s
+      );
+      const target = savedScenes.find((s) => s.id === sceneId);
+      if (!target) return state;
+      const cloned = cloneSceneSpec(target);
+      return {
+        scenes: savedScenes,
+        activeSceneId: cloned.id,
+        sceneSpec: cloned,
+        pastSpecs: [],
+        futureSpecs: [],
+        selectedActorId: cloned.actors[0]?.id ?? null,
+        selectedNode2DId: cloned.nodes2D[0]?.id ?? null,
+        currentTime: 0,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+      };
+    }),
+
+  duplicateScene: (sceneId) =>
+    set((state) => {
+      const source = state.scenes.find((s) => s.id === sceneId);
+      if (!source) return state;
+      const copy = cloneSceneSpec(source);
+      copy.id = `scene-${Date.now().toString(36)}`;
+      copy.title = `${source.title} (Copy)`;
+      return {
+        scenes: [...state.scenes, copy],
+        activeSceneId: copy.id,
+        sceneSpec: copy,
+      };
+    }),
+
+  deleteScene: (sceneId) =>
+    set((state) => {
+      if (state.scenes.length <= 1) return state;
+      const remaining = state.scenes.filter((s) => s.id !== sceneId);
+      const nextActive =
+        state.activeSceneId === sceneId ? remaining[0] : remaining.find((s) => s.id === state.activeSceneId) || remaining[0];
+      return {
+        scenes: remaining,
+        activeSceneId: nextActive.id,
+        sceneSpec: cloneSceneSpec(nextActive),
+      };
+    }),
 
   loadTemplate: (templateId) => {
     const template = SCENE_TEMPLATES[templateId];
     if (!template) return;
     const cloned = cloneSceneSpec(template);
-    set((state) => ({
-      pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
-      futureSpecs: [],
-      sceneSpec: cloned,
-      selectedActorId: cloned.actors[0]?.id ?? null,
-      currentTime: 0,
-      isPlaying: true,
-      gameScore: 0,
-      gameWon: false,
-      gameEnded: false,
-      unboxTapCounts: {},
-      burstEffects: [],
-      gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
-      latestVisionReport: null,
-    }));
+    set((state) => {
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? cloned : s));
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: cloned,
+        scenes: updatedScenes,
+        selectedActorId: cloned.actors[0]?.id ?? null,
+        selectedNode2DId: cloned.nodes2D[0]?.id ?? null,
+        currentTime: 0,
+        isPlaying: true,
+        gameScore: 0,
+        gameWon: false,
+        gameEnded: false,
+        unboxTapCounts: {},
+        burstEffects: [],
+        gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
+        latestVisionReport: null,
+      };
+    });
   },
 
   undo: () =>
@@ -341,6 +527,80 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
     }),
 
+  // ================= WORLD & ENVIRONMENT BUILDER ACTIONS =================
+  updateWorld: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world = { ...(nextSpec.world || DEFAULT_WORLD_SPEC), ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateTerrain: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.terrain = { ...nextSpec.world.terrain, ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateClouds: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.clouds = { ...nextSpec.world.clouds, ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateWeather: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.weather = { ...nextSpec.world.weather, ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  addScatterLayer: (type) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.scatterObjects.push({
+        id: `scatter-${Date.now().toString(36)}`,
+        type,
+        count: type === 'pine-trees' ? 24 : 16,
+        spreadRadius: 22,
+        scaleRange: [0.8, 1.5],
+      });
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  removeScatterLayer: (id) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.scatterObjects = nextSpec.world.scatterObjects.filter((s) => s.id !== id);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  // ================= 3D ACTOR & GIZMO ACTIONS =================
   selectActor: (id) => set({ selectedActorId: id }),
   setTransformMode: (transformMode) => set({ transformMode }),
   setIsDraggingGizmo: (isDraggingGizmo) => set({ isDraggingGizmo }),
@@ -349,7 +609,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const idx = nextSpec.actors.findIndex((a) => a.id === actorId);
-      if (idx === -1) return state;
+      if (idx === -1 || nextSpec.actors[idx].locked) return state;
       nextSpec.actors[idx] = {
         ...nextSpec.actors[idx],
         position: [
@@ -363,9 +623,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           Number(rotation[2].toFixed(2)),
         ],
         scale: [
-          Number(Math.max(0.2, scale[0]).toFixed(2)),
-          Number(Math.max(0.2, scale[1]).toFixed(2)),
-          Number(Math.max(0.2, scale[2]).toFixed(2)),
+          Number(Math.max(0.1, scale[0]).toFixed(2)),
+          Number(Math.max(0.1, scale[1]).toFixed(2)),
+          Number(Math.max(0.1, scale[2]).toFixed(2)),
         ],
       };
       return {
@@ -390,6 +650,25 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   updateActor: (actorId, patch) => get().updateActorProperty(actorId, patch),
 
+  registerActorClips: (actorId, clipNames) =>
+    set((state) => {
+      const actor = state.sceneSpec.actors.find((a) => a.id === actorId);
+      if (!actor) return state;
+      const existing = actor.availableClips || [];
+      if (existing.length === clipNames.length && existing.every((c, i) => c === clipNames[i])) {
+        return state;
+      }
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.actors.findIndex((a) => a.id === actorId);
+      if (idx !== -1) {
+        nextSpec.actors[idx].availableClips = clipNames;
+        if (!nextSpec.actors[idx].activeClip && clipNames.length > 0) {
+          nextSpec.actors[idx].activeClip = clipNames[0];
+        }
+      }
+      return { sceneSpec: nextSpec };
+    }),
+
   duplicateActor: (actorId) =>
     set((state) => {
       const source = state.sceneSpec.actors.find((a) => a.id === actorId);
@@ -413,13 +692,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   spawnAsset: (assetId, customGlbUrl, customName) =>
     set((state) => {
-      const entry = ASSET_REGISTRY[assetId] ?? ASSET_REGISTRY['starter-primitive-showcase'];
+      const customFound = state.customRegistryAssets.find((c) => c.assetId === assetId);
+      const entry =
+        customFound ?? ASSET_REGISTRY[assetId] ?? ASSET_REGISTRY['starter-primitive-showcase'];
       const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.engineType = '3d';
       const spawnPos = findUnoccupiedPosition(nextSpec.actors);
       const newActor: ActorNode = {
         id: `actor-${Date.now().toString(36)}`,
-        name: customName || `${entry.name} ${nextSpec.actors.length + 1}`,
+        name: customName || `${entry.name}`,
         assetId: entry.assetId,
+        modelUrl: customGlbUrl || entry.modelUrl,
         customGlbUrl,
         position: spawnPos,
         rotation: [0, 0, 0],
@@ -429,6 +712,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         metalness: entry.defaultMetalness,
         roughness: entry.defaultRoughness,
         activeAnimation: entry.defaultAnimation,
+        activeClip: entry.defaultClip,
+        availableClips: entry.embeddedClips,
         animationSpeed: 1,
         physicsRole: entry.defaultPhysicsRole,
         onClickAction: entry.defaultClickAction,
@@ -448,6 +733,64 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
     }),
 
+  registerAndSpawnCustomAsset: (name, url, fileType) => {
+    const state = get();
+    if (fileType === 'glb') {
+      const customId = `custom-glb-${Date.now().toString(36)}`;
+      const newEntry: SemanticAssetEntry = {
+        assetId: customId,
+        name: name || 'Imported GLTF Asset',
+        category: 'gltf-rigged',
+        description: 'User-imported custom .GLB / .GLTF 3D model.',
+        modelUrl: url,
+        defaultPrimaryColor: '#06B6D4',
+        defaultSecondaryColor: '#F59E0B',
+        defaultMetalness: 0.6,
+        defaultRoughness: 0.3,
+        defaultAnimation: 'idle',
+        defaultPhysicsRole: 'dynamic',
+        defaultClickAction: 'bounce',
+        defaultScoreValue: 25,
+        boundingBox: { width: 1.5, height: 2.0, depth: 1.5 },
+        attachmentSockets: { ground: [0, 0, 0], top_badge: [0, 2.3, 0] },
+        supportedAnimations: ['idle', 'spin', 'float', 'bounce'],
+      };
+      set((s) => ({
+        customRegistryAssets: [newEntry, ...s.customRegistryAssets],
+      }));
+      get().spawnAsset(customId, url, name);
+    } else {
+      // Spawn into 2D Engine as Sprite / SVG Node
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.engineType = '2d';
+      const newNode: Node2D = {
+        id: `node2d-${Date.now().toString(36)}`,
+        name: name || 'Imported 2D Sprite',
+        type: 'sprite-actor',
+        x: 480,
+        y: 280,
+        width: 110,
+        height: 110,
+        rotation: 0,
+        scaleX: 1,
+        scaleY: 1,
+        opacity: 1,
+        fill: '#06B6D4',
+        stroke: '#F8FAFC',
+        imageUrl: url,
+        physics2D: 'bouncing',
+        scoreValue: 25,
+      };
+      nextSpec.nodes2D.push(newNode);
+      set((s) => ({
+        pastSpecs: [...s.pastSpecs.slice(-19), cloneSceneSpec(s.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedNode2DId: newNode.id,
+      }));
+    }
+  },
+
   removeActor: (actorId) =>
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);
@@ -463,6 +806,95 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
     }),
 
+  // ================= 2D VECTOR / SPRITE NODE ACTIONS =================
+  selectNode2D: (id) => set({ selectedNode2DId: id }),
+
+  spawnPreset2D: (presetId) =>
+    set((state) => {
+      const preset = PRESET_2D_ASSETS.find((p) => p.id === presetId) ?? PRESET_2D_ASSETS[0];
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.engineType = '2d';
+      const offset = (nextSpec.nodes2D.length % 5) * 35;
+      const newNode: Node2D = {
+        ...JSON.parse(JSON.stringify(preset.nodeTemplate)),
+        id: `node2d-${Date.now().toString(36)}`,
+        x: Math.min(860, preset.nodeTemplate.x + offset),
+        y: Math.min(500, preset.nodeTemplate.y - offset * 0.5),
+      };
+      nextSpec.nodes2D.push(newNode);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedNode2DId: newNode.id,
+      };
+    }),
+
+  addCustomNode2D: (nodeTemplate) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.engineType = '2d';
+      const newNode: Node2D = {
+        ...nodeTemplate,
+        id: `node2d-${Date.now().toString(36)}`,
+      };
+      nextSpec.nodes2D.push(newNode);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedNode2DId: newNode.id,
+      };
+    }),
+
+  updateNode2D: (nodeId, patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.nodes2D.findIndex((n) => n.id === nodeId);
+      if (idx === -1 || (nextSpec.nodes2D[idx].locked && patch.locked === undefined)) return state;
+      nextSpec.nodes2D[idx] = { ...nextSpec.nodes2D[idx], ...patch };
+      return {
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  duplicateNode2D: (nodeId) =>
+    set((state) => {
+      const source = state.sceneSpec.nodes2D.find((n) => n.id === nodeId);
+      if (!source) return state;
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const copy: Node2D = {
+        ...JSON.parse(JSON.stringify(source)),
+        id: `node2d-${Date.now().toString(36)}`,
+        name: `${source.name} Copy`,
+        x: Math.min(900, source.x + 40),
+        y: Math.min(520, source.y + 30),
+      };
+      nextSpec.nodes2D.push(copy);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedNode2DId: copy.id,
+      };
+    }),
+
+  removeNode2D: (nodeId) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.nodes2D = nextSpec.nodes2D.filter((n) => n.id !== nodeId);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        selectedNode2DId:
+          state.selectedNode2DId === nodeId
+            ? (nextSpec.nodes2D[0]?.id ?? null)
+            : state.selectedNode2DId,
+      };
+    }),
+
+  // ================= VFX ACTIONS =================
   spawnVFX: (type) =>
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);
@@ -527,7 +959,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         }
       }
 
-      // Tick playable game timer when in Game Mode
       let nextRemaining = state.gameTimeRemaining;
       let nextEnded = state.gameEnded;
       let nextWon = state.gameWon;
@@ -558,8 +989,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       if (playerIdx === -1) return state;
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const player = nextSpec.actors[playerIdx];
-      const nextX = Math.max(-3.6, Math.min(3.6, player.position[0] + dx));
-      const nextZ = Math.max(-3.6, Math.min(3.6, player.position[2] + dz));
+      const nextX = Math.max(-5.5, Math.min(5.5, player.position[0] + dx));
+      const nextZ = Math.max(-5.5, Math.min(5.5, player.position[2] + dz));
       const heading = Math.atan2(dx, dz);
       player.position = [Number(nextX.toFixed(2)), player.position[1], Number(nextZ.toFixed(2))];
       player.rotation = [0, Number(heading.toFixed(2)), 0];
@@ -578,7 +1009,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const targetScore = state.sceneSpec.gameRules.targetScore || 100;
       const won = nextScore >= targetScore;
 
-      // Respawn collectible at a random arena coordinate so player can keep collecting or win
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const idx = nextSpec.actors.findIndex((a) => a.id === targetActorId);
       const burstPos: Vector3Tuple = [...target.position];
@@ -614,7 +1044,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     } else if (target.physicsRole === 'hazard') {
       const penalty = 10;
       const nextScore = Math.max(0, state.gameScore - penalty);
-      // Push player slightly away from hazard
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const pIdx = nextSpec.actors.findIndex((a) => a.physicsRole === 'player');
       if (pIdx !== -1) {
@@ -647,7 +1076,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   triggerActorInteraction: (actor) => {
     const state = get();
 
-    // Special Tap-to-Unbox Mini-Game Mechanic (3 taps -> Confetti Explosion + Product Reveal!)
     if (actor.onClickAction === 'unbox-tap' || actor.assetId === 'mystery-gift-box') {
       const currentTaps = (state.unboxTapCounts[actor.id] || 0) + 1;
       const required = actor.unboxTapsRequired || 3;
@@ -675,7 +1103,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         return;
       }
 
-      // 3rd Tap Reached! Transform Mystery Box into Revealed Hero Product + Spawn Confetti!
       const revealId = actor.revealAssetId || 'sports-sneaker-pro';
       const revealEntry = ASSET_REGISTRY[revealId] || ASSET_REGISTRY['sports-sneaker-pro'];
       const nextSpec = cloneSceneSpec(state.sceneSpec);
@@ -722,7 +1149,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return;
     }
 
-    // Standard Collectible / Destroy / Trigger CTA Click Actions
     const pts = actor.scoreValue ?? 20;
     const nextScore = state.gameScore + pts;
     const targetScore = state.sceneSpec.gameRules.targetScore || 100;
@@ -744,7 +1170,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         if (actor.onClickAction === 'destroy') {
           nextSpec.actors[idx].visible = false;
         } else {
-          // Respawn collectible at new position
           nextSpec.actors[idx].position = [
             Number(((Math.random() - 0.5) * 4.2).toFixed(2)),
             0,
@@ -779,13 +1204,32 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }));
   },
 
+  addGameScore: (points, label, color = '#FBBF24') =>
+    set((state) => {
+      const nextScore = Math.max(0, state.gameScore + points);
+      const targetScore = state.sceneSpec.gameRules.targetScore || 100;
+      const won = nextScore >= targetScore;
+      const popup: FloatingScoreFeedback = {
+        id: `pop-2d-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        text: `${points >= 0 ? '+' : ''}${points} PTS · ${label}`,
+        color,
+        createdAt: Date.now(),
+      };
+      return {
+        gameScore: nextScore,
+        gameWon: state.gameWon || won,
+        gameEnded: state.gameEnded || won,
+        scorePopups: [...state.scorePopups.slice(-4), popup],
+      };
+    }),
+
   resetGameSession: () =>
     set((state) => {
-      // If current template is in SCENE_TEMPLATES, restore initial collectibles/unbox state cleanly
       const tpl = SCENE_TEMPLATES[state.sceneSpec.id];
       const restoredSpec = tpl ? cloneSceneSpec(tpl) : cloneSceneSpec(state.sceneSpec);
       restoredSpec.mode = state.sceneSpec.mode;
       restoredSpec.actors.forEach((a) => (a.visible = true));
+      restoredSpec.nodes2D.forEach((n) => (n.visible = true));
       return {
         sceneSpec: restoredSpec,
         gameScore: 0,
@@ -833,7 +1277,21 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
     }),
 
+  updateSettings: (patch) =>
+    set((state) => {
+      const next = { ...state.settings, ...patch };
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore quota errors
+        }
+      }
+      return { settings: next };
+    }),
+
   setPublishModalOpen: (isPublishModalOpen) => set({ isPublishModalOpen }),
+  setSettingsModalOpen: (isSettingsModalOpen) => set({ isSettingsModalOpen }),
   setBottomDockCollapsed: (isBottomDockCollapsed) => set({ isBottomDockCollapsed }),
   setRecordingState: (isRecordingVideo, recordingProgress = 0) =>
     set({ isRecordingVideo, recordingProgress }),

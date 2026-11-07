@@ -7,6 +7,7 @@ import { useStudioStore } from '../state/useStudioStore';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
+import { WorldRenderer } from './WorldRenderer';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -292,11 +293,14 @@ export const SceneDirector: React.FC = () => {
         color={env.rimLightColor || '#38BDF8'}
       />
 
-      {/* Studio Floor Plane */}
+      {/* Rich 3D World Environment (Terrains, Skybox, Clouds, Weather, Scatter Props) */}
+      <WorldRenderer />
+
+      {/* Invisible/Interactive Ground Click Target for Game Mode Player Movement */}
       <mesh
-        position={[0, -0.02, 0]}
+        position={[0, 0.01, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
-        receiveShadow
+        visible={false}
         onClick={(e) => {
           // In Game Mode, clicking the arena floor moves the Player actor toward that spot!
           if (sceneSpec.mode === 'game' && isPlaying) {
@@ -310,15 +314,8 @@ export const SceneDirector: React.FC = () => {
           }
         }}
       >
-        <planeGeometry args={[60, 60]} />
-        <meshStandardMaterial
-          color={env.groundColor || '#0F172A'}
-          roughness={env.reflectivePedestal ? 0.25 : 0.8}
-          metalness={env.reflectivePedestal ? 0.65 : 0.15}
-          polygonOffset
-          polygonOffsetFactor={1}
-          polygonOffsetUnits={1}
-        />
+        <planeGeometry args={[90, 90]} />
+        <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
       {/* Optional Commercial Reflective Studio Pedestal Disc */}

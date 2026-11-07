@@ -1,8 +1,10 @@
-import React, { Suspense, useRef, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, ThreeEvent } from '@react-three/fiber';
-import { Html, TransformControls, useGLTF } from '@react-three/drei';
+import { Html, TransformControls, useAnimations, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ActorNode } from '../types/scene.schema';
+import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { useStudioStore } from '../state/useStudioStore';
 
 interface ActorRendererProps {
@@ -10,9 +12,67 @@ interface ActorRendererProps {
   isSelected: boolean;
 }
 
-function CustomGlbModel({ url }: { url: string }) {
-  const { scene } = useGLTF(url);
-  return <primitive object={scene.clone()} />;
+function RiggedGltfModel({
+  url,
+  actor,
+}: {
+  url: string;
+  actor: ActorNode;
+}) {
+  const { scene, animations } = useGLTF(url);
+  const registerActorClips = useStudioStore((s) => s.registerActorClips);
+  const isPlaying = useStudioStore((s) => s.isPlaying);
+
+  const clonedScene = useMemo(() => {
+    const clone = SkeletonUtils.clone(scene);
+    clone.traverse((child: any) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    return clone;
+  }, [scene]);
+
+  const { ref, actions, names } = useAnimations(animations, clonedScene);
+
+  // Register embedded skeletal animation clips on mount
+  useEffect(() => {
+    if (names && names.length > 0) {
+      registerActorClips(actor.id, names);
+    }
+  }, [actor.id, names, registerActorClips]);
+
+  // Play selected skeletal clip or match activeAnimation
+  useEffect(() => {
+    if (!actions || names.length === 0) return;
+
+    const requestedClip =
+      actor.activeClip && actions[actor.activeClip]
+        ? actor.activeClip
+        : names.find((n) => n.toLowerCase().includes(actor.activeAnimation.toLowerCase())) ||
+          names[0];
+
+    // Fade out other clips and fade in target clip
+    Object.entries(actions).forEach(([clipName, action]) => {
+      if (!action) return;
+      if (clipName === requestedClip) {
+        action.reset().fadeIn(0.25).play();
+        action.paused = !isPlaying;
+        action.timeScale = actor.animationSpeed ?? 1;
+      } else {
+        action.fadeOut(0.2);
+      }
+    });
+  }, [actions, names, actor.activeClip, actor.activeAnimation, actor.animationSpeed, isPlaying]);
+
+  const defaultScale = ASSET_REGISTRY[actor.assetId]?.defaultScale ?? 1;
+
+  return (
+    <group ref={ref as any} scale={defaultScale}>
+      <primitive object={clonedScene} />
+    </group>
+  );
 }
 
 class GlbErrorBoundary extends React.Component<
@@ -687,9 +747,10 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
   if (actor.visible === false || !isWithinTimelineWindow) return null;
 
   const fallbackMesh = <CompositeProceduralMesh actor={actor} unboxTapCount={unboxTapCount} />;
+  const gltfUrl = actor.modelUrl || actor.customGlbUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
 
-  // Attach interactive 3D TransformControls gizmo when selected and NOT actively playing Game Mode
-  const showTransformGizmo = isSelected && !(mode === 'game' && isPlaying);
+  // Attach interactive 3D TransformControls gizmo when selected, unlocked, and NOT actively playing Game Mode
+  const showTransformGizmo = isSelected && !actor.locked && !(mode === 'game' && isPlaying);
 
   const actorContent = (
     <group
@@ -705,10 +766,10 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
       onPointerOut={() => setHovered(false)}
     >
       <group ref={animGroupRef}>
-        {actor.customGlbUrl ? (
+        {gltfUrl ? (
           <GlbErrorBoundary fallback={fallbackMesh}>
             <Suspense fallback={fallbackMesh}>
-              <CustomGlbModel url={actor.customGlbUrl} />
+              <RiggedGltfModel url={gltfUrl} actor={actor} />
             </Suspense>
           </GlbErrorBoundary>
         ) : (

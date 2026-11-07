@@ -25,19 +25,26 @@ function getGenAIClient(): GoogleGenAI | null {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '25mb' }));
 
   // 1. Conversational SceneSpec Mutation Endpoint
   app.post('/api/agent/mutate', async (req, res) => {
     try {
-      const { prompt, sceneSpec } = req.body;
+      const { prompt, sceneSpec, model, customSystemPrompt } = req.body;
       const ai = getGenAIClient();
       if (!ai) {
         res.status(503).json({ error: 'Gemini API key not configured on server; using studio fallback.' });
         return;
       }
+
+      const selectedModel =
+        model === 'gemini-3.1-pro-preview' ||
+        model === 'gemini-2.5-flash' ||
+        model === 'gemini-3-flash-preview'
+          ? model
+          : 'gemini-3.8-flash';
 
       const userPrompt = `USER INSTRUCTION: "${prompt}"
 
@@ -46,16 +53,16 @@ ${JSON.stringify(sceneSpec, null, 2)}
 
 Return a JSON object with:
 {
-  "assistantMessage": "string explaining what was updated in the 3D scene",
+  "assistantMessage": "string explaining what was updated in the 3D/2D scene",
   "diffSummary": ["bullet 1", "bullet 2"],
   "updatedSceneSpec": { ...complete valid SceneSpec object... }
 }`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: selectedModel,
         contents: userPrompt,
         config: {
-          systemInstruction: buildAgentSystemPrompt(),
+          systemInstruction: buildAgentSystemPrompt(customSystemPrompt),
           responseMimeType: 'application/json',
         },
       });
@@ -134,10 +141,19 @@ Return a JSON object with:
     }
   });
 
+  // Bind port 3000 immediately so container health checks never time out during Vite dependency optimization
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`OmniStage AI Studio Server listening on http://0.0.0.0:${PORT}`);
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : { server },
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -148,10 +164,6 @@ Return a JSON object with:
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`OmniStage AI Studio Server running on http://0.0.0.0:${PORT}`);
-  });
 }
 
 startServer();
