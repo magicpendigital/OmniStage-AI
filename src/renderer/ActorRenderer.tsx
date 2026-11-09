@@ -1,8 +1,11 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { useFrame, ThreeEvent } from '@react-three/fiber';
-import { TransformControls, useAnimations, useGLTF } from '@react-three/drei';
+import { useFrame, useLoader, useThree, ThreeEvent } from '@react-three/fiber';
+import { TransformControls, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { configureActorLoader } from './actorLoader';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { AnimationCrossFade } from './animationCrossFade';
 import { ActorNode } from '../types/scene.schema';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { useStudioStore } from '../state/useStudioStore';
@@ -70,7 +73,9 @@ function RiggedGltfModel({
   url: string;
   actor: ActorNode;
 }) {
-  const { scene, animations } = useGLTF(url);
+  const gl = useThree((s) => s.gl);
+  const configureLoader = useMemo(() => (loader: GLTFLoader) => configureActorLoader(loader, gl), [gl]);
+  const { scene, animations } = useLoader(GLTFLoader, url, configureLoader);
   const isPlaying = useStudioStore((s) => s.isPlaying);
 
   const clonedScene = useMemo(() => {
@@ -84,7 +89,18 @@ function RiggedGltfModel({
     return clone;
   }, [scene]);
 
-  const { ref, actions, names } = useAnimations(animations, clonedScene);
+  const { ref, actions, names, mixer } = useAnimations(animations, clonedScene);
+  const crossFade = useMemo(() => new AnimationCrossFade(mixer), [mixer, animations]);
+
+  useEffect(() => () => {
+    // SkeletonUtils shares geometry/materials with the cache, but bone textures
+    // belong to this instance and must be released when the actor is removed.
+    const skeletons = new Set<THREE.Skeleton>();
+    clonedScene.traverse((child) => {
+      if ((child as THREE.SkinnedMesh).isSkinnedMesh) skeletons.add((child as THREE.SkinnedMesh).skeleton);
+    });
+    skeletons.forEach((skeleton) => skeleton.dispose());
+  }, [clonedScene]);
 
   // Clip discovery must not rewrite future graph actions via syncGraphWithScene.
   useEffect(() => {
@@ -97,7 +113,7 @@ function RiggedGltfModel({
     });
   }, [actor.id, names]);
 
-  // Play selected skeletal clip or match activeAnimation
+  // Clip selection is independent from pause/speed: neither should reset bones.
   useEffect(() => {
     if (!actions || names.length === 0) return;
 
@@ -107,23 +123,25 @@ function RiggedGltfModel({
         : names.find((n) => n.toLowerCase().includes(actor.activeAnimation.toLowerCase())) ||
           names[0];
 
-    // Fade out other clips and fade in target clip
-    Object.entries(actions).forEach(([clipName, action]) => {
-      if (!action) return;
-      if (clipName === requestedClip) {
-        action.reset().fadeIn(0.25).play();
-        action.paused = !isPlaying;
-        action.timeScale = actor.animationSpeed ?? 1;
-      } else {
-        action.fadeOut(0.2);
-      }
-    });
-  }, [actions, names, actor.activeClip, actor.activeAnimation, actor.animationSpeed, isPlaying]);
+    const target = actions[requestedClip];
+    if (target) crossFade.select(target);
+  }, [actions, names, actor.activeClip, actor.activeAnimation, crossFade]);
+
+  useEffect(() => {
+    mixer.timeScale = isPlaying ? 1 : 0;
+  }, [mixer, isPlaying]);
+
+  useEffect(() => {
+    Object.values(actions).forEach((action) => action?.setEffectiveTimeScale(actor.animationSpeed ?? 1));
+  }, [actions, actor.animationSpeed]);
+
+  useFrame(() => crossFade.update());
+  useEffect(() => () => crossFade.dispose(), [crossFade]);
 
   const defaultScale = ASSET_REGISTRY[actor.assetId]?.defaultScale ?? 1;
 
   return (
-    <group ref={ref as any} scale={defaultScale}>
+    <group ref={ref as any} scale={defaultScale} dispose={null}>
       <primitive object={clonedScene} />
     </group>
   );
@@ -701,6 +719,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
   const currentTime = useStudioStore((s) => s.currentTime);
   const mode = useStudioStore((s) => s.sceneSpec.mode);
   const unboxTapCount = useStudioStore((s) => s.unboxTapCounts[actor.id] || 0);
+  const gltfUrl = actor.modelUrl || actor.customGlbUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
 
   // Check timeline window visibility in Media mode
   const isWithinTimelineWindow =
@@ -720,7 +739,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
 
     const anim = animGroupRef.current;
     const speed = actor.animationSpeed ?? 1;
-    const t = state.clock.getElapsedTime() * speed;
+    const t = currentTime * speed;
 
     let offsetY = 0;
     let offsetX = 0;
@@ -741,7 +760,9 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
       }
     }
 
-    if (isPlaying) {
+    // A rig already contains walk/attack/idle motion. Avoid layering procedural
+    // bobbing over its skeleton; retain explicit whole-object effects.
+    if (!gltfUrl || actor.activeAnimation === 'bounce' || actor.activeAnimation === 'float' || actor.activeAnimation === 'spin') {
       switch (actor.activeAnimation) {
         case 'bounce':
           offsetY += Math.abs(Math.sin(t * 3.2)) * 0.48;
@@ -807,7 +828,6 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
   if (actor.visible === false || !isWithinTimelineWindow) return null;
 
   const fallbackMesh = <CompositeProceduralMesh actor={actor} unboxTapCount={unboxTapCount} />;
-  const gltfUrl = actor.modelUrl || actor.customGlbUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
 
   // Attach interactive 3D TransformControls gizmo when selected, unlocked, and NOT actively playing Game Mode
   const showTransformGizmo = isSelected && !actor.locked && !(mode === 'game' && isPlaying);
@@ -829,7 +849,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
         {gltfUrl ? (
           <GlbErrorBoundary resetKey={gltfUrl} fallback={fallbackMesh}>
             <Suspense fallback={fallbackMesh}>
-              <RiggedGltfModel url={gltfUrl} actor={actor} />
+              <RiggedGltfModel key={gltfUrl} url={gltfUrl} actor={actor} />
             </Suspense>
           </GlbErrorBoundary>
         ) : (

@@ -1,10 +1,80 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { Sky, Stars } from '@react-three/drei';
+import { Stars } from '@react-three/drei';
 import * as THREE from 'three';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import { useStudioStore } from '../state/useStudioStore';
-import { ScatterLayerSpec, TerrainType, WeatherType } from '../types/scene.schema';
+import { ScatterLayerSpec, TerrainType, WeatherType, WorldSpec } from '../types/scene.schema';
 import { DEFAULT_WORLD_SPEC } from '../registry/assetRegistry';
+import { GpuParticles } from './GpuParticles';
+import { skyVertexShader, skyFragmentShader, waterShader } from './worldShaders';
+
+const SKY_PALETTES: Record<WorldSpec['skybox'], [string, string, number]> = {
+  'daylight-sky': ['#2476cb', '#c2e5f5', 1],
+  'sunset-atmosphere': ['#342e69', '#f89861', 1],
+  'overcast': ['#667687', '#c8d0d7', 0.12],
+  'night-stars': ['#030719', '#172342', 0],
+  'cyber-void': ['#120825', '#34204f', 0],
+  'studio-hdri': ['#0b101b', '#172342', 0],
+};
+
+function DynamicSky({ world }: { world: WorldSpec }) {
+  const material = useRef<THREE.ShaderMaterial>(null);
+  const uniforms = useMemo(() => ({
+    uTime: { value: 0 }, uDuration: { value: 8 }, uZenith: { value: new THREE.Color() },
+    uHorizon: { value: new THREE.Color() }, uSun: { value: new THREE.Vector3() },
+    uSunStrength: { value: 1 },
+  }), []);
+  useFrame(() => {
+    if (!material.current) return;
+    const u = material.current.uniforms;
+    const [zenith, horizon, sunStrength] = SKY_PALETTES[world.skybox];
+    const state = useStudioStore.getState();
+    u.uTime.value = state.currentTime;
+    u.uDuration.value = state.sceneSpec.durationSeconds;
+    u.uZenith.value.set(zenith);
+    u.uHorizon.value.set(horizon);
+    u.uSun.value.set(...world.sunPosition);
+    if (u.uSun.value.lengthSq() < 0.0001) u.uSun.value.set(0, 1, 0);
+    u.uSunStrength.value = sunStrength;
+  });
+  return (
+    <mesh name="DynamicSky" frustumCulled={false} renderOrder={-1000}>
+      <sphereGeometry args={[1, 48, 24]} />
+      <shaderMaterial ref={material} uniforms={uniforms} vertexShader={skyVertexShader}
+        fragmentShader={skyFragmentShader} side={THREE.BackSide} depthWrite={false} depthTest={false} />
+    </mesh>
+  );
+}
+
+function ReflectiveWater({ level, world }: { level: number; world: WorldSpec }) {
+  const quality = useStudioStore((s) => s.settings.renderQuality);
+  const [water, setWater] = useState<Reflector | null>(null);
+  useEffect(() => {
+    const resolution = quality === 'draft' ? 256 : quality === 'ultra-postprocessing' ? 1024 : 512;
+    const geometry = new THREE.PlaneGeometry(140, 140);
+    const surface = new Reflector(geometry, {
+      shader: waterShader, color: '#075d77', textureWidth: resolution, textureHeight: resolution,
+      clipBias: 0.003, multisample: 0,
+    });
+    (surface.material as THREE.ShaderMaterial).fog = true;
+    surface.rotation.x = -Math.PI / 2;
+    setWater(surface);
+    return () => {
+      surface.dispose();
+      geometry.dispose();
+    };
+  }, [quality]);
+  useFrame(() => {
+    if (!water) return;
+    const u = (water.material as THREE.ShaderMaterial).uniforms;
+    u.uTime.value = useStudioStore.getState().currentTime;
+    u.uSun.value.set(...world.sunPosition).normalize();
+    if (u.uSun.value.lengthSq() < 0.0001) u.uSun.value.set(0, 1, 0);
+    u.uSunColor.value.set(world.skybox === 'sunset-atmosphere' ? '#ffbc78' : '#fff4d6');
+  });
+  return water ? <primitive object={water} name="ReflectiveWater" position={[0, level, 0]} dispose={null} /> : null;
+}
 
 function computeTerrainHeight(type: TerrainType, x: number, z: number, elevationScale: number): number {
   const distFromOrigin = Math.sqrt(x * x + z * z);
@@ -47,7 +117,6 @@ function computeTerrainHeight(type: TerrainType, x: number, z: number, elevation
 const ProceduralTerrain: React.FC = () => {
   const world = useStudioStore((s) => s.sceneSpec.world) ?? DEFAULT_WORLD_SPEC;
   const { type, color, elevationScale, roughness, waterLevel } = world.terrain;
-  const waterRef = useRef<THREE.Mesh>(null);
 
   const geometry = useMemo(() => {
     const geo = new THREE.PlaneGeometry(120, 120, 88, 88);
@@ -84,11 +153,7 @@ const ProceduralTerrain: React.FC = () => {
     (waterLevel !== undefined && waterLevel > 0.01) || type === 'ocean-island';
   const activeWaterY = waterLevel !== undefined && waterLevel > 0.01 ? waterLevel - 0.35 : -0.25;
 
-  useFrame(({ clock }) => {
-    if (waterRef.current && showWater) {
-      waterRef.current.position.y = activeWaterY + Math.sin(clock.getElapsedTime() * 1.6) * 0.04;
-    }
-  });
+  useEffect(() => () => geometry.dispose(), [geometry]);
 
   if (type === 'none') return null;
 
@@ -102,25 +167,7 @@ const ProceduralTerrain: React.FC = () => {
         />
       </mesh>
 
-      {showWater && (
-        <mesh
-          ref={waterRef}
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, activeWaterY, 0]}
-          receiveShadow
-        >
-          <planeGeometry args={[140, 140, 24, 24]} />
-          <meshStandardMaterial
-            color="#0ea5e9"
-            emissive="#0369a1"
-            emissiveIntensity={0.25}
-            roughness={0.12}
-            metalness={0.75}
-            transparent
-            opacity={0.76}
-          />
-        </mesh>
-      )}
+      {showWater && <ReflectiveWater level={activeWaterY} world={world} />}
     </group>
   );
 };
@@ -161,9 +208,9 @@ const VolumetricClouds: React.FC = () => {
     return list;
   }, [enabled, count]);
 
-  useFrame((_, delta) => {
+  useFrame(() => {
     if (!groupRef.current || !enabled) return;
-    groupRef.current.rotation.y += delta * 0.015 * speed;
+    groupRef.current.rotation.y = useStudioStore.getState().currentTime * 0.015 * speed;
   });
 
   if (!enabled) return null;
@@ -191,75 +238,13 @@ const VolumetricClouds: React.FC = () => {
 };
 
 const WeatherSystem: React.FC<{ type: WeatherType; intensity: number }> = ({ type, intensity }) => {
-  const pointsRef = useRef<THREE.Points>(null);
-  const count = Math.floor(450 * Math.max(0.15, intensity));
-
-  const { positions, velocities } = useMemo(() => {
-    const pos = new Float32Array(count * 3);
-    const vel = new Float32Array(count);
-    for (let i = 0; i < count; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 48;
-      pos[i * 3 + 1] = Math.random() * 24;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 48;
-      vel[i] = 0.6 + Math.random() * 0.8;
-    }
-    return { positions: pos, velocities: vel };
-  }, [count]);
-
-  useFrame((_, delta) => {
-    if (!pointsRef.current || type === 'clear') return;
-    const attr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute;
-    const arr = attr.array as Float32Array;
-
-    for (let i = 0; i < count; i++) {
-      const idx = i * 3;
-      if (type === 'rain') {
-        arr[idx + 1] -= delta * 18 * velocities[i];
-        arr[idx] -= delta * 1.5;
-        if (arr[idx + 1] < 0) arr[idx + 1] = 24;
-      } else if (type === 'snow') {
-        arr[idx + 1] -= delta * 2.6 * velocities[i];
-        arr[idx] += Math.sin(arr[idx + 1] * 0.5 + i) * delta * 0.6;
-        if (arr[idx + 1] < 0) arr[idx + 1] = 24;
-      } else if (type === 'floating-embers') {
-        arr[idx + 1] += delta * 2.2 * velocities[i];
-        arr[idx] += Math.cos(arr[idx + 1] * 0.7 + i) * delta * 0.5;
-        if (arr[idx + 1] > 22) arr[idx + 1] = 0.2;
-      } else if (type === 'foggy-mist') {
-        arr[idx] += Math.sin(i + arr[idx + 2] * 0.1) * delta * 0.35;
-      }
-    }
-    attr.needsUpdate = true;
-  });
-
-  if (type === 'clear') return null;
-
-  const particleColor =
-    type === 'rain'
-      ? '#93c5fd'
-      : type === 'snow'
-      ? '#f8fafc'
-      : type === 'floating-embers'
-      ? '#fb923c'
-      : '#cbd5e1';
-
-  const particleSize =
-    type === 'rain' ? 0.11 : type === 'snow' ? 0.18 : type === 'floating-embers' ? 0.16 : 0.32;
-
-  return (
-    <points ref={pointsRef} key={`${type}-${count}`}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        color={particleColor}
-        size={particleSize}
-        transparent
-        opacity={type === 'foggy-mist' ? 0.35 : 0.85}
-        depthWrite={false}
-      />
-    </points>
-  );
+  if (type === 'clear' || intensity <= 0) return null;
+  const particleColor = type === 'rain' ? '#93c5fd' : type === 'snow' ? '#f8fafc'
+    : type === 'floating-embers' ? '#fb923c' : '#cbd5e1';
+  const particleSize = type === 'rain' ? 0.32 : type === 'snow' ? 0.18
+    : type === 'floating-embers' ? 0.16 : 1.8;
+  return <GpuParticles kind={type} count={Math.floor(900 * Math.min(4, intensity))}
+    color={particleColor} size={particleSize} />;
 };
 
 const DEFAULT_SCATTER_COLORS: Record<ScatterLayerSpec['type'], string> = {
@@ -450,31 +435,17 @@ const ScatterObjectsLayer: React.FC<{
 export const WorldRenderer: React.FC = () => {
   const world = useStudioStore((s) => s.sceneSpec.world) ?? DEFAULT_WORLD_SPEC;
 
-  const showDaySky =
-    world.skybox === 'daylight-sky' ||
-    world.skybox === 'sunset-atmosphere' ||
-    world.skybox === 'overcast';
-
   const showStars =
     world.skybox === 'night-stars' || world.skybox === 'cyber-void';
 
   return (
     <group name="OmniStageWorld">
-      {showDaySky && (
-        <Sky
-          distance={450000}
-          sunPosition={world.sunPosition || [18, 24, 14]}
-          turbidity={
-            world.skybox === 'sunset-atmosphere' ? 10 : world.skybox === 'overcast' ? 14 : 4
-          }
-          rayleigh={world.skybox === 'sunset-atmosphere' ? 3.2 : 1.2}
-        />
-      )}
+      {world.skybox !== 'studio-hdri' && <DynamicSky world={world} />}
 
       {showStars && (
         <Stars
-          radius={80}
-          depth={45}
+          radius={65}
+          depth={25}
           count={2500}
           factor={4}
           saturation={0.5}
