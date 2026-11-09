@@ -1,0 +1,106 @@
+{
+  "initial": {
+    "independentRigs": true,
+    "reflectionSize": 512,
+    "weatherCount": 900,
+    "renderer": "WebKit WebGL"
+  },
+  "weather": [
+    {
+      "type": "rain",
+      "time": 3,
+      "uploads": 0,
+      "programsValid": true
+    },
+    {
+      "type": "snow",
+      "time": 3,
+      "uploads": 0,
+      "programsValid": true
+    },
+    {
+      "type": "floating-embers",
+      "time": 3,
+      "uploads": 0,
+      "programsValid": true
+    },
+    {
+      "type": "foggy-mist",
+      "time": 3,
+      "uploads": 0,
+      "programsValid": true
+    }
+  ],
+  "textureCounts": [
+    10,
+    10,
+    10,
+    10
+  ],
+  "cdnChecks": [
+    {
+      "id": "gltf-robot-expressive",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-soldier",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-fox",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-horse",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-flamingo",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-parrot",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-damaged-helmet",
+      "status": 200,
+      "cors": "*"
+    },
+    {
+      "id": "gltf-ion-drive",
+      "status": 200,
+      "cors": "*"
+    }
+  ],
+  "compressed": [
+    {
+      "name": "LittlestTokyo",
+      "extensions": [
+        "KHR_draco_mesh_compression"
+      ],
+      "vertices": 193125,
+      "textures": 13,
+      "clips": 1
+    },
+    {
+      "name": "coffeemat",
+      "extensions": [
+        "KHR_mesh_quantization",
+        "EXT_meshopt_compression",
+        "KHR_texture_transform",
+        "KHR_texture_basisu"
+      ],
+      "vertices": 177247,
+      "textures": 7,
+      "clips": 0
+    }
+  ],
+  "errors": []
+}

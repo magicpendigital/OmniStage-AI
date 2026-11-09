@@ -1,0 +1,156 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: OS
+      - generic [ref=e7]: OmniStage AI
+      - button "New Blank 3D" [ref=e8]
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - button "3D Engine" [ref=e15]
+        - button "2D Engine" [ref=e20]
+      - generic [ref=e26]:
+        - button "Game Mode" [ref=e27]
+        - button "Cinema / Media" [ref=e31]
+      - generic [ref=e35]:
+        - button "16:9" [ref=e36]
+        - button "9:16" [ref=e40]
+        - button "1:1" [ref=e44]
+      - generic [ref=e48]:
+        - button "Undo SceneSpec Mutation" [disabled]
+        - button "Redo SceneSpec Mutation" [disabled]
+    - generic [ref=e49]:
+      - button "Settings" [ref=e50]
+      - button "Snapshot" [ref=e55]
+      - button "Export & Publish" [ref=e60]
+  - generic [ref=e68]:
+    - complementary [ref=e69]:
+      - generic [ref=e70]:
+        - generic [ref=e71]:
+          - heading "3D Scene & World Studio" [level=2] [ref=e72]
+          - generic [ref=e73]: 1 Actors · 0 VFX
+        - generic [ref=e74]:
+          - button "Outliner" [ref=e75]
+          - button "World" [ref=e81]
+          - button "Assets" [ref=e88]
+          - button "Scenes" [ref=e93]
+      - generic [ref=e98]:
+        - generic [ref=e99]:
+          - generic [ref=e100]:
+            - generic [ref=e101]: + Add Node From Scratch
+            - generic [ref=e102]: 3D Engine
+          - generic [ref=e103]:
+            - button "Rigged Robot" [ref=e104]
+            - button "Rigged Fox" [ref=e107]
+            - button "3D Primitive" [ref=e110]
+            - button "VFX Emitter" [ref=e113]
+        - generic [ref=e116]:
+          - generic [ref=e117]:
+            - generic [ref=e118]: 3D Actors (1)
+            - generic [ref=e119]: Click to Inspect
+          - generic [ref=e120] [cursor=pointer]:
+            - generic [ref=e123]:
+              - generic [ref=e124]: Expressive AI Robot (.GLB)
+              - generic [ref=e125]: "GLTF Clip: Wave"
+            - generic [ref=e126]:
+              - button "Hide Actor" [ref=e127]
+              - button "Lock Actor" [ref=e131]
+              - button "Duplicate Actor" [ref=e135]
+              - button "Delete Actor" [ref=e139]
+    - main [ref=e143]:
+      - generic [ref=e145]:
+        - generic:
+          - generic:
+            - generic: 3D
+            - generic: Scene 1 · 3D Authoring Stage
+            - generic: ·
+            - generic: 16:9
+            - generic: ·
+            - generic: orbit-360
+        - generic [ref=e150]:
+          - generic [ref=e151]: Expressive AI Robot (.GLB)
+          - generic [ref=e152]:
+            - button "Move [W]" [ref=e153]
+            - button "Rotate [E]" [ref=e160]
+            - button "Scale [R]" [ref=e165]
+          - combobox "Select Embedded GLTF Skeletal Animation Clip" [ref=e172]:
+            - 'option "Clip: Idle"'
+            - 'option "Clip: Walking"'
+            - 'option "Clip: Running"'
+            - 'option "Clip: Dance"'
+            - 'option "Clip: Jump"'
+            - 'option "Clip: Punch"'
+            - 'option "Clip: Wave" [selected]'
+            - 'option "Clip: Yes"'
+            - 'option "Clip: No"'
+            - 'option "Clip: ThumbsUp"'
+          - combobox [ref=e173]:
+            - 'option "Motion: idle" [selected]'
+            - 'option "Motion: bounce"'
+            - 'option "Motion: spin"'
+            - 'option "Motion: walk"'
+            - 'option "Motion: attack"'
+            - 'option "Motion: float"'
+          - generic "Change Actor Primary Color" [ref=e174] [cursor=pointer]:
+            - textbox "#06B6D4" [ref=e175]: "#06b6d4"
+            - generic [ref=e176]: "#06B6D4"
+          - generic [ref=e177]:
+            - button "Lock Actor Transform" [ref=e178]
+            - button "Duplicate Actor" [ref=e182]
+            - button "Delete Actor" [ref=e186]
+        - generic [ref=e190]:
+          - button "Hide Dock" [ref=e191]
+          - generic [ref=e196]:
+            - generic [ref=e197]:
+              - button "Pause Sequencer" [ref=e198]
+              - button "Toggle Loop Playback" [ref=e202]
+              - generic [ref=e208]:
+                - generic [ref=e209]:
+                  - generic [ref=e210]: Timeline Sequencer
+                  - generic [ref=e211]: 00.0s / 08.0s
+                - slider [ref=e213] [cursor=pointer]: "0"
+                - 'generic "Expressive AI Robot (.GLB): 0.0s – 8.0s" [ref=e215]'
+            - generic [ref=e216]:
+              - generic [ref=e217]: "Camera:"
+              - combobox [ref=e218]:
+                - option "orbit-360 (Turntable)" [selected]
+                - option "dolly-zoom-in (Hero Push)"
+                - option "crane-reveal (Sweep Up)"
+                - option "top-down-isometric (Arena)"
+                - option "first-person-follow"
+                - option "cinematic-flythrough (Spline)"
+            - generic [ref=e219]:
+              - button "Record 5s WebM" [ref=e220]
+              - button "Visual QA Snapshot" [ref=e225]
+    - complementary [ref=e230]:
+      - generic [ref=e231]:
+        - generic [ref=e232]:
+          - heading "AI Director & Inspector" [level=2] [ref=e237]
+          - button "Vision QA" [ref=e238]
+        - generic [ref=e243]:
+          - button "AI Agent" [ref=e244]
+          - button "Inspector" [ref=e250]
+          - button "SceneSpec" [ref=e253]
+      - generic [ref=e259]:
+        - generic [ref=e261]:
+          - generic [ref=e262]:
+            - generic [ref=e263]: OMNISTAGE DIRECTOR
+            - generic [ref=e264]: 05:06 PM
+          - paragraph [ref=e265]: Welcome to OmniStage AI (Phase 3 Dual-Engine Authoring Studio). You are on a clean 3D Authoring Stage with a rigged Expressive AI Robot (.GLB). Use the Left Panel to inspect the Scene Graph, sculpt 3D Terrains & Weather, import local .GLB / .SVG files, or switch between the 3D WebGL Engine and 2D Vector/Platformer Engine.
+          - generic [ref=e266]:
+            - generic [ref=e267]: "SceneSpec Mutations:"
+            - generic [ref=e268]:
+              - generic [ref=e269]: •
+              - generic [ref=e270]: Initialized Blank 3D Authoring Stage with rigged RobotExpressive.glb
+            - generic [ref=e271]:
+              - generic [ref=e272]: •
+              - generic [ref=e273]: Enabled World Terrain Builder, 2D Vector/Sprite Engine & Multi-Scene Storyboard
+        - generic [ref=e274]:
+          - generic [ref=e275]: Quick Director Prompts
+          - generic [ref=e276]:
+            - button "Build a 3D Forest Valley with pine trees, boulders & a running Fox (.glb)" [ref=e277]
+            - button "Build a Cyberpunk Rain City with a dancing Expressive Robot (.glb)" [ref=e278]
+            - button "Create a 2D Neon Platformer Game with jump physics & star pickups" [ref=e279]
+            - button "Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)" [ref=e280]
+        - generic [ref=e281]:
+          - textbox "Ask AI to spawn actors, change camera, or animate..." [ref=e282]
+          - button "Send Instruction" [disabled] [ref=e283]
