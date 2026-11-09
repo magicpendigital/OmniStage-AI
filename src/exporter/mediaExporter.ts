@@ -598,7 +598,7 @@ export function createZipBlob(files: ZipFileEntry[]): Blob {
   eocd.setUint32(16, cdOffset, true);
   eocd.setUint16(20, 0, true);
 
-  return new Blob([...parts, ...cdParts, new Uint8Array(eocdBuf)], {
+  return new Blob([...parts, ...cdParts, new Uint8Array(eocdBuf)] as BlobPart[], {
     type: 'application/zip',
   });
 }
