@@ -10,6 +10,7 @@ import { useStudioStore } from '../state/useStudioStore';
 interface ActorRendererProps {
   actor: ActorNode;
   isSelected: boolean;
+  onRuntimeClick?: (actorId: string) => boolean;
 }
 
 function CanvasBadgeSprite({
@@ -70,7 +71,6 @@ function RiggedGltfModel({
   actor: ActorNode;
 }) {
   const { scene, animations } = useGLTF(url);
-  const registerActorClips = useStudioStore((s) => s.registerActorClips);
   const isPlaying = useStudioStore((s) => s.isPlaying);
 
   const clonedScene = useMemo(() => {
@@ -86,12 +86,16 @@ function RiggedGltfModel({
 
   const { ref, actions, names } = useAnimations(animations, clonedScene);
 
-  // Register embedded skeletal animation clips on mount
+  // Clip discovery must not rewrite future graph actions via syncGraphWithScene.
   useEffect(() => {
-    if (names && names.length > 0) {
-      registerActorClips(actor.id, names);
-    }
-  }, [actor.id, names, registerActorClips]);
+    useStudioStore.setState((state) => {
+      const current = state.sceneSpec.actors.find((a) => a.id === actor.id);
+      if (!current || (current.availableClips?.length === names.length &&
+          current.availableClips.every((clip, index) => clip === names[index]))) return state;
+      return { sceneSpec: { ...state.sceneSpec, actors: state.sceneSpec.actors.map((a) => a.id === actor.id
+        ? { ...a, availableClips: [...names], activeClip: a.activeClip || names[0] } : a) } };
+    });
+  }, [actor.id, names]);
 
   // Play selected skeletal clip or match activeAnimation
   useEffect(() => {
@@ -681,7 +685,7 @@ function CompositeProceduralMesh({
   }
 }
 
-export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected }) => {
+export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected, onRuntimeClick }) => {
   const outerGroupRef = useRef<THREE.Group>(null);
   const animGroupRef = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
@@ -794,6 +798,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected 
     e.stopPropagation();
     selectActor(actor.id);
     setClickPulse(1.0);
+    if (isPlaying && onRuntimeClick?.(actor.id)) return;
     if (mode === 'game' || actor.onClickAction !== 'none') {
       triggerActorInteraction(actor);
     }

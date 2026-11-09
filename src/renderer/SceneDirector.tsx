@@ -4,10 +4,10 @@ import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useStudioStore } from '../state/useStudioStore';
-import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 import { WorldRenderer } from './WorldRenderer';
+import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -17,13 +17,13 @@ export const SceneDirector: React.FC = () => {
   const controlsRef = useRef<any>(null);
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const lastCollisionTimeRef = useRef<Record<string, number>>({});
+  const logicRuntime = useRuntimeLogicGraph('3d');
 
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
   const isDraggingGizmo = useStudioStore((s) => s.isDraggingGizmo);
   const selectActor = useStudioStore((s) => s.selectActor);
   const setTransformMode = useStudioStore((s) => s.setTransformMode);
-  const advanceTimeline = useStudioStore((s) => s.advanceTimeline);
   const movePlayerActor = useStudioStore((s) => s.movePlayerActor);
   const handlePlayerCollision = useStudioStore((s) => s.handlePlayerCollision);
   const currentTime = useStudioStore((s) => s.currentTime);
@@ -46,13 +46,14 @@ export const SceneDirector: React.FC = () => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable) return;
 
       const key = e.key.toLowerCase();
       pressedKeysRef.current.add(key);
+      if (!e.repeat) logicRuntime.emit('key-press', { key, code: e.code });
 
       // When not in active Game Mode, W / E / R switch TransformControls Gizmo modes
-      if (useStudioStore.getState().sceneSpec.mode !== 'game') {
+      if (!useStudioStore.getState().isPlaying && useStudioStore.getState().sceneSpec.mode !== 'game') {
         if (key === 'w') setTransformMode('translate');
         else if (key === 'e') setTransformMode('rotate');
         else if (key === 'r') setTransformMode('scale');
@@ -62,14 +63,17 @@ export const SceneDirector: React.FC = () => {
     const onKeyUp = (e: KeyboardEvent) => {
       pressedKeysRef.current.delete(e.key.toLowerCase());
     };
+    const onBlur = () => pressedKeysRef.current.clear();
 
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
-  }, [setTransformMode]);
+  }, [setTransformMode, logicRuntime]);
 
   // Sync background color & horizon fog with SceneSpec
   useEffect(() => {
@@ -111,7 +115,12 @@ export const SceneDirector: React.FC = () => {
   // Per-frame Timeline Sequencer, Camera Track Interpolation & Playable Bounding-Box Collision Loop
   useFrame((_, delta) => {
     const clampedDelta = Math.min(delta, 0.1);
-    advanceTimeline(clampedDelta);
+    const generation = logicRuntime.generation;
+    logicRuntime.advance(clampedDelta);
+    if (generation !== logicRuntime.generation) lastCollisionTimeRef.current = {};
+
+    // Read after graph actions: animation/movement/camera changes apply this frame.
+    const { sceneSpec, currentTime, isPlaying } = useStudioStore.getState();
 
     const duration = Math.max(2, sceneSpec.durationSeconds || 8);
     const progress = THREE.MathUtils.clamp(currentTime / duration, 0, 1);
@@ -132,47 +141,33 @@ export const SceneDirector: React.FC = () => {
       if (moveX !== 0 || moveZ !== 0) {
         movePlayerActor(moveX, moveZ);
       }
+    }
 
-      // Real-time Bounding-Box / Sphere Collision Check between Player and Collectibles/Hazards
-      const currentActors = useStudioStore.getState().sceneSpec.actors;
-      const player = currentActors.find((a) => a.physicsRole === 'player');
-      if (player) {
-        const playerBBox = ASSET_REGISTRY[player.assetId]?.boundingBox || {
-          width: 1.4,
-          height: 2.0,
-          depth: 1.4,
-        };
-        const playerRadius = Math.max(playerBBox.width, playerBBox.depth) * 0.42;
-        const now = performance.now();
-
-        for (const other of currentActors) {
-          if (other.id === player.id || other.visible === false) continue;
-          if (other.physicsRole !== 'collectible' && other.physicsRole !== 'hazard') continue;
-
-          const otherBBox = ASSET_REGISTRY[other.assetId]?.boundingBox || {
-            width: 1.0,
-            height: 1.2,
-            depth: 1.0,
-          };
-          const otherRadius = Math.max(otherBBox.width, otherBBox.depth) * 0.45;
-          const distXZ = Math.hypot(
-            player.position[0] - other.position[0],
-            player.position[2] - other.position[2]
-          );
-
-          if (distXZ < playerRadius + otherRadius) {
-            const lastHit = lastCollisionTimeRef.current[other.id] || 0;
-            if (now - lastHit > 450) {
-              lastCollisionTimeRef.current[other.id] = now;
-              handlePlayerCollision(other.id);
-            }
-          }
+    if (isPlaying) {
+      const actors = useStudioStore.getState().sceneSpec.actors.filter((a) => a.visible !== false &&
+        (sceneSpec.mode === 'game' || ((a.startTime ?? 0) <= currentTime && (a.endTime ?? Infinity) >= currentTime)));
+      const pairs = findLogicContacts(useStudioStore.getState().sceneSpec);
+      const handled = logicRuntime.collisions(pairs);
+      const now = performance.now();
+      for (const [id, otherId] of pairs) {
+        if (handled.has(otherId) || !actors.some((a) => a.id === id && a.physicsRole === 'player')) continue;
+        const lastHit = lastCollisionTimeRef.current[otherId] ?? -Infinity;
+        if (now - lastHit > 450) {
+          lastCollisionTimeRef.current[otherId] = now;
+          handlePlayerCollision(otherId);
         }
       }
     }
 
     // 2. CINEMATIC CAMERA SEQUENCER (Media Mode or Active Camera Tracks)
-    if (isPlaying && !isDraggingGizmo && sceneSpec.mode === 'media') {
+    if (isPlaying && !isDraggingGizmo && (sceneSpec.mode === 'media' || logicRuntime.controlsCamera)) {
+      if (camMode === 'orbit') {
+        camera.position.set(...sceneSpec.camera.position);
+        if (controlsRef.current) {
+          controlsRef.current.target.set(...sceneSpec.camera.target);
+          controlsRef.current.update();
+        }
+      }
       if (camMode === 'orbit-360') {
         const angle = progress * Math.PI * 2;
         const radius = 6.2;
@@ -372,11 +367,13 @@ export const SceneDirector: React.FC = () => {
           key={actor.id}
           actor={actor}
           isSelected={actor.id === selectedActorId}
+          onRuntimeClick={(actorId) => logicRuntime.emit('actor-click', { actorId })}
         />
       ))}
 
       {/* Declarative VFX & 3D Marketing Callouts from SceneSpec */}
-      {sceneSpec.vfx.map((vfx) => (
+      {sceneSpec.vfx.filter((vfx) => vfx.visible !== false &&
+        currentTime >= (vfx.startTime ?? 0) && currentTime <= (vfx.endTime ?? Infinity)).map((vfx) => (
         <VFXRenderer key={vfx.id} vfx={vfx} />
       ))}
 
