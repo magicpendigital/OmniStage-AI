@@ -1,12 +1,15 @@
 /**
- * CORE CONTRACT: SceneSpec & Multi-Coding-Agent Schema Definitions (Phase 3)
+ * CORE CONTRACT: SceneSpec & Multi-Coding-Agent Schema Definitions (Phase 3 + Phase 5)
  * Unifies 3D WebGL Authoring + 2D Vector/Sprite Authoring, Real GLTF Skeletal Models,
- * Procedural World/Terrain/Weather Systems, Multi-Scene Storyboards, and Studio Settings.
+ * Procedural World/Terrain/Weather Systems, Multi-Scene Storyboards, Studio Settings,
+ * Bidirectional Visual Logic Node Graphs (n8n/ComfyUI Style), and Real-Time Execution Logs.
  */
 
 export type EngineType = '3d' | '2d';
 
 export type StudioMode = 'game' | 'media';
+
+export type WorkspaceViewMode = 'viewport' | 'node-graph' | 'split';
 
 export type AspectRatioPreset = '16:9' | '9:16' | '1:1';
 
@@ -61,6 +64,72 @@ export type VFXType =
   | 'confetti';
 
 export type Vector3Tuple = [number, number, number];
+
+// ============================================================================
+// PHASE 5: BIDIRECTIONAL VISUAL LOGIC NODE GRAPH & EXECUTION LOGS
+// ============================================================================
+
+export type LogicNodeType =
+  | 'trigger'
+  | 'condition'
+  | 'action'
+  | 'media-pipeline'
+  | 'robot-hardware';
+
+export type LogicNodeCategory =
+  | 'event-trigger'
+  | 'logic-gate'
+  | 'actor-action'
+  | 'camera-vfx'
+  | 'audio-caption'
+  | 'robot-servo-io';
+
+export type LogicPortDataType = 'flow' | 'actor' | 'number' | 'signal';
+
+export interface LogicNodePort {
+  id: string;
+  label: string;
+  dataType: LogicPortDataType;
+}
+
+export interface LogicNode {
+  id: string;
+  type: LogicNodeType;
+  title: string;
+  category: LogicNodeCategory;
+  position: { x: number; y: number };
+  inputs: Array<{ id: string; label: string; dataType: LogicPortDataType }>;
+  outputs: Array<{ id: string; label: string; dataType: LogicPortDataType }>;
+  params: Record<string, any>;
+  status?: 'idle' | 'running' | 'success' | 'error';
+  runCount?: number;
+  errorMessage?: string;
+}
+
+export interface LogicEdge {
+  id: string;
+  sourceNodeId: string;
+  sourcePortId: string;
+  targetNodeId: string;
+  targetPortId: string;
+  active?: boolean;
+}
+
+export interface LogicGraphSpec {
+  nodes: LogicNode[];
+  edges: LogicEdge[];
+}
+
+export interface ExecutionLogEntry {
+  id: string;
+  timestamp: string;
+  sceneTime: number;
+  level: 'info' | 'trigger' | 'action' | 'warn' | 'error';
+  nodeId?: string;
+  actorId?: string;
+  message: string;
+  payload?: Record<string, any>;
+}
 
 // ============================================================================
 // PHASE 3: WORLD & SPATIAL ENVIRONMENT SCHEMA (WorldSpec)
@@ -313,6 +382,7 @@ export interface SceneSpec {
   marketingOverlay: MarketingOverlayConfig;
   gameRules: GameRule;
   timelineTracks: TimelineTrack[];
+  logicGraph?: LogicGraphSpec;
 }
 
 export interface BoundingBoxSpec {

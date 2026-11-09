@@ -9,23 +9,32 @@ import {
   SCENE_TEMPLATES,
 } from '../registry/assetRegistry';
 import {
+  ActorClickAction,
   ActorNode,
+  AnimationType,
   AspectRatioPreset,
   CameraMode,
   ChatMessage,
   EngineType,
+  ExecutionLogEntry,
   LightingPresetId,
+  LogicEdge,
+  LogicGraphSpec,
+  LogicNode,
   Node2D,
   ScatterObjectType,
   SceneSpec,
   SemanticAssetEntry,
   SettingsConfig,
+  SkyboxPreset,
   StudioMode,
   TransformMode,
   Vector3Tuple,
   VFXNode,
   VFXType,
   VisionQAReport,
+  WeatherType,
+  WorkspaceViewMode,
   WorldSpec,
 } from '../types/scene.schema';
 
@@ -72,6 +81,294 @@ function loadInitialSettings(): SettingsConfig {
   }
 }
 
+/**
+ * Bidirectional Sync Helper (`syncGraphWithScene`):
+ * Populates a rich ComfyUI / n8n style visual LogicGraphSpec from any SceneSpec
+ * if `scene.logicGraph` is missing or empty, and keeps actor/camera/rule references valid.
+ */
+export function syncGraphWithScene(scene: SceneSpec): SceneSpec {
+  const cloned = cloneSceneSpec(scene);
+  const existingNodes = cloned.logicGraph?.nodes || [];
+  const existingEdges = cloned.logicGraph?.edges || [];
+
+  if (existingNodes.length > 0) {
+    // Sync existing node params with latest SceneSpec values
+    const syncedNodes = existingNodes.map((node) => {
+      const nextParams = { ...node.params };
+      if (nextParams.actorId) {
+        const actor = cloned.actors.find((a) => a.id === nextParams.actorId);
+        if (actor) {
+          nextParams.actorName = actor.name;
+          if (node.category === 'actor-action') {
+            nextParams.animation = actor.activeAnimation;
+            nextParams.activeClip = actor.activeClip || actor.availableClips?.[0] || 'Idle';
+            nextParams.speed = actor.animationSpeed ?? 1;
+            nextParams.scoreDelta = actor.scoreValue ?? 25;
+            nextParams.onClickAction = actor.onClickAction;
+          }
+        }
+      }
+      if (node.id === 'node-camera-track') {
+        nextParams.cameraMode = cloned.camera.mode;
+        nextParams.fov = cloned.camera.fov;
+      }
+      if (node.id === 'node-score-gate') {
+        nextParams.targetScore = cloned.gameRules.targetScore;
+        nextParams.timeLimitSeconds = cloned.gameRules.timeLimitSeconds;
+      }
+      if (node.id === 'node-world-stage') {
+        nextParams.skybox = cloned.world?.skybox || 'daylight-sky';
+        nextParams.weatherType = cloned.world?.weather?.type || 'clear';
+        nextParams.terrainType = cloned.world?.terrain?.type || 'flat-grid';
+      }
+      return { ...node, params: nextParams };
+    });
+
+    cloned.logicGraph = {
+      nodes: syncedNodes,
+      edges: existingEdges,
+    };
+    return cloned;
+  }
+
+  // Build default visual node graph from SceneSpec
+  const primaryActor = cloned.actors[0];
+  const secondaryActor = cloned.actors[1] || cloned.actors[0];
+  const firstVfx = cloned.vfx[0];
+
+  const nodes: LogicNode[] = [
+    {
+      id: 'node-scene-start',
+      type: 'trigger',
+      title: 'On Scene Start',
+      category: 'event-trigger',
+      position: { x: 60, y: 70 },
+      inputs: [],
+      outputs: [
+        { id: 'out-flow', label: 'Exec Flow', dataType: 'flow' },
+        { id: 'out-signal', label: 'Init Signal', dataType: 'signal' },
+      ],
+      params: {
+        eventType: 'scene-start',
+        engineType: cloned.engineType,
+        autoPlay: true,
+      },
+      status: 'success',
+      runCount: 1,
+    },
+    {
+      id: 'node-actor-interact',
+      type: 'trigger',
+      title: 'On Actor Click / Tap',
+      category: 'event-trigger',
+      position: { x: 60, y: 300 },
+      inputs: [],
+      outputs: [
+        { id: 'out-flow', label: 'Tap Flow', dataType: 'flow' },
+        { id: 'out-actor', label: 'Clicked Actor', dataType: 'actor' },
+      ],
+      params: {
+        eventType: 'actor-click',
+        actorId: primaryActor?.id || '',
+        actorName: primaryActor?.name || 'Stage Actor',
+        inputKey: 'Pointer / WASD',
+      },
+      status: 'running',
+      runCount: 2,
+    },
+    {
+      id: 'node-world-stage',
+      type: 'media-pipeline',
+      title: 'World Stage & Atmosphere',
+      category: 'camera-vfx',
+      position: { x: 370, y: 50 },
+      inputs: [{ id: 'in-flow', label: 'Init Flow', dataType: 'flow' }],
+      outputs: [{ id: 'out-flow', label: 'Stage Ready', dataType: 'flow' }],
+      params: {
+        skybox: cloned.world?.skybox || 'daylight-sky',
+        terrainType: cloned.world?.terrain?.type || 'flat-grid',
+        weatherType: cloned.world?.weather?.type || 'clear',
+        aspectRatio: cloned.aspectRatio,
+      },
+      status: 'success',
+      runCount: 1,
+    },
+    {
+      id: 'node-actor-motion',
+      type: 'action',
+      title: `Play Animation · ${primaryActor?.name || 'Hero Rig'}`,
+      category: 'actor-action',
+      position: { x: 370, y: 270 },
+      inputs: [
+        { id: 'in-flow', label: 'Exec In', dataType: 'flow' },
+        { id: 'in-actor', label: 'Target Actor', dataType: 'actor' },
+      ],
+      outputs: [
+        { id: 'out-flow', label: 'Next Action', dataType: 'flow' },
+        { id: 'out-score', label: 'Score Delta', dataType: 'number' },
+      ],
+      params: {
+        actorId: primaryActor?.id || '',
+        actorName: primaryActor?.name || 'Hero Rig',
+        animation: primaryActor?.activeAnimation || 'idle',
+        activeClip: primaryActor?.activeClip || primaryActor?.availableClips?.[0] || 'Idle',
+        speed: primaryActor?.animationSpeed ?? 1,
+        scoreDelta: primaryActor?.scoreValue ?? 25,
+        onClickAction: primaryActor?.onClickAction || 'collect',
+      },
+      status: 'running',
+      runCount: 3,
+    },
+    {
+      id: 'node-score-gate',
+      type: 'condition',
+      title: 'If Score >= Target Goal',
+      category: 'logic-gate',
+      position: { x: 690, y: 250 },
+      inputs: [
+        { id: 'in-flow', label: 'Check Flow', dataType: 'flow' },
+        { id: 'in-val', label: 'Current Score', dataType: 'number' },
+      ],
+      outputs: [
+        { id: 'out-true', label: 'Goal Met (True)', dataType: 'flow' },
+        { id: 'out-false', label: 'Keep Playing', dataType: 'flow' },
+      ],
+      params: {
+        conditionType: 'score-threshold',
+        targetScore: cloned.gameRules.targetScore || 100,
+        timeLimitSeconds: cloned.gameRules.timeLimitSeconds || 30,
+        cooldownMs: 250,
+      },
+      status: 'idle',
+      runCount: 2,
+    },
+    {
+      id: 'node-camera-track',
+      type: 'action',
+      title: 'Switch Camera & Spawn VFX',
+      category: 'camera-vfx',
+      position: { x: 690, y: 40 },
+      inputs: [{ id: 'in-flow', label: 'Stage Flow', dataType: 'flow' }],
+      outputs: [{ id: 'out-flow', label: 'Render Out', dataType: 'flow' }],
+      params: {
+        cameraMode: cloned.camera.mode,
+        fov: cloned.camera.fov || 45,
+        vfxId: firstVfx?.id || '',
+        vfxType: firstVfx?.type || 'sparkles',
+        actorId: secondaryActor?.id || primaryActor?.id || '',
+      },
+      status: 'success',
+      runCount: 1,
+    },
+    {
+      id: 'node-robot-servo',
+      type: 'robot-hardware',
+      title: 'Phygital Bridge · Servo & OLED',
+      category: 'robot-servo-io',
+      position: { x: 1000, y: 60 },
+      inputs: [
+        { id: 'in-flow', label: 'Sync Signal', dataType: 'flow' },
+        { id: 'in-angle', label: 'Angle (deg)', dataType: 'number' },
+      ],
+      outputs: [{ id: 'out-telemetry', label: 'HW Telemetry', dataType: 'signal' }],
+      params: {
+        servoChannel: 'Ch 1 (Head Pan)',
+        servoAngle: 45,
+        oledExpression: 'cyber-happy',
+        voiceTtsText: 'Target locked! Ready for action.',
+      },
+      status: 'success',
+      runCount: 1,
+    },
+    {
+      id: 'node-cta-endcard',
+      type: 'media-pipeline',
+      title: 'Trigger CTA & MRAID Output',
+      category: 'audio-caption',
+      position: { x: 1000, y: 280 },
+      inputs: [{ id: 'in-flow', label: 'On Goal Met', dataType: 'flow' }],
+      outputs: [],
+      params: {
+        headline: cloned.marketingOverlay.headline,
+        ctaText: cloned.marketingOverlay.ctaText,
+        exportFormat: 'TikTok MRAID 3.0 / WebM 60fps',
+      },
+      status: 'idle',
+      runCount: 0,
+    },
+  ];
+
+  const edges: LogicEdge[] = [
+    {
+      id: 'edge-start-world',
+      sourceNodeId: 'node-scene-start',
+      sourcePortId: 'out-flow',
+      targetNodeId: 'node-world-stage',
+      targetPortId: 'in-flow',
+      active: true,
+    },
+    {
+      id: 'edge-world-cam',
+      sourceNodeId: 'node-world-stage',
+      sourcePortId: 'out-flow',
+      targetNodeId: 'node-camera-track',
+      targetPortId: 'in-flow',
+      active: true,
+    },
+    {
+      id: 'edge-cam-robot',
+      sourceNodeId: 'node-camera-track',
+      sourcePortId: 'out-flow',
+      targetNodeId: 'node-robot-servo',
+      targetPortId: 'in-flow',
+      active: true,
+    },
+    {
+      id: 'edge-tap-motion',
+      sourceNodeId: 'node-actor-interact',
+      sourcePortId: 'out-flow',
+      targetNodeId: 'node-actor-motion',
+      targetPortId: 'in-flow',
+      active: true,
+    },
+    {
+      id: 'edge-tap-actor-ref',
+      sourceNodeId: 'node-actor-interact',
+      sourcePortId: 'out-actor',
+      targetNodeId: 'node-actor-motion',
+      targetPortId: 'in-actor',
+      active: true,
+    },
+    {
+      id: 'edge-motion-gate',
+      sourceNodeId: 'node-actor-motion',
+      sourcePortId: 'out-flow',
+      targetNodeId: 'node-score-gate',
+      targetPortId: 'in-flow',
+      active: true,
+    },
+    {
+      id: 'edge-score-val',
+      sourceNodeId: 'node-actor-motion',
+      sourcePortId: 'out-score',
+      targetNodeId: 'node-score-gate',
+      targetPortId: 'in-val',
+      active: true,
+    },
+    {
+      id: 'edge-gate-cta',
+      sourceNodeId: 'node-score-gate',
+      sourcePortId: 'out-true',
+      targetNodeId: 'node-cta-endcard',
+      targetPortId: 'in-flow',
+      active: false,
+    },
+  ];
+
+  cloned.logicGraph = { nodes, edges };
+  return cloned;
+}
+
 interface StudioState {
   // Multi-Scene Storyboard & Active SceneSpec
   scenes: SceneSpec[];
@@ -79,6 +376,13 @@ interface StudioState {
   sceneSpec: SceneSpec;
   pastSpecs: SceneSpec[];
   futureSpecs: SceneSpec[];
+
+  // Phase 5: Workspace View Mode & Logic Graph Execution Console
+  workspaceView: WorkspaceViewMode;
+  focusedLogicNodeId: string | null;
+  executionLogs: ExecutionLogEntry[];
+  isConsoleOpen: boolean;
+  pendingAgentFixPrompt: string | null;
 
   // Custom Imported Assets in Current Session
   customRegistryAssets: SemanticAssetEntry[];
@@ -120,6 +424,33 @@ interface StudioState {
   canvasElement: HTMLCanvasElement | null;
   isRecordingVideo: boolean;
   recordingProgress: number;
+
+  // Actions — Phase 5 Workspace View, Node Graph & Execution Console
+  setWorkspaceView: (view: WorkspaceViewMode) => void;
+  setFocusedLogicNodeId: (nodeId: string | null) => void;
+  setConsoleOpen: (open: boolean) => void;
+  appendLog: (
+    entry: Omit<ExecutionLogEntry, 'id' | 'timestamp' | 'sceneTime'> & {
+      id?: string;
+      timestamp?: string;
+      sceneTime?: number;
+    }
+  ) => void;
+  clearLogs: () => void;
+  markNodeExecution: (
+    nodeId: string,
+    status: 'idle' | 'running' | 'success' | 'error',
+    errorMessage?: string
+  ) => void;
+  addLogicNode: (node: Omit<LogicNode, 'id'> & { id?: string }) => void;
+  updateLogicNode: (id: string, partial: Partial<LogicNode>) => void;
+  removeLogicNode: (id: string) => void;
+  connectLogicEdge: (edge: Omit<LogicEdge, 'id'> & { id?: string }) => void;
+  removeLogicEdge: (edgeId: string) => void;
+  autoLayoutLogicGraph: () => void;
+  simulateNodeExecution: (nodeId: string) => void;
+  triggerAgentAutoFix: (logEntry: ExecutionLogEntry) => void;
+  clearPendingAgentFixPrompt: () => void;
 
   // Actions — Multi-Scene & Engine Authoring
   setCanvasElement: (el: HTMLCanvasElement | null) => void;
@@ -205,9 +536,54 @@ interface StudioState {
   setRecordingState: (recording: boolean, progress?: number) => void;
 }
 
-// Launch with a clean From-Scratch 3D Authoring Scene + a secondary 2D Scene in the Storyboard!
-const initialScene3D = createBlankSceneSpec('3d', 'Scene 1 · 3D Authoring Stage');
-const initialScene2D = createBlankSceneSpec('2d', 'Scene 2 · 2D Vector & Platformer Stage');
+const initialScene3D = syncGraphWithScene(
+  createBlankSceneSpec('3d', 'Scene 1 · 3D Authoring Stage')
+);
+const initialScene2D = syncGraphWithScene(
+  createBlankSceneSpec('2d', 'Scene 2 · 2D Vector & Platformer Stage')
+);
+
+const INITIAL_EXECUTION_LOGS: ExecutionLogEntry[] = [
+  {
+    id: 'log-init-1',
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    sceneTime: 0.0,
+    level: 'trigger',
+    nodeId: 'node-scene-start',
+    message: 'Fired [On Scene Start] -> Initialized 3D WebGL stage & WorldRenderer pipeline.',
+    payload: { engine: '3d', skybox: initialScene3D.world.skybox },
+  },
+  {
+    id: 'log-init-2',
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    sceneTime: 0.2,
+    level: 'action',
+    nodeId: 'node-actor-motion',
+    actorId: initialScene3D.actors[0]?.id,
+    message: `Bound skeletal rig [${initialScene3D.actors[0]?.name || 'Expressive Robot'}] to clip '${initialScene3D.actors[0]?.activeClip || 'Idle'}'.`,
+    payload: { speed: 1.0, scoreDelta: 25 },
+  },
+  {
+    id: 'log-init-3',
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    sceneTime: 0.4,
+    level: 'action',
+    nodeId: 'node-robot-servo',
+    message: 'Phygital Bridge ready: Servo Ch 1 @ 45° · OLED Eye Expression = cyber-happy.',
+    payload: { servoChannel: 'Ch 1', servoAngle: 45 },
+  },
+  {
+    id: 'log-init-warn',
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    sceneTime: 1.2,
+    level: 'warn',
+    nodeId: 'node-score-gate',
+    actorId: initialScene3D.actors[0]?.id,
+    message:
+      'Condition [If Score >= 100] has only 1 collectible actor on stage (25 PTS per tap). Spawn more collectibles or lower targetScore for faster playable conversion.',
+    payload: { currentTargetScore: 100, actorCount: initialScene3D.actors.length },
+  },
+];
 
 function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
   if (existingActors.length === 0) return [0, 0, 0];
@@ -245,6 +621,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   pastSpecs: [],
   futureSpecs: [],
 
+  workspaceView: 'viewport',
+  focusedLogicNodeId: null,
+  executionLogs: INITIAL_EXECUTION_LOGS,
+  isConsoleOpen: true,
+  pendingAgentFixPrompt: null,
+
   customRegistryAssets: [],
 
   selectedActorId: initialScene3D.actors[0]?.id ?? null,
@@ -272,14 +654,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   chatMessages: [
     {
-      id: 'msg-welcome-v3',
+      id: 'msg-welcome-v5',
       role: 'assistant',
       content:
-        'Welcome to OmniStage AI (Phase 3 Dual-Engine Authoring Studio). You are on a clean 3D Authoring Stage with a rigged Expressive AI Robot (.GLB). Use the Left Panel to inspect the Scene Graph, sculpt 3D Terrains & Weather, import local .GLB / .SVG files, or switch between the 3D WebGL Engine and 2D Vector/Platformer Engine.',
+        'Welcome to OmniStage AI (Phase 5 Visual Logic Node Graph & Execution Console). Switch between [3D/2D Viewport], [Logic Node Graph (n8n/ComfyUI)], and [Split View] at the top of the stage to wire triggers, conditions, actions, and Phygital Robot Servo I/O nodes bidirectionally with your live scene.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       diffSummary: [
-        'Initialized Blank 3D Authoring Stage with rigged RobotExpressive.glb',
-        'Enabled World Terrain Builder, 2D Vector/Sprite Engine & Multi-Scene Storyboard',
+        'Initialized Bidirectional LogicGraphSpec (8 nodes, 8 cubic Bezier wires)',
+        'Connected Real-Time Execution Console with One-Click AI Auto-Fix',
       ],
     },
   ],
@@ -291,18 +673,452 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   isRecordingVideo: false,
   recordingProgress: 0,
 
+  // ================= PHASE 5: NODE GRAPH & EXECUTION CONSOLE ACTIONS =================
+  setWorkspaceView: (workspaceView) => set({ workspaceView }),
+
+  setFocusedLogicNodeId: (focusedLogicNodeId) =>
+    set((state) => ({
+      focusedLogicNodeId,
+      workspaceView:
+        focusedLogicNodeId && state.workspaceView === 'viewport' ? 'split' : state.workspaceView,
+    })),
+
+  setConsoleOpen: (isConsoleOpen) => set({ isConsoleOpen }),
+
+  appendLog: (entry) =>
+    set((state) => {
+      const fullEntry: ExecutionLogEntry = {
+        id: entry.id || `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp:
+          entry.timestamp ||
+          new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+        sceneTime: entry.sceneTime ?? Number(state.currentTime.toFixed(2)),
+        level: entry.level,
+        nodeId: entry.nodeId,
+        actorId: entry.actorId,
+        message: entry.message,
+        payload: entry.payload,
+      };
+      return {
+        executionLogs: [...state.executionLogs.slice(-99), fullEntry],
+      };
+    }),
+
+  clearLogs: () => set({ executionLogs: [] }),
+
+  markNodeExecution: (nodeId, status, errorMessage) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (!nextSpec.logicGraph) return state;
+      nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.map((n) => {
+        if (n.id !== nodeId) return n;
+        return {
+          ...n,
+          status,
+          runCount: status === 'running' || status === 'success' ? (n.runCount || 0) + 1 : n.runCount,
+          errorMessage: status === 'error' ? errorMessage || 'Execution fault detected' : undefined,
+        };
+      });
+      nextSpec.logicGraph.edges = nextSpec.logicGraph.edges.map((e) =>
+        e.sourceNodeId === nodeId ? { ...e, active: status !== 'error' } : e
+      );
+      return { sceneSpec: nextSpec };
+    }),
+
+  addLogicNode: (nodeInput) =>
+    set((state) => {
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      const graph: LogicGraphSpec = nextSpec.logicGraph || { nodes: [], edges: [] };
+      const newNode: LogicNode = {
+        ...nodeInput,
+        id: nodeInput.id || `node-${Date.now().toString(36)}`,
+        status: nodeInput.status || 'idle',
+        runCount: nodeInput.runCount ?? 0,
+      };
+      graph.nodes.push(newNode);
+      nextSpec.logicGraph = graph;
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+
+      const logEntry: ExecutionLogEntry = {
+        id: `log-add-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        sceneTime: Number(state.currentTime.toFixed(2)),
+        level: 'info',
+        nodeId: newNode.id,
+        message: `Added [${newNode.type.toUpperCase()}] node "${newNode.title}" to Logic Graph.`,
+      };
+
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+        focusedLogicNodeId: newNode.id,
+        executionLogs: [...state.executionLogs.slice(-99), logEntry],
+      };
+    }),
+
+  updateLogicNode: (nodeId, partial) =>
+    set((state) => {
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      const graph = nextSpec.logicGraph!;
+      const idx = graph.nodes.findIndex((n) => n.id === nodeId);
+      if (idx === -1) return state;
+
+      const prevNode = graph.nodes[idx];
+      const mergedParams = partial.params
+        ? { ...prevNode.params, ...partial.params }
+        : prevNode.params;
+
+      const updatedNode: LogicNode = {
+        ...prevNode,
+        ...partial,
+        params: mergedParams,
+      };
+      graph.nodes[idx] = updatedNode;
+
+      // Bidirectional Sync: Apply node parameter edits directly to SceneSpec!
+      let syncLogMessage: string | null = null;
+
+      if (partial.params) {
+        const p = mergedParams;
+        const targetActorId = p.actorId || state.selectedActorId || nextSpec.actors[0]?.id;
+        const actorIdx = nextSpec.actors.findIndex((a) => a.id === targetActorId);
+
+        if (actorIdx !== -1 && updatedNode.category === 'actor-action') {
+          const actor = nextSpec.actors[actorIdx];
+          if (p.animation && p.animation !== actor.activeAnimation) {
+            actor.activeAnimation = p.animation as AnimationType;
+            syncLogMessage = `Synced Node [${updatedNode.title}] -> Actor "${actor.name}" animation = ${p.animation}`;
+          }
+          if (p.activeClip && p.activeClip !== actor.activeClip) {
+            actor.activeClip = String(p.activeClip);
+            syncLogMessage = `Synced Node [${updatedNode.title}] -> Actor "${actor.name}" GLTF skeletal clip = ${p.activeClip}`;
+          }
+          if (p.speed !== undefined) {
+            const spd = Number(p.speed);
+            if (!Number.isNaN(spd) && spd > 0) {
+              actor.animationSpeed = spd;
+              syncLogMessage = `Synced Node [${updatedNode.title}] -> Actor "${actor.name}" animationSpeed = ${spd}x`;
+            }
+          }
+          if (p.scoreDelta !== undefined) {
+            actor.scoreValue = Number(p.scoreDelta) || 0;
+            syncLogMessage = `Synced Node [${updatedNode.title}] -> Actor "${actor.name}" scoreValue = +${actor.scoreValue} PTS`;
+          }
+          if (p.onClickAction) {
+            actor.onClickAction = p.onClickAction as ActorClickAction;
+            syncLogMessage = `Synced Node [${updatedNode.title}] -> Actor "${actor.name}" onClickAction = ${p.onClickAction}`;
+          }
+        }
+
+        if (p.cameraMode && p.cameraMode !== nextSpec.camera.mode) {
+          nextSpec.camera.mode = p.cameraMode as CameraMode;
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> Camera Rig mode = ${p.cameraMode}`;
+        }
+
+        if (p.fov !== undefined && Number(p.fov) !== nextSpec.camera.fov) {
+          nextSpec.camera.fov = Math.max(20, Math.min(110, Number(p.fov) || 45));
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> Camera FOV = ${nextSpec.camera.fov}°`;
+        }
+
+        if (p.targetScore !== undefined && updatedNode.category === 'logic-gate') {
+          nextSpec.gameRules.targetScore = Math.max(10, Number(p.targetScore) || 100);
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> GameRule targetScore = ${nextSpec.gameRules.targetScore} PTS`;
+        }
+
+        if (p.timeLimitSeconds !== undefined && updatedNode.category === 'logic-gate') {
+          nextSpec.gameRules.timeLimitSeconds = Math.max(5, Number(p.timeLimitSeconds) || 30);
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> GameRule timeLimit = ${nextSpec.gameRules.timeLimitSeconds}s`;
+        }
+
+        if (p.skybox && p.skybox !== nextSpec.world.skybox) {
+          nextSpec.world.skybox = p.skybox as SkyboxPreset;
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> World skybox = ${p.skybox}`;
+        }
+
+        if (p.weatherType && p.weatherType !== nextSpec.world.weather.type) {
+          nextSpec.world.weather.type = p.weatherType as WeatherType;
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> World weather = ${p.weatherType}`;
+        }
+
+        if (p.headline !== undefined && updatedNode.type === 'media-pipeline') {
+          nextSpec.marketingOverlay.headline = String(p.headline);
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> Marketing Headline = "${p.headline}"`;
+        }
+
+        if (p.ctaText !== undefined && updatedNode.type === 'media-pipeline') {
+          nextSpec.marketingOverlay.ctaText = String(p.ctaText);
+          syncLogMessage = `Synced Node [${updatedNode.title}] -> Marketing CTA = "${p.ctaText}"`;
+        }
+
+        if (updatedNode.type === 'robot-hardware') {
+          const angle = Number(p.servoAngle ?? 45);
+          if (angle < 0 || angle > 180) {
+            updatedNode.status = 'error';
+            updatedNode.errorMessage = `Servo angle ${angle}° exceeds safe mechanical range [0°..180°]`;
+            syncLogMessage = `Hardware Limit Fault on [${updatedNode.title}]: Servo angle ${angle}° out of bounds [0°..180°]!`;
+          } else {
+            updatedNode.status = 'success';
+            updatedNode.errorMessage = undefined;
+            syncLogMessage = `Phygital I/O Sync [${updatedNode.title}]: ${p.servoChannel || 'Ch 1'} -> ${angle}°, OLED="${p.oledExpression || 'cyber-happy'}"`;
+          }
+        }
+      }
+
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      const nextLogs = [...state.executionLogs];
+
+      if (syncLogMessage) {
+        nextLogs.push({
+          id: `log-sync-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+          sceneTime: Number(state.currentTime.toFixed(2)),
+          level: updatedNode.status === 'error' ? 'error' : 'action',
+          nodeId: updatedNode.id,
+          actorId: mergedParams.actorId,
+          message: syncLogMessage,
+          payload: mergedParams,
+        });
+      }
+
+      return {
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+        executionLogs: nextLogs.slice(-100),
+      };
+    }),
+
+  removeLogicNode: (id) =>
+    set((state) => {
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      if (!nextSpec.logicGraph) return state;
+      const target = nextSpec.logicGraph.nodes.find((n) => n.id === id);
+      nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.filter((n) => n.id !== id);
+      nextSpec.logicGraph.edges = nextSpec.logicGraph.edges.filter(
+        (e) => e.sourceNodeId !== id && e.targetNodeId !== id
+      );
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      const nextLogs = [
+        ...state.executionLogs.slice(-99),
+        {
+          id: `log-rm-${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+          sceneTime: Number(state.currentTime.toFixed(2)),
+          level: 'warn' as const,
+          message: `Removed logic node "${target?.title || id}" and disconnected its wires.`,
+        },
+      ];
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+        executionLogs: nextLogs,
+      };
+    }),
+
+  connectLogicEdge: (edgeInput) =>
+    set((state) => {
+      if (edgeInput.sourceNodeId === edgeInput.targetNodeId) return state;
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      const graph = nextSpec.logicGraph!;
+      const exists = graph.edges.some(
+        (e) =>
+          e.sourceNodeId === edgeInput.sourceNodeId &&
+          e.sourcePortId === edgeInput.sourcePortId &&
+          e.targetNodeId === edgeInput.targetNodeId &&
+          e.targetPortId === edgeInput.targetPortId
+      );
+      if (exists) return state;
+
+      const newEdge: LogicEdge = {
+        ...edgeInput,
+        id: edgeInput.id || `edge-${Date.now().toString(36)}`,
+        active: true,
+      };
+      graph.edges.push(newEdge);
+
+      const srcNode = graph.nodes.find((n) => n.id === newEdge.sourceNodeId);
+      const dstNode = graph.nodes.find((n) => n.id === newEdge.targetNodeId);
+
+      const logEntry: ExecutionLogEntry = {
+        id: `log-wire-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        sceneTime: Number(state.currentTime.toFixed(2)),
+        level: 'info',
+        nodeId: dstNode?.id,
+        message: `Connected wire: [${srcNode?.title || newEdge.sourceNodeId}] -> [${dstNode?.title || newEdge.targetNodeId}].`,
+      };
+
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+        executionLogs: [...state.executionLogs.slice(-99), logEntry],
+      };
+    }),
+
+  removeLogicEdge: (edgeId) =>
+    set((state) => {
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      if (!nextSpec.logicGraph) return state;
+      nextSpec.logicGraph.edges = nextSpec.logicGraph.edges.filter((e) => e.id !== edgeId);
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      return {
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+      };
+    }),
+
+  autoLayoutLogicGraph: () =>
+    set((state) => {
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
+      if (!nextSpec.logicGraph) return state;
+      const columnMap: Record<LogicNode['type'], number> = {
+        trigger: 60,
+        condition: 380,
+        action: 700,
+        'media-pipeline': 1020,
+        'robot-hardware': 1020,
+      };
+      const rowCounters: Record<number, number> = {};
+
+      nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.map((node) => {
+        const colX = columnMap[node.type] ?? 380;
+        const rowIndex = rowCounters[colX] ?? 0;
+        rowCounters[colX] = rowIndex + 1;
+        return {
+          ...node,
+          position: {
+            x: colX,
+            y: 60 + rowIndex * 230,
+          },
+        };
+      });
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      return {
+        sceneSpec: nextSpec,
+        scenes: updatedScenes,
+      };
+    }),
+
+  simulateNodeExecution: (nodeId) => {
+    const state = get();
+    const graph = state.sceneSpec.logicGraph;
+    if (!graph) return;
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    // Validate potential errors so debugger & AI Auto-Fix can be tested
+    if (
+      node.type === 'robot-hardware' &&
+      (Number(node.params.servoAngle) < 0 || Number(node.params.servoAngle) > 180)
+    ) {
+      state.markNodeExecution(
+        node.id,
+        'error',
+        `Servo angle ${node.params.servoAngle}° out of safe bounds [0°..180°]`
+      );
+      state.appendLog({
+        level: 'error',
+        nodeId: node.id,
+        message: `Execution Error in [${node.title}]: Servo angle ${node.params.servoAngle}° exceeds hardware limit [0°..180°].`,
+        payload: node.params,
+      });
+      return;
+    }
+
+    if (
+      node.category === 'actor-action' &&
+      node.params.actorId &&
+      !state.sceneSpec.actors.some((a) => a.id === node.params.actorId)
+    ) {
+      state.markNodeExecution(node.id, 'error', `Missing target actor ID: ${node.params.actorId}`);
+      state.appendLog({
+        level: 'error',
+        nodeId: node.id,
+        actorId: node.params.actorId,
+        message: `Null Actor Reference in [${node.title}]: Target actor '${node.params.actorId}' no longer exists on stage.`,
+        payload: node.params,
+      });
+      return;
+    }
+
+    // Normal execution pulse
+    state.markNodeExecution(node.id, 'success');
+
+    if (node.category === 'actor-action') {
+      const targetActor =
+        state.sceneSpec.actors.find((a) => a.id === node.params.actorId) ||
+        state.sceneSpec.actors[0];
+      if (targetActor) {
+        state.triggerActorInteraction(targetActor);
+      }
+    } else if (node.type === 'condition') {
+      const met = state.gameScore >= (Number(node.params.targetScore) || 100);
+      state.appendLog({
+        level: met ? 'trigger' : 'warn',
+        nodeId: node.id,
+        message: `Evaluated [${node.title}]: Score ${state.gameScore} / ${node.params.targetScore || 100} -> ${met ? 'TRUE (Goal Met)' : 'FALSE (Below Threshold)'}.`,
+        payload: { currentScore: state.gameScore, targetScore: node.params.targetScore },
+      });
+    } else {
+      state.appendLog({
+        level: node.type === 'trigger' ? 'trigger' : 'action',
+        nodeId: node.id,
+        message: `Executed node [${node.title}] (${node.category}) successfully.`,
+        payload: node.params,
+      });
+    }
+  },
+
+  triggerAgentAutoFix: (logEntry) =>
+    set((state) => {
+      const brokenNode = state.sceneSpec.logicGraph?.nodes.find((n) => n.id === logEntry.nodeId);
+      const fixPrompt = `Auto-Fix Execution Issue on Node "${brokenNode?.title || logEntry.nodeId || 'Stage Logic'}": ${logEntry.message} (Please update the SceneSpec actors, gameRules, or logicGraph parameters so this node executes cleanly without warnings or errors).`;
+      return {
+        pendingAgentFixPrompt: fixPrompt,
+      };
+    }),
+
+  clearPendingAgentFixPrompt: () => set({ pendingAgentFixPrompt: null }),
+
+  // ================= MULTI-SCENE & ENGINE AUTHORING ACTIONS =================
   setCanvasElement: (el) => set({ canvasElement: el }),
 
   setSceneSpec: (nextSpec) =>
     set((state) => {
-      const cloned = cloneSceneSpec(nextSpec);
-      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? cloned : s));
+      const synced = syncGraphWithScene(nextSpec);
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? synced : s));
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: cloned,
+        sceneSpec: synced,
         scenes: updatedScenes,
-        gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
+        gameTimeRemaining: synced.gameRules.timeLimitSeconds,
         gameScore: 0,
         gameWon: false,
         gameEnded: false,
@@ -318,21 +1134,24 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         const blank2d = createBlankSceneSpec('2d');
         nextSpec.nodes2D = blank2d.nodes2D;
       }
-      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? nextSpec : s));
+      const synced = syncGraphWithScene(nextSpec);
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? synced : s));
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: synced,
         scenes: updatedScenes,
-        selectedNode2DId: nextSpec.nodes2D[0]?.id ?? null,
+        selectedNode2DId: synced.nodes2D[0]?.id ?? null,
       };
     }),
 
   createNewBlankScene: (engineType, title) =>
     set((state) => {
-      const newScene = createBlankSceneSpec(
-        engineType,
-        title || `Scene ${state.scenes.length + 1} · ${engineType.toUpperCase()} Stage`
+      const newScene = syncGraphWithScene(
+        createBlankSceneSpec(
+          engineType,
+          title || `Scene ${state.scenes.length + 1} · ${engineType.toUpperCase()} Stage`
+        )
       );
       const nextScenes = [...state.scenes, newScene];
       return {
@@ -352,13 +1171,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   switchScene: (sceneId) =>
     set((state) => {
-      // Save current sceneSpec into scenes array before switching
       const savedScenes = state.scenes.map((s) =>
         s.id === state.activeSceneId ? cloneSceneSpec(state.sceneSpec) : s
       );
       const target = savedScenes.find((s) => s.id === sceneId);
       if (!target) return state;
-      const cloned = cloneSceneSpec(target);
+      const cloned = syncGraphWithScene(target);
       return {
         scenes: savedScenes,
         activeSceneId: cloned.id,
@@ -378,7 +1196,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => {
       const source = state.scenes.find((s) => s.id === sceneId);
       if (!source) return state;
-      const copy = cloneSceneSpec(source);
+      const copy = syncGraphWithScene(source);
       copy.id = `scene-${Date.now().toString(36)}`;
       copy.title = `${source.title} (Copy)`;
       return {
@@ -393,20 +1211,21 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       if (state.scenes.length <= 1) return state;
       const remaining = state.scenes.filter((s) => s.id !== sceneId);
       const nextActive =
-        state.activeSceneId === sceneId ? remaining[0] : remaining.find((s) => s.id === state.activeSceneId) || remaining[0];
+        state.activeSceneId === sceneId
+          ? remaining[0]
+          : remaining.find((s) => s.id === state.activeSceneId) || remaining[0];
       return {
         scenes: remaining,
         activeSceneId: nextActive.id,
-        sceneSpec: cloneSceneSpec(nextActive),
+        sceneSpec: syncGraphWithScene(nextActive),
       };
     }),
 
   loadProjectBundle: (bundleScenes, preferredActiveId) =>
     set((state) => {
       if (!Array.isArray(bundleScenes) || bundleScenes.length === 0) return state;
-      const sanitized = bundleScenes.map((s) => cloneSceneSpec(s));
-      const active =
-        sanitized.find((s) => s.id === preferredActiveId) || sanitized[0];
+      const sanitized = bundleScenes.map((s) => syncGraphWithScene(s));
+      const active = sanitized.find((s) => s.id === preferredActiveId) || sanitized[0];
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
@@ -427,15 +1246,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const template = SCENE_TEMPLATES[templateId];
     if (!template) return;
     const cloned = cloneSceneSpec(template);
+    cloned.logicGraph = undefined; // Force fresh graph generation for the loaded template
+    const synced = syncGraphWithScene(cloned);
     set((state) => {
-      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? cloned : s));
+      const updatedScenes = state.scenes.map((s) => (s.id === state.activeSceneId ? synced : s));
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: cloned,
+        sceneSpec: synced,
         scenes: updatedScenes,
-        selectedActorId: cloned.actors[0]?.id ?? null,
-        selectedNode2DId: cloned.nodes2D[0]?.id ?? null,
+        selectedActorId: synced.actors[0]?.id ?? null,
+        selectedNode2DId: synced.nodes2D[0]?.id ?? null,
         currentTime: 0,
         isPlaying: true,
         gameScore: 0,
@@ -443,7 +1264,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         gameEnded: false,
         unboxTapCounts: {},
         burstEffects: [],
-        gameTimeRemaining: cloned.gameRules.timeLimitSeconds,
+        gameTimeRemaining: synced.gameRules.timeLimitSeconds,
         latestVisionReport: null,
       };
     });
@@ -457,7 +1278,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: remainingPast,
         futureSpecs: [cloneSceneSpec(state.sceneSpec), ...state.futureSpecs.slice(0, 19)],
-        sceneSpec: cloneSceneSpec(previous),
+        sceneSpec: syncGraphWithScene(previous),
       };
     }),
 
@@ -469,7 +1290,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: remainingFuture,
-        sceneSpec: cloneSceneSpec(next),
+        sceneSpec: syncGraphWithScene(next),
       };
     }),
 
@@ -496,7 +1317,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -546,7 +1367,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -558,7 +1379,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -569,7 +1390,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -591,7 +1412,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -667,7 +1488,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
       };
     }),
 
@@ -689,7 +1510,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           nextSpec.actors[idx].activeClip = clipNames[0];
         }
       }
-      return { sceneSpec: nextSpec };
+      return { sceneSpec: syncGraphWithScene(nextSpec) };
     }),
 
   duplicateActor: (actorId) =>
@@ -708,7 +1529,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedActorId: copy.id,
       };
     }),
@@ -718,7 +1539,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const customFound = state.customRegistryAssets.find((c) => c.assetId === assetId);
       const entry =
         customFound ?? ASSET_REGISTRY[assetId] ?? ASSET_REGISTRY['starter-primitive-showcase'];
-      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const nextSpec = syncGraphWithScene(state.sceneSpec);
       nextSpec.engineType = '3d';
       const spawnPos = findUnoccupiedPosition(nextSpec.actors);
       const newActor: ActorNode = {
@@ -748,11 +1569,67 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         revealAssetId: entry.assetId === 'mystery-gift-box' ? 'sports-sneaker-pro' : undefined,
       };
       nextSpec.actors.push(newActor);
+
+      // Automatically add an Action node for the newly spawned actor in the LogicGraph
+      if (nextSpec.logicGraph) {
+        const nodeCount = nextSpec.logicGraph.nodes.length;
+        const newNodeId = `node-actor-${newActor.id}`;
+        nextSpec.logicGraph.nodes.push({
+          id: newNodeId,
+          type: 'action',
+          title: `Actor · ${newActor.name}`,
+          category: 'actor-action',
+          position: { x: 370, y: 120 + (nodeCount % 4) * 190 },
+          inputs: [
+            { id: 'in-flow', label: 'Exec In', dataType: 'flow' },
+            { id: 'in-actor', label: 'Actor Ref', dataType: 'actor' },
+          ],
+          outputs: [
+            { id: 'out-flow', label: 'Next Action', dataType: 'flow' },
+            { id: 'out-score', label: 'Score Delta', dataType: 'number' },
+          ],
+          params: {
+            actorId: newActor.id,
+            actorName: newActor.name,
+            animation: newActor.activeAnimation,
+            activeClip: newActor.activeClip || 'Idle',
+            speed: 1,
+            scoreDelta: newActor.scoreValue ?? 25,
+            onClickAction: newActor.onClickAction,
+          },
+          status: 'success',
+          runCount: 1,
+        });
+        nextSpec.logicGraph.edges.push({
+          id: `edge-spawn-${newActor.id}`,
+          sourceNodeId: 'node-actor-interact',
+          sourcePortId: 'out-flow',
+          targetNodeId: newNodeId,
+          targetPortId: 'in-flow',
+          active: true,
+        });
+      }
+
+      const spawnLog: ExecutionLogEntry = {
+        id: `log-spawn-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        sceneTime: Number(state.currentTime.toFixed(2)),
+        level: 'action',
+        actorId: newActor.id,
+        nodeId: `node-actor-${newActor.id}`,
+        message: `Spawned 3D Actor "${newActor.name}" at [${spawnPos.join(', ')}] and linked Action Node in Logic Graph.`,
+      };
+
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
         sceneSpec: nextSpec,
         selectedActorId: newActor.id,
+        executionLogs: [...state.executionLogs.slice(-99), spawnLog],
       };
     }),
 
@@ -783,7 +1660,6 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       }));
       get().spawnAsset(customId, url, name);
     } else {
-      // Spawn into 2D Engine as Sprite / SVG Node
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.engineType = '2d';
       const newNode: Node2D = {
@@ -808,7 +1684,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       set((s) => ({
         pastSpecs: [...s.pastSpecs.slice(-19), cloneSceneSpec(s.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedNode2DId: newNode.id,
       }));
     }
@@ -848,7 +1724,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedNode2DId: newNode.id,
       };
     }),
@@ -865,7 +1741,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedNode2DId: newNode.id,
       };
     }),
@@ -945,7 +1821,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedVfxId: newVfx.id,
       };
     }),
@@ -1056,6 +1932,20 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         createdAt: Date.now(),
       };
 
+      const logEntry: ExecutionLogEntry = {
+        id: `log-col-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        sceneTime: Number(state.currentTime.toFixed(2)),
+        level: 'trigger',
+        nodeId: 'node-score-gate',
+        actorId: target.id,
+        message: `Collision Trigger: Collected "${target.name}" (+${pts} PTS -> Total: ${nextScore}/${targetScore}).`,
+      };
+
       set((s) => ({
         sceneSpec: nextSpec,
         gameScore: nextScore,
@@ -1063,6 +1953,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         gameEnded: s.gameEnded || won,
         scorePopups: [...s.scorePopups.slice(-4), popup],
         burstEffects: [...s.burstEffects.slice(-5), burst],
+        executionLogs: [...s.executionLogs.slice(-99), logEntry],
       }));
     } else if (target.physicsRole === 'hazard') {
       const penalty = 10;
@@ -1088,10 +1979,25 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         createdAt: Date.now(),
       };
 
+      const logEntry: ExecutionLogEntry = {
+        id: `log-haz-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        sceneTime: Number(state.currentTime.toFixed(2)),
+        level: 'warn',
+        nodeId: 'node-actor-interact',
+        actorId: target.id,
+        message: `Hazard Collision on "${target.name}": -${penalty} PTS penalty applied.`,
+      };
+
       set((s) => ({
         sceneSpec: nextSpec,
         gameScore: nextScore,
         scorePopups: [...s.scorePopups.slice(-4), popup],
+        executionLogs: [...s.executionLogs.slice(-99), logEntry],
       }));
     }
   },
@@ -1161,7 +2067,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
 
       set((s) => ({
-        sceneSpec: nextSpec,
+        sceneSpec: syncGraphWithScene(nextSpec),
         selectedActorId: actor.id,
         gameScore: winScore,
         gameWon: true,
@@ -1202,6 +2108,28 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       }
     }
 
+    // Pulse matching LogicGraph nodes on interaction
+    if (nextSpec.logicGraph) {
+      nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.map((n) => {
+        if (
+          n.id === 'node-actor-interact' ||
+          n.id === 'node-actor-motion' ||
+          n.params.actorId === actor.id ||
+          (won && (n.id === 'node-score-gate' || n.id === 'node-cta-endcard'))
+        ) {
+          return {
+            ...n,
+            status: 'success',
+            runCount: (n.runCount || 0) + 1,
+          };
+        }
+        return n;
+      });
+      nextSpec.logicGraph.edges = nextSpec.logicGraph.edges.map((e) =>
+        e.id === 'edge-gate-cta' && won ? { ...e, active: true } : e
+      );
+    }
+
     const popup: FloatingScoreFeedback = {
       id: `pop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       text: `+${pts} PTS · ${actor.name}`,
@@ -1216,6 +2144,20 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       createdAt: Date.now(),
     };
 
+    const logEntry: ExecutionLogEntry = {
+      id: `log-tap-${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+      sceneTime: Number(state.currentTime.toFixed(2)),
+      level: 'trigger',
+      nodeId: 'node-actor-interact',
+      actorId: actor.id,
+      message: `Fired [On Actor Click] on "${actor.name}" -> Action [${actor.onClickAction}] (+${pts} PTS, Total: ${nextScore}/${targetScore}).`,
+    };
+
     set((s) => ({
       sceneSpec: nextSpec,
       selectedActorId: actor.id,
@@ -1224,6 +2166,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       gameEnded: s.gameEnded || won,
       scorePopups: [...s.scorePopups.slice(-4), popup],
       burstEffects: [...s.burstEffects.slice(-5), burst],
+      executionLogs: [...s.executionLogs.slice(-99), logEntry],
     }));
   },
 
@@ -1249,7 +2192,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   resetGameSession: () =>
     set((state) => {
       const tpl = SCENE_TEMPLATES[state.sceneSpec.id];
-      const restoredSpec = tpl ? cloneSceneSpec(tpl) : cloneSceneSpec(state.sceneSpec);
+      const restoredSpec = tpl
+        ? syncGraphWithScene(cloneSceneSpec(tpl))
+        : syncGraphWithScene(cloneSceneSpec(state.sceneSpec));
       restoredSpec.mode = state.sceneSpec.mode;
       restoredSpec.actors.forEach((a) => (a.visible = true));
       restoredSpec.nodes2D.forEach((n) => (n.visible = true));
@@ -1278,7 +2223,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   applyVisionFixes: (report) =>
     set((state) => {
-      const patchedSpec = cloneSceneSpec(report.proposedSceneSpec);
+      const patchedSpec = syncGraphWithScene(cloneSceneSpec(report.proposedSceneSpec));
       const appliedReport: VisionQAReport = { ...report, applied: true };
       const confirmationMsg: ChatMessage = {
         id: `msg-vision-apply-${Date.now()}`,

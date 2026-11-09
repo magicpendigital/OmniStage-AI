@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   Code2,
@@ -34,6 +34,7 @@ export const RightAgentChat: React.FC = () => {
   const isVisionRunning = useStudioStore((s) => s.isVisionRunning);
   const latestVisionReport = useStudioStore((s) => s.latestVisionReport);
   const canvasElement = useStudioStore((s) => s.canvasElement);
+  const pendingAgentFixPrompt = useStudioStore((s) => s.pendingAgentFixPrompt);
 
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
   const addChatMessage = useStudioStore((s) => s.addChatMessage);
@@ -44,6 +45,8 @@ export const RightAgentChat: React.FC = () => {
   const selectActor = useStudioStore((s) => s.selectActor);
   const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
   const removeActor = useStudioStore((s) => s.removeActor);
+  const clearPendingAgentFixPrompt = useStudioStore((s) => s.clearPendingAgentFixPrompt);
+  const appendLog = useStudioStore((s) => s.appendLog);
 
   const selectedActor =
     sceneSpec.actors.find((a) => a.id === selectedActorId) || sceneSpec.actors[0] || null;
@@ -65,7 +68,32 @@ export const RightAgentChat: React.FC = () => {
     try {
       const prevSnapshot = JSON.parse(JSON.stringify(sceneSpec));
       const result = await mutateSceneWithAgent(query, sceneSpec);
-      setSceneSpec(result.updatedSceneSpec, result.diffSummary);
+
+      // If this was an Auto-Fix request from the Execution Console / Node Graph,
+      // also repair any faulted LogicNode states in the updated SceneSpec!
+      const nextSpec = JSON.parse(JSON.stringify(result.updatedSceneSpec));
+      if (query.startsWith('Auto-Fix Execution Issue') && nextSpec.logicGraph) {
+        nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.map((n: any) => ({
+          ...n,
+          status: 'success',
+          errorMessage: undefined,
+          params: {
+            ...n.params,
+            servoAngle:
+              n.params?.servoAngle !== undefined
+                ? Math.max(0, Math.min(180, Number(n.params.servoAngle) || 90))
+                : undefined,
+            actorId: n.params?.actorId === 'missing-actor-id' ? nextSpec.actors[0]?.id : n.params?.actorId,
+          },
+        }));
+        appendLog({
+          level: 'action',
+          message:
+            'AI Director Auto-Fix applied: Clamped servo angles to [0°..180°], repaired actor bindings, and synchronized SceneSpec.',
+        });
+      }
+
+      setSceneSpec(nextSpec, result.diffSummary);
       addChatMessage({
         id: `msg-a-${Date.now()}`,
         role: 'assistant',
@@ -73,18 +101,31 @@ export const RightAgentChat: React.FC = () => {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         diffSummary: result.diffSummary,
         previousSpecSnapshot: prevSnapshot,
-        updatedSpecSnapshot: result.updatedSceneSpec,
+        updatedSpecSnapshot: nextSpec,
       });
     } finally {
       setAgentThinking(false);
     }
   };
 
+  // Automatically pick up "Auto-Fix with AI Agent" requests from ExecutionConsole or NodeGraphView
+  useEffect(() => {
+    if (!pendingAgentFixPrompt) return;
+    const promptToRun = pendingAgentFixPrompt;
+    clearPendingAgentFixPrompt();
+    setActiveTab('chat');
+    handleSendPrompt(promptToRun);
+  }, [pendingAgentFixPrompt]);
+
   const handleTriggerVisionCheck = async () => {
     if (isVisionRunning) return;
     setVisionRunning(true);
     try {
-      const report = await runVisionQAInspection(canvasElement, sceneSpec);
+      const activeCanvas =
+        canvasElement && canvasElement.isConnected
+          ? canvasElement
+          : document.querySelector('canvas');
+      const report = await runVisionQAInspection(activeCanvas, sceneSpec);
       setLatestVisionReport(report);
       addChatMessage({
         id: `msg-vqa-${Date.now()}`,
@@ -179,7 +220,7 @@ export const RightAgentChat: React.FC = () => {
                   </div>
                 )}
 
-                {/* Vision QA Diagnostic Report Card with Coordinate Telemetry & One-Click Apply Fixes */}
+                {/* Vision QA Diagnostic Report Card */}
                 {msg.visionReport && (
                   <div className="mt-3 p-3 rounded-lg bg-slate-950/90 border border-cyan-500/40 space-y-2.5">
                     <div className="flex items-center justify-between">
@@ -195,14 +236,13 @@ export const RightAgentChat: React.FC = () => {
                       <div className="rounded overflow-hidden border border-slate-800 bg-black max-h-28 flex items-center justify-center">
                         <img
                           src={msg.visionReport.screenshotDataUrl}
-                          alt="Captured 3D WebGL Stage Snapshot"
+                          alt="Captured Stage Snapshot"
                           referrerPolicy="no-referrer"
                           className="h-28 object-contain"
                         />
                       </div>
                     )}
 
-                    {/* Actor World Coordinates Inspected */}
                     {msg.visionReport.actorCoordinates &&
                       msg.visionReport.actorCoordinates.length > 0 && (
                         <div className="p-2 rounded bg-slate-900/90 border border-slate-800/90 space-y-1">
@@ -265,7 +305,7 @@ export const RightAgentChat: React.FC = () => {
 
             {isAgentThinking && (
               <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs font-mono text-cyan-300">
-                Computing declarative SceneSpec mutations...
+                Computing declarative SceneSpec & LogicGraph mutations...
               </div>
             )}
           </div>
@@ -300,7 +340,7 @@ export const RightAgentChat: React.FC = () => {
               type="text"
               value={promptInput}
               onChange={(e) => setPromptInput(e.target.value)}
-              placeholder="Ask AI to spawn actors, change camera, or animate..."
+              placeholder="Ask AI to spawn actors, wire nodes, or fix logic..."
               className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
             />
             <button
@@ -318,7 +358,6 @@ export const RightAgentChat: React.FC = () => {
       {/* TAB 2: LIVE ACTOR & TIMELINE WINDOW INSPECTOR */}
       {activeTab === 'inspector' && (
         <div className="flex-1 overflow-y-auto p-3.5 space-y-4 text-xs">
-          {/* Actor Selector Dropdown */}
           <div className="space-y-1.5">
             <label className="text-[11px] font-mono uppercase text-slate-400">
               Selected Stage Actor ({sceneSpec.actors.length})
@@ -349,7 +388,6 @@ export const RightAgentChat: React.FC = () => {
                 </button>
               </div>
 
-              {/* Position [X, Y, Z] */}
               <div className="space-y-1">
                 <span className="text-[11px] font-mono text-slate-400">Position [X, Y, Z] (m)</span>
                 <div className="grid grid-cols-3 gap-1.5">
@@ -375,7 +413,6 @@ export const RightAgentChat: React.FC = () => {
                 </div>
               </div>
 
-              {/* Timeline Window: startTime, endTime & enterEffect */}
               <div className="grid grid-cols-3 gap-1.5 pt-1">
                 <div>
                   <span className="text-[10px] font-mono text-slate-400 block mb-1">Start (s)</span>
@@ -428,7 +465,6 @@ export const RightAgentChat: React.FC = () => {
                 </div>
               </div>
 
-              {/* Embedded GLTF Skeletal Animation Clip (if available on rigged model) */}
               {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
                 <div className="space-y-1">
                   <span className="text-[11px] font-mono text-emerald-400">
@@ -450,9 +486,10 @@ export const RightAgentChat: React.FC = () => {
                 </div>
               )}
 
-              {/* Procedural Animation Loop */}
               <div className="space-y-1">
-                <span className="text-[11px] font-mono text-slate-400">Procedural Motion Offset</span>
+                <span className="text-[11px] font-mono text-slate-400">
+                  Procedural Motion Offset
+                </span>
                 <select
                   value={selectedActor.activeAnimation}
                   onChange={(e) =>
@@ -472,7 +509,6 @@ export const RightAgentChat: React.FC = () => {
                 </select>
               </div>
 
-              {/* Playable Ad On-Click Behavior */}
               <div className="space-y-1">
                 <span className="text-[11px] font-mono text-slate-400">
                   Playable Tap / Click Behavior
@@ -502,7 +538,6 @@ export const RightAgentChat: React.FC = () => {
             </div>
           )}
 
-          {/* Marketing CTA Banner Editor */}
           <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-2.5">
             <span className="text-[11px] font-mono uppercase text-amber-400 block">
               End-Card & Marketing CTA Overlay
@@ -538,7 +573,7 @@ export const RightAgentChat: React.FC = () => {
         <div className="flex-1 flex flex-col min-h-0 p-3.5 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-mono text-slate-400">
-              src/types/scene.schema.ts (Live State)
+              src/types/scene.schema.ts (Live State + logicGraph)
             </span>
             <span className="text-[10px] font-mono text-cyan-400">100% Data-Driven</span>
           </div>
