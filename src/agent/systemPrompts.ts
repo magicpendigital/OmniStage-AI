@@ -205,3 +205,78 @@ Return a JSON object containing:
 - proposedSceneSpec: a corrected, complete SceneSpec JSON where overlapping actors are neatly separated, camera framing is balanced for the active aspectRatio, y-grounding is fixed, and lighting/VFX enhance the hero subject.
   Copy sceneSpec.logicGraph through unchanged (same nodes and edges) unless a fix requires editing a node parameter that mirrors a field you changed (for example an actor's id or clip).`;
 }
+
+// ============================================================================
+// MULTI-STEP STORYBOARD GENERATION (Plan -> Scene 1..N, sequential with continuity)
+// ============================================================================
+
+export function buildStoryboardPlannerSystemPrompt(customRules?: string): string {
+  return `You are the OmniStage AI Storyboard Planner.
+Your job is STEP 1 of a multi-step pipeline: break the user's request into an ordered list of scenes
+(film shots / ad beats) or game levels. You do NOT author SceneSpec JSON in this step.
+
+PLANNING RULES:
+1. Produce EXACTLY the requested number of beats, in narrative / progression order.
+2. kind = "film" for movies, trailers, cinematic shorts; "game-levels" for multi-level games; "ad-sequence" for multi-shot commercials.
+3. engineType: '3d' for WebGL worlds & cinematic films; '2d' for vector platformers, kinetic typography, side-scrollers.
+   Keep one engineType for the whole storyboard unless the user explicitly mixes engines.
+4. mode: 'media' for film / ad shots (timeline playback), 'game' for playable levels.
+5. Film beats must follow a story arc (establish -> rising action -> climax -> resolution) and keep the same hero characters.
+6. Game levels must escalate difficulty (difficulty 1..N): wider gaps, higher platforms, more collectibles, tighter timers.
+7. Titles are short (<= 6 words). description is 1-2 sentences of concrete visual direction (world, characters, camera, palette).
+${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
+Return ONLY JSON:
+{
+  "storyboardTitle": "string",
+  "kind": "film" | "game-levels" | "ad-sequence",
+  "engineType": "3d" | "2d",
+  "beats": [
+    { "title": "string", "description": "string", "engineType": "3d" | "2d", "mode": "media" | "game", "beat": "one-line narrative beat or level objective", "difficulty": 1 }
+  ]
+}`;
+}
+
+export function buildStoryboardSceneRules(): string {
+  return `
+STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene storyboard):
+- Author a COMPLETE SceneSpec for the requested beat only. Do not reference other scenes by id.
+- Continuity: reuse the same hero characters (same assetId / colors / names), brand palette and art direction as the previous scenes summary.
+- Vary camera.mode between consecutive film shots (e.g. crane-reveal -> dolly-zoom-in -> orbit-360 -> cinematic-flythrough) and progress time of day / weather to match the beat.
+- 3D: keep actors grounded (position[1] = 0) and >= 1.6m apart; durationSeconds 6-12.
+- 2D game levels (canvas 1000x600, x/y are node CENTERS):
+  * Exactly ONE node with physics2D "player-platformer" (type "sprite-actor", ~58x58) standing on the first platform.
+  * Platforms use physics2D "static-platform" (type "tile-platform"). Player jump apex is ~150px and horizontal reach ~350px:
+    keep each step-up between platform tops <= 110px and horizontal edge gaps <= 200px so every level is beatable.
+  * Pits (gaps in the ground) are the obstacles; falling respawns the player at its start.
+  * Collectibles use physics2D "collectible" (shapeKind "star", ~46x46) placed ~45px above platform tops, scoreValue 25-50.
+  * gameRules.winCondition "score-threshold" with targetScore <= the sum of all collectible scoreValues.
+  * Higher difficulty => narrower platforms, more pits, more stars, shorter timeLimitSeconds (min 15).
+- Set mode to "game" for levels and "media" for film shots.`;
+}
+
+export function buildStoryboardSceneUserPrompt(params: {
+  prompt: string;
+  storyboardTitle: string;
+  kind: string;
+  beatIndex: number;
+  total: number;
+  beat: { title: string; description: string; engineType: string; mode: string; beat: string; difficulty?: number };
+  previousScenes: unknown[];
+}): string {
+  const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes } = params;
+  return `ORIGINAL USER REQUEST: "${prompt}"
+
+STORYBOARD: "${storyboardTitle}" (${kind}) — authoring scene ${beatIndex + 1} of ${total}.
+
+THIS SCENE'S BEAT:
+${JSON.stringify(beat, null, 2)}
+
+PREVIOUSLY AUTHORED SCENES (continuity summary):
+${previousScenes.length ? JSON.stringify(previousScenes, null, 2) : '(none — this is the opening scene)'}
+
+Return a JSON object with:
+{
+  "assistantMessage": "one sentence describing this scene",
+  "sceneSpec": { ...complete valid SceneSpec object with engineType "${beat.engineType}" and mode "${beat.mode}"... }
+}`;
+}

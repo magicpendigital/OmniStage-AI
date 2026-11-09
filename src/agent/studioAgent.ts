@@ -23,6 +23,13 @@ import {
 import { useStudioStore } from '../state/useStudioStore';
 import { buildExecutionRepairPrompt } from './systemPrompts';
 
+export {
+  detectStoryboardIntent,
+  generateStoryboardWithAgent,
+  normalizeGeneratedSceneSpec,
+} from './storyboardAgent';
+export type { StoryboardIntent, StoryboardGenerationResult } from './storyboardAgent';
+
 export interface AgentMutationResult {
   assistantMessage: string;
   diffSummary: string[];

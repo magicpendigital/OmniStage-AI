@@ -45,6 +45,17 @@ export interface FloatingScoreFeedback {
   createdAt: number;
 }
 
+export interface StoryboardJobState {
+  storyboardId: string;
+  title: string;
+  status: 'planning' | 'generating' | 'done' | 'error';
+  total: number;
+  completed: number;
+  currentLabel: string;
+  source: 'gemini' | 'local';
+  error?: string;
+}
+
 export interface BurstVFXInstance {
   id: string;
   position: Vector3Tuple;
@@ -56,6 +67,8 @@ const SETTINGS_STORAGE_KEY = 'omnistage_studio_settings_v3';
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
   geminiModel: 'gemini-3.8-flash',
+  polyPizzaApiKey: '',
+  sketchfabApiToken: '',
   customSystemPrompt: '',
   customAssetManifestUrl: '',
   enableThreeOfficialCdn: true,
@@ -521,6 +534,13 @@ interface StudioState {
   resetGameSession: () => void;
   dismissEndCard: () => void;
 
+  // Multi-Scene Storyboard Generation (AI Director multi-step pipeline)
+  storyboardJob: StoryboardJobState | null;
+  setStoryboardJob: (job: StoryboardJobState | null) => void;
+  appendStoryboardScene: (spec: SceneSpec, activate?: boolean) => void;
+  linkStoryboardScenes: (storyboardId: string, activateFirst?: boolean) => void;
+  advanceToNextScene: () => boolean;
+
   // Agent, Vision QA & Settings Actions
   addChatMessage: (msg: ChatMessage) => void;
   setAgentThinking: (thinking: boolean) => void;
@@ -666,6 +686,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     },
   ],
   isAgentThinking: false,
+  storyboardJob: null,
   isVisionRunning: false,
   latestVisionReport: null,
 
@@ -2257,6 +2278,71 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       }
       return { settings: next };
     }),
+
+  setStoryboardJob: (storyboardJob) => set({ storyboardJob }),
+
+  appendStoryboardScene: (spec, activate = true) => {
+    const cloned = cloneSceneSpec(spec);
+    set((state) => {
+      // Persist in-progress edits of the active scene before appending
+      const savedScenes = state.scenes.map((s) =>
+        s.id === state.activeSceneId ? cloneSceneSpec(state.sceneSpec) : s
+      );
+      const withoutDup = savedScenes.filter((s) => s.id !== cloned.id);
+      return { scenes: [...withoutDup, cloned] };
+    });
+    if (activate) get().switchScene(cloned.id);
+  },
+
+  linkStoryboardScenes: (storyboardId, activateFirst = true) => {
+    set((state) => {
+      const savedScenes = state.scenes.map((s) =>
+        s.id === state.activeSceneId ? cloneSceneSpec(state.sceneSpec) : s
+      );
+      const members = savedScenes
+        .filter((s) => s.sequence?.storyboardId === storyboardId)
+        .sort((a, b) => (a.sequence!.index ?? 0) - (b.sequence!.index ?? 0));
+      if (members.length === 0) return state;
+      const linkedById = new Map<string, SceneSpec>();
+      members.forEach((m, i) => {
+        const next = cloneSceneSpec(m);
+        next.sequence = {
+          ...next.sequence!,
+          index: i,
+          total: members.length,
+          nextSceneId: members[i + 1]?.id,
+        };
+        linkedById.set(next.id, next);
+      });
+      const scenes = savedScenes.map((s) => linkedById.get(s.id) ?? s);
+      const active = linkedById.get(state.activeSceneId);
+      return active ? { scenes, sceneSpec: cloneSceneSpec(active) } : { scenes };
+    });
+    if (activateFirst) {
+      const first = get().scenes.find(
+        (s) => s.sequence?.storyboardId === storyboardId && s.sequence.index === 0
+      );
+      if (first) get().switchScene(first.id);
+    }
+  },
+
+  advanceToNextScene: () => {
+    const state = get();
+    const nextId = state.sceneSpec.sequence?.nextSceneId;
+    if (!nextId || !state.scenes.some((s) => s.id === nextId)) return false;
+    get().switchScene(nextId);
+    const target = get().sceneSpec;
+    set({
+      isPlaying: true,
+      gameEnded: false,
+      gameWon: false,
+      gameScore: 0,
+      unboxTapCounts: {},
+      burstEffects: [],
+      gameTimeRemaining: target.gameRules.timeLimitSeconds,
+    });
+    return true;
+  },
 
   setPublishModalOpen: (isPublishModalOpen) => set({ isPublishModalOpen }),
   setSettingsModalOpen: (isSettingsModalOpen) => set({ isSettingsModalOpen }),

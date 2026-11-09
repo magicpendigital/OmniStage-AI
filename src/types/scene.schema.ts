@@ -197,6 +197,17 @@ export interface WorldSpec {
     intensity: number;
   };
   scatterObjects: ScatterLayerSpec[];
+  /** Optional image-based lighting from an external HDRI (e.g. Poly Haven via /api/assets proxy). */
+  hdri?: WorldHDRISpec;
+}
+
+export interface WorldHDRISpec {
+  url: string;
+  name: string;
+  source: OnlineAssetProvider | 'custom';
+  /** When true the HDRI replaces the procedural skybox as the visible background. */
+  showBackground: boolean;
+  intensity: number;
 }
 
 // ============================================================================
@@ -365,6 +376,41 @@ export interface TimelineTrack {
   color: string;
 }
 
+// ============================================================================
+// PHASE 3: MULTI-SCENE STORYBOARD SEQUENCING
+// ============================================================================
+
+export type StoryboardKind = 'film' | 'game-levels' | 'ad-sequence';
+
+/** Links a scene into an ordered storyboard (film shots or game levels). */
+export interface SceneSequenceMeta {
+  storyboardId: string;
+  storyboardTitle: string;
+  kind: StoryboardKind;
+  index: number; // 0-based position in the storyboard
+  total: number;
+  /** Next scene to advance to when this level is won / this shot ends. */
+  nextSceneId?: string;
+  /** Narrative beat or level objective that this scene fulfils. */
+  beat?: string;
+}
+
+export interface StoryboardBeat {
+  title: string;
+  description: string;
+  engineType: EngineType;
+  mode: StudioMode;
+  beat: string;
+  difficulty?: number; // 1..N, used for game level escalation
+}
+
+export interface StoryboardPlan {
+  storyboardTitle: string;
+  kind: StoryboardKind;
+  engineType: EngineType;
+  beats: StoryboardBeat[];
+}
+
 export interface SceneSpec {
   id: string;
   title: string;
@@ -383,6 +429,7 @@ export interface SceneSpec {
   gameRules: GameRule;
   timelineTracks: TimelineTrack[];
   logicGraph?: LogicGraphSpec;
+  sequence?: SceneSequenceMeta;
 }
 
 export interface BoundingBoxSpec {
@@ -426,8 +473,41 @@ export interface SemanticAssetEntry {
   supportedAnimations: AnimationType[];
 }
 
+// ============================================================================
+// PHASE 3: ONLINE ASSET HUB (Poly Pizza / Sketchfab / Poly Haven via server proxy)
+// ============================================================================
+
+export type OnlineAssetProvider = 'polypizza' | 'sketchfab' | 'polyhaven';
+
+export type OnlineAssetKind = 'model' | 'hdri';
+
+export interface OnlineAssetResult {
+  provider: OnlineAssetProvider;
+  kind: OnlineAssetKind;
+  id: string;
+  name: string;
+  thumbnailUrl?: string;
+  author?: string;
+  license?: string;
+  animated?: boolean;
+  triangleCount?: number;
+  sourcePageUrl?: string;
+  /** Proxied, CORS-safe URL ready for useGLTF / RGBELoader. Absent when a resolve step is needed (Sketchfab). */
+  downloadUrl?: string;
+}
+
+export interface OnlineAssetSearchResponse {
+  provider: OnlineAssetProvider;
+  kind: OnlineAssetKind;
+  query: string;
+  total: number;
+  results: OnlineAssetResult[];
+}
+
 export interface SettingsConfig {
   geminiModel: 'gemini-3.8-flash' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';
+  polyPizzaApiKey: string;
+  sketchfabApiToken: string;
   customSystemPrompt: string;
   customAssetManifestUrl: string;
   enableThreeOfficialCdn: boolean;
