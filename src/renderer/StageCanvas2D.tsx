@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore } from '../state/useStudioStore';
+import { playSceneSfx } from '../audio/audioBus';
+import { sampleKeyframes } from '../animation/easing';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorNode, CameraMode, EngineType, LogicNode, Node2D, SceneSpec, Vector3Tuple, VFXNode, VFXType } from '../types/scene.schema';
 
@@ -733,6 +735,7 @@ function drawStage2D(
         if ((keys.has('w') || keys.has('arrowup') || keys.has(' ')) && b.onGround) {
           b.vy = -520;
           b.onGround = false;
+          playSceneSfx(useStudioStore.getState().sceneSpec, 'jump');
         }
         b.vy += gravityPx * dt;
       }
@@ -939,12 +942,12 @@ function displayedPosition2D(node: Node2D, isPlaying: boolean, time: number, mod
     x = body.x; y = body.y;
   }
   if (isPlaying && node.keyframeTrack?.length) {
-    const keys = [...node.keyframeTrack].sort((a, b) => a.time - b.time);
-    const end = keys.findIndex((k) => k.time >= time);
-    const a = keys[end <= 0 ? (end === -1 ? keys.length - 1 : 0) : end - 1];
-    const b = keys[end === -1 ? keys.length - 1 : end];
-    const t = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
-    x = a.x + (b.x - a.x) * t; y = a.y + (b.y - a.y) * t;
+    // Phase 4: per-keyframe easing (GSAP-style curves from src/animation/easing.ts).
+    const seg = sampleKeyframes(node.keyframeTrack, time);
+    if (seg) {
+      x = seg.from.x + (seg.to.x - seg.from.x) * seg.progress;
+      y = seg.from.y + (seg.to.y - seg.from.y) * seg.progress;
+    }
   } else if (isPlaying && (node.physics2D === 'collectible' || node.shapeKind === 'star')) {
     y += Math.sin(time * 3.5 + node.x * 0.02) * 8;
   }

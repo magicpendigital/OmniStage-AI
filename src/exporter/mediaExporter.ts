@@ -1,4 +1,7 @@
 import { SceneSpec } from '../types/scene.schema';
+import { createOmniSfxPlayer } from '../audio/sfxRuntime';
+import { DEFAULT_AUDIO_CUES } from '../audio/audioBus';
+import { EASING_RUNTIME_SOURCE } from '../animation/easing';
 
 /**
  * Utility: Trigger browser file download via temporary anchor element.
@@ -723,62 +726,40 @@ export function generateStandaloneHTMLContent(
     let isGameOver = false;
     let isSoundMuted = false;
 
-    // --- PROCEDURAL 8-BIT AUDIO SYNTH (Web Audio API) ---
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    let audioCtx = null;
-
+    // --- PHASE 4: SHARED PROCEDURAL SFX RUNTIME (same synth as the studio, no audio files) ---
+    var __name = function (f) { return f; };
+    const OMNI_SFX = (${createOmniSfxPlayer.toString()})();
+    const DEFAULT_AUDIO_CUES = ${JSON.stringify(DEFAULT_AUDIO_CUES)};
+${EASING_RUNTIME_SOURCE}
     function initAudio() {
-      if (!audioCtx && AudioCtx) {
-        audioCtx = new AudioCtx();
-      }
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume();
-      }
+      OMNI_SFX.unlock();
     }
 
     function playSynthSound(type) {
       if (isSoundMuted || !${proceduralAudio ? 'true' : 'false'}) return;
-      initAudio();
-      if (!audioCtx) return;
-      try {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        const t = audioCtx.currentTime;
+      const audio = SCENE_SPEC.audio;
+      if (audio && audio.enabled === false) return;
+      const event = type === 'coin' ? 'collect' : type;
+      const cues = Object.assign({}, DEFAULT_AUDIO_CUES, (audio && audio.cues) || {});
+      const preset = cues[event];
+      if (!preset || preset === 'none') return;
+      OMNI_SFX.play(preset, audio && typeof audio.masterVolume === 'number' ? audio.masterVolume : 0.6);
+    }
 
-        if (type === 'coin') {
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(587.33, t); // D5
-          osc.frequency.setValueAtTime(880.00, t + 0.08); // A5
-          gain.gain.setValueAtTime(0.25, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-          osc.start(t);
-          osc.stop(t + 0.3);
-        } else if (type === 'jump') {
-          osc.type = 'triangle';
-          osc.frequency.setValueAtTime(160, t);
-          osc.frequency.exponentialRampToValueAtTime(420, t + 0.16);
-          gain.gain.setValueAtTime(0.3, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-          osc.start(t);
-          osc.stop(t + 0.22);
-        } else if (type === 'win') {
-          const notes = [523.25, 659.25, 783.99, 1046.50];
-          notes.forEach((freq, idx) => {
-            const o = audioCtx.createOscillator();
-            const g = audioCtx.createGain();
-            o.connect(g);
-            g.connect(audioCtx.destination);
-            o.type = 'square';
-            o.frequency.setValueAtTime(freq, t + idx * 0.1);
-            g.gain.setValueAtTime(0.18, t + idx * 0.1);
-            g.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.1 + 0.22);
-            o.start(t + idx * 0.1);
-            o.stop(t + idx * 0.1 + 0.24);
-          });
-        }
-      } catch (e) {}
+    function keyframedPosition2D(n, t) {
+      const track = n.keyframeTrack;
+      if (!track || !track.length) return null;
+      const keys = track.slice().sort((a, b) => a.time - b.time);
+      const duration = Math.max(keys[keys.length - 1].time, SCENE_SPEC.durationSeconds || 8);
+      const time = SCENE_SPEC.mode === 'media' ? t % duration : Math.min(t, duration);
+      if (time <= keys[0].time) return { x: keys[0].x, y: keys[0].y };
+      const last = keys[keys.length - 1];
+      if (time >= last.time) return { x: last.x, y: last.y };
+      let i = 1;
+      while (i < keys.length && keys[i].time <= time) i++;
+      const a = keys[i - 1], b = keys[i];
+      const p = OMNI_EASE(a.ease, (time - a.time) / Math.max(0.0001, b.time - a.time));
+      return { x: a.x + (b.x - a.x) * p, y: a.y + (b.y - a.y) * p };
     }
 
     // Audio & Fullscreen Buttons
@@ -1158,7 +1139,8 @@ export function generateStandaloneHTMLContent(
 
         nodes2D.slice().sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).forEach((n) => {
           ctx2d.save();
-          ctx2d.translate(n.x, n.y);
+          const kp = n.physics2D && n.physics2D.indexOf('player-') === 0 ? null : keyframedPosition2D(n, t);
+          ctx2d.translate(kp ? kp.x : n.x, kp ? kp.y : n.y);
           ctx2d.fillStyle = n.fill || '#06B6D4';
           if (n.type === 'text-kinetic') {
             ctx2d.font = '800 ' + (n.fontSize || 36) + 'px system-ui, sans-serif';

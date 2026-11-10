@@ -32,6 +32,7 @@ import {
   WeatherType,
   WorldSpec,
 } from '../types/scene.schema';
+import { autoFixSceneSpec } from '../verification/sceneVerifier';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -900,6 +901,8 @@ export async function generateStoryboardWithAgent(
       }
     }
     if (!spec) spec = buildLocalSceneForBeat(prompt, plan, i);
+    // Phase 4 verification loop: every generated level/shot must pass the deterministic verifier.
+    spec = autoFixSceneSpec(spec).spec;
 
     spec.id = uid(`scene-${i + 1}`);
     spec.title = beat.title;

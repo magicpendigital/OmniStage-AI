@@ -15,6 +15,7 @@ import {
   AspectRatioPreset,
   CameraMode,
   ChatMessage,
+  DirectorSkill,
   EngineType,
   ExecutionLogEntry,
   LightingPresetId,
@@ -23,6 +24,7 @@ import {
   LogicNode,
   Node2D,
   ScatterObjectType,
+  SceneAudioSpec,
   SceneSpec,
   SemanticAssetEntry,
   SettingsConfig,
@@ -37,6 +39,13 @@ import {
   WorkspaceViewMode,
   WorldSpec,
 } from '../types/scene.schema';
+import {
+  distillLearnedSkill,
+  loadLearnedSkills,
+  MAX_LEARNED_SKILLS,
+  persistLearnedSkills,
+} from '../agent/directorSkills';
+import { resolveAudioSpec } from '../audio/audioBus';
 
 export interface FloatingScoreFeedback {
   id: string;
@@ -413,6 +422,9 @@ interface StudioState {
   // Persistent Studio Settings
   settings: SettingsConfig;
 
+  // Phase 4: Learned Director Skills (persisted in localStorage)
+  learnedSkills: DirectorSkill[];
+
   // Timeline Sequencer & Playback State
   isPlaying: boolean;
   isLooping: boolean;
@@ -549,6 +561,12 @@ interface StudioState {
   applyVisionFixes: (report: VisionQAReport) => void;
   updateSettings: (patch: Partial<SettingsConfig>) => void;
 
+  // Phase 4: Director Skills & Procedural Audio
+  saveLearnedSkill: (prompt: string, spec: SceneSpec, title?: string) => DirectorSkill;
+  removeLearnedSkill: (skillId: string) => void;
+  markSkillsUsed: (skillIds: string[]) => void;
+  updateSceneAudio: (patch: Partial<SceneAudioSpec>) => void;
+
   // UI Modals
   setPublishModalOpen: (open: boolean) => void;
   setSettingsModalOpen: (open: boolean) => void;
@@ -659,6 +677,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   isBottomDockCollapsed: false,
 
   settings: loadInitialSettings(),
+  learnedSkills: loadLearnedSkills(),
 
   isPlaying: true,
   isLooping: true,
@@ -2263,6 +2282,50 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         sceneSpec: patchedSpec,
         latestVisionReport: appliedReport,
         chatMessages: [...state.chatMessages, confirmationMsg],
+      };
+    }),
+
+  saveLearnedSkill: (prompt, spec, title) => {
+    const skill = distillLearnedSkill(prompt, spec, title);
+    const next = [skill, ...get().learnedSkills].slice(0, MAX_LEARNED_SKILLS);
+    persistLearnedSkills(next);
+    set({ learnedSkills: next });
+    return skill;
+  },
+
+  removeLearnedSkill: (skillId) => {
+    const next = get().learnedSkills.filter((s) => s.id !== skillId);
+    persistLearnedSkills(next);
+    set({ learnedSkills: next });
+  },
+
+  markSkillsUsed: (skillIds) => {
+    if (!skillIds.length) return;
+    let changed = false;
+    const next = get().learnedSkills.map((s) => {
+      if (!skillIds.includes(s.id)) return s;
+      changed = true;
+      return { ...s, uses: (s.uses || 0) + 1 };
+    });
+    if (!changed) return;
+    persistLearnedSkills(next);
+    set({ learnedSkills: next });
+  },
+
+  updateSceneAudio: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const current = resolveAudioSpec(nextSpec);
+      nextSpec.audio = {
+        ...current,
+        ...patch,
+        cues: { ...current.cues, ...(patch.cues || {}) },
+      };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
       };
     }),
 

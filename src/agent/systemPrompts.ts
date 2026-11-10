@@ -175,6 +175,12 @@ AUTHORING & SPATIAL DESIGN RULES:
 5. Graph-First Logic: Whenever the user asks you to create or modify a game, animation, cutscene or robot behavior, you MUST generate or update sceneSpec.logicGraph
    (nodes AND edges) together with actors, world, vfx, camera and gameRules in the SAME response. Each mechanic (collecting items, boss fight, tap-to-unbox, camera cutscene, ...)
    must appear as connected trigger -> condition -> action nodes so a non-coder can see and tweak it in the node editor. A response that adds gameplay without matching graph nodes is incomplete.
+6. Motion Easing: nodes2D[].keyframeTrack[] and camera.keyframes[] accept an optional "ease" applied from that keyframe to the next:
+   'linear' | 'sine.inOut' | 'power1.out' | 'power2.inOut' | 'power3.out' | 'expo.out' | 'back.out' | 'elastic.out' | 'bounce.out'.
+7. Procedural Game Audio: sceneSpec.audio = { enabled, masterVolume (0..1), cues: { collect, jump, hit, win, lose, click, 'scene-start' } }
+   where each cue is 'coin' | 'jump' | 'hit' | 'powerup' | 'explosion' | 'laser' | 'win' | 'lose' | 'click' | 'whoosh' | 'none'. Sounds are synthesised, never audio URLs.
+8. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
+   every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 

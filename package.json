@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:renderer": "tsx --test tests/animationCrossFade.test.ts"
+    "test:renderer": "tsx --test tests/animationCrossFade.test.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "verify": "npm run lint && npm test"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",

@@ -4,6 +4,7 @@ import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useStudioStore } from '../state/useStudioStore';
+import { easedSplineProgress } from '../animation/easing';
 import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 import { WorldRenderer } from './WorldRenderer';
@@ -227,8 +228,10 @@ export const SceneDirector: React.FC = () => {
           controlsRef.current.update();
         }
       } else if (camMode === 'cinematic-flythrough' && keyframeCurves) {
-        keyframeCurves.posCurve.getPointAt(progress, _camPosVec);
-        keyframeCurves.targetCurve.getPointAt(progress, _targetVec);
+        // Phase 4: honour keyframe times + per-keyframe easing (getPoint maps u evenly across control points).
+        const u = easedSplineProgress(sceneSpec.camera.keyframes, currentTime);
+        keyframeCurves.posCurve.getPoint(u, _camPosVec);
+        keyframeCurves.targetCurve.getPoint(u, _targetVec);
         camera.position.lerp(_camPosVec, 0.1);
         if (controlsRef.current) {
           controlsRef.current.target.lerp(_targetVec, 0.1);

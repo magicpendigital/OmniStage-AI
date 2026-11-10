@@ -10,8 +10,10 @@ import {
   ShieldCheck,
   Sliders,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
+import { BUILTIN_DIRECTOR_SKILLS } from '../agent/directorSkills';
 import { DEFAULT_SETTINGS, useStudioStore } from '../state/useStudioStore';
 import { EngineType, SettingsConfig } from '../types/scene.schema';
 
@@ -22,6 +24,8 @@ export const SettingsModal: React.FC = () => {
   const setOpen = useStudioStore((s) => s.setSettingsModalOpen);
   const settings = useStudioStore((s) => s.settings);
   const updateSettings = useStudioStore((s) => s.updateSettings);
+  const learnedSkills = useStudioStore((s) => s.learnedSkills);
+  const removeLearnedSkill = useStudioStore((s) => s.removeLearnedSkill);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
   const [savedNotice, setSavedNotice] = useState(false);
@@ -146,6 +150,54 @@ export const SettingsModal: React.FC = () => {
                 <p className="text-[11px] text-slate-400">
                   Appended to the AI Director system instructions whenever you generate or mutate a 3D or 2D scene.
                 </p>
+              </div>
+
+              {/* Phase 4: Director Skills */}
+              <div className="space-y-2">
+                <label className="block font-semibold text-slate-200">Director Skills</label>
+                <p className="text-[11px] text-slate-400">
+                  Up to 3 skills matching your prompt are injected automatically. Use
+                  <span className="font-mono text-violet-300"> Save as skill </span>
+                  in the chat to teach the director a reusable recipe.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {BUILTIN_DIRECTOR_SKILLS.map((skill) => (
+                    <span
+                      key={skill.id}
+                      title={skill.description}
+                      className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-700 text-slate-300"
+                    >
+                      {skill.title}
+                    </span>
+                  ))}
+                </div>
+                {learnedSkills.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 italic">No learned skills yet.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {learnedSkills.map((skill) => (
+                      <div
+                        key={skill.id}
+                        className="flex items-start gap-2 p-2 rounded-lg bg-slate-900 border border-violet-500/30"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] font-semibold text-violet-200 truncate">{skill.title}</div>
+                          <div className="text-[10px] font-mono text-slate-400 truncate">
+                            {skill.engine.toUpperCase()} · {skill.mode} · used {skill.uses || 0}× · {skill.triggers.join(', ')}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeLearnedSkill(skill.id)}
+                          title="Forget this skill"
+                          className="p-1 rounded text-slate-400 hover:text-rose-300 hover:bg-rose-950/40"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

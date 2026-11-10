@@ -230,6 +230,79 @@ export type Physics2DRole =
   | 'collectible'
   | 'none';
 
+// ============================================================================
+// PHASE 4: MOTION EASING, PROCEDURAL GAME AUDIO, DIRECTOR SKILLS & VERIFICATION
+// ============================================================================
+
+/** Timeline easing curves (GSAP-style names, implemented in src/animation/easing.ts). */
+export type EaseId =
+  | 'linear'
+  | 'sine.inOut'
+  | 'power1.out'
+  | 'power2.inOut'
+  | 'power3.out'
+  | 'expo.out'
+  | 'back.out'
+  | 'elastic.out'
+  | 'bounce.out';
+
+/** Procedural (sfxr-style) sound presets synthesised in WebAudio — no audio files, works offline in playable ads. */
+export type SfxPresetId =
+  | 'coin'
+  | 'jump'
+  | 'hit'
+  | 'powerup'
+  | 'explosion'
+  | 'laser'
+  | 'win'
+  | 'lose'
+  | 'click'
+  | 'whoosh';
+
+/** Gameplay / media events that can trigger a sound cue. */
+export type GameAudioEvent = 'collect' | 'jump' | 'hit' | 'win' | 'lose' | 'click' | 'scene-start';
+
+export interface SceneAudioSpec {
+  enabled: boolean;
+  /** 0..1 */
+  masterVolume: number;
+  cues: Partial<Record<GameAudioEvent, SfxPresetId | 'none'>>;
+}
+
+/** Reusable director guidance injected into the AI prompt (built-in or learned from a user-approved result). */
+export interface DirectorSkill {
+  id: string;
+  title: string;
+  description: string;
+  /** Lower-case keywords (VI/EN) matched against the user prompt. */
+  triggers: string[];
+  engine: EngineType | 'any';
+  mode: StudioMode | 'any';
+  /** Prompt rules appended to the system prompt when the skill is selected. */
+  guidance: string;
+  source: 'builtin' | 'learned';
+  createdAt?: string;
+  uses?: number;
+}
+
+export type VerificationSeverity = 'error' | 'warning';
+
+export interface VerificationIssue {
+  code: string;
+  severity: VerificationSeverity;
+  message: string;
+  targetId?: string;
+  /** true when autoFixSceneSpec() can repair it deterministically. */
+  fixable: boolean;
+}
+
+export interface VerificationReport {
+  ok: boolean;
+  errors: number;
+  warnings: number;
+  issues: VerificationIssue[];
+}
+
 export interface Keyframe2D {
   time: number;
   x: number;
@@ -238,6 +311,8 @@ export interface Keyframe2D {
   scaleX?: number;
   scaleY?: number;
   opacity?: number;
+  /** Easing applied from this keyframe to the next one (default 'linear'). */
+  ease?: EaseId;
 }
 
 export interface Node2D {
@@ -279,6 +354,8 @@ export interface CameraKeyframe {
   target: Vector3Tuple;
   fov?: number;
   label?: string;
+  /** Easing applied from this keyframe to the next one (default 'linear'). */
+  ease?: EaseId;
 }
 
 export interface CameraRig {
@@ -430,6 +507,8 @@ export interface SceneSpec {
   timelineTracks: TimelineTrack[];
   logicGraph?: LogicGraphSpec;
   sequence?: SceneSequenceMeta;
+  /** Phase 4: procedural sound cues for gameplay events (also embedded in standalone playable exports). */
+  audio?: SceneAudioSpec;
 }
 
 export interface BoundingBoxSpec {
@@ -561,4 +640,10 @@ export interface ChatMessage {
   previousSpecSnapshot?: SceneSpec;
   updatedSpecSnapshot?: SceneSpec;
   visionReport?: VisionQAReport;
+  /** Phase 4: prompt that produced this assistant message (used by "Save as skill"). */
+  sourcePrompt?: string;
+  /** Phase 4: Director Skills injected into the prompt for this turn. */
+  skillsUsed?: string[];
+  /** Phase 4: deterministic verification result of updatedSpecSnapshot. */
+  verification?: VerificationReport;
 }

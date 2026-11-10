@@ -1,6 +1,6 @@
 # OmniStage AI — Master Architecture & Roadmap (`plan.md`)
 
-## 1. Vision & Phase 3 Dual-Engine Architecture
+## 1. Vision & Dual-Engine Architecture (Phase 3 + Phase 4 toolkit)
 **OmniStage AI** is a from-scratch **3D WebGL & 2D Vector/Sprite Game, Animation & Playable Media Authoring Engine**. Creators can build multi-scene 3D games, 2D platformers, kinetic motion graphics, and HTML5 Playable Ads from a clean blank canvas using direct viewport manipulation and natural language AI direction.
 
 ### Architectural Pillars
@@ -40,7 +40,30 @@
 - [x] Drag-and-drop local file importer (`.glb`, `.gltf`, `.svg`, `.png`, `.json`) & `SettingsModal.tsx` for custom AI providers and viewport settings.
 - [x] Unified 3D/2D snapshot, WebM video, and multi-scene JSON/HTML5 playable export in `mediaExporter.ts`.
 
-### Phase 4: Downstream Multi-Agent Extensions (Next Handoff)
-- [ ] **Claude Code**: Multi-scene level progression triggers & Rapier3D rigid-body physics solver.
-- [ ] **Antigravity**: Automated MRAID 3.0 / TikTok Pangle / Meta Playable `< 2MB` ZIP asset compressor.
-- [ ] **Codex**: Custom GLSL terrain splatmap shaders & skeletal GLTF animation retargeting.
+### Phase 3.5: Visual Logic Graph & Execution Console (Completed — labelled "Phase 5" in code comments)
+- [x] Bidirectional `LogicGraphSpec` (trigger → condition → action), runtime interpreter for 2D/3D, Execution Console with deterministic + AI repair.
+- [x] Multi-scene level progression (`sequence.nextSceneId`, `advanceToNextScene`, "Next Level" end-card) and storyboard pipeline.
+
+### Phase 4: Agentic Game & Media Toolkit (Completed 2026-11-10)
+Source analysis and adopt-vs-build decisions: [`docs/research/agent-ecosystem-review.md`](docs/research/agent-ecosystem-review.md).
+- [x] **Verification loop in the product** — `src/verification/sceneVerifier.ts`: pure `verifySceneSpec` (ids, time windows, CTA, audio cues, easing,
+  `nextSceneId`, 2D platformer reachability from the real jump physics, reachable score goals, 3D arena bounds, camera follow target) +
+  `autoFixSceneSpec` + one AI repair round fed with the exact findings. Runs on every AI turn and every storyboard scene; chat shows a VERIFIED / N ERROR(S) badge.
+- [x] **Director Skills** — `src/agent/directorSkills.ts`: 5 built-in craft skills (cinematic shot grammar, platformer level design, playable-ad hook,
+  kinetic typography, game juice) selected per prompt (VI/EN) and injected into the system prompt; **learned skills** distilled from an approved result via
+  "Save as skill" (localStorage, ranked by use, managed in Settings → AI).
+- [x] **Procedural game audio** — `src/audio/sfxRuntime.ts` (sfxr-style WebAudio synth, 10 presets, zero files) + `audioBus.ts` (store-driven
+  collect / hit / win / lose / scene-start, 2D jump) + `SceneSpec.audio` + World-tab cue editor. Exported playable ads inline the same synth.
+- [x] **Motion easing** — `src/animation/easing.ts` (9 GSAP-style curves), `ease` on `Keyframe2D` and `CameraKeyframe`; 2D keyframes, 3D camera spline
+  (now honours keyframe times) and the exported 2D runtime use it.
+- [x] **Dev harness** — pointer-index `CLAUDE.md`, scoped `.claude/rules/*.md`, `scene-contract-reviewer` subagent, `npm run verify` (tsc + 28 unit tests).
+
+### Phase 5: Next Handoff (Backlog)
+- [ ] **OmniStage MCP server** (all agents): expose `get_scene`, `apply_patch`, `verify`, `export` so Claude Code / Codex can author scenes headlessly. Highest leverage for the MCA workflow.
+- [ ] **Claude Code**: Rapier3D rigid-body physics; verifier rules for new physics roles; headless `claude -p` review job in CI once CI exists.
+- [ ] **Antigravity**: playable size budget + real DEFLATE in the ZIP bundler (entries are stored uncompressed today);
+  the standalone HTML still loads Three.js r128 from cdnjs, so 3D exports are not fully offline yet — inline or vendor it under a size budget.
+- [ ] **Codex**: GLSL terrain splatmap + post-FX presets; skeletal animation retargeting; 2.5D billboard actors (2D characters in 3D worlds).
+- [ ] **Media**: frame-stepped deterministic video render (fixed timestep + WebCodecs) instead of real-time MediaRecorder; caption track; shot-list view for storyboards.
+- [ ] **2D**: spritesheet animation for `Node2D`; procedural 2D VFX preset library; timeline stagger helpers.
+- [ ] **Audio (optional, BYO key)**: ElevenLabs SFX/TTS adapter through the server proxy, embedded within the export size budget.

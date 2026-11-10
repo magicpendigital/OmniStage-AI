@@ -16,12 +16,17 @@ import {
   LogicNodePort,
   LogicNodeType,
   PhysicsRole,
+  DirectorSkill,
   SceneSpec,
+  VerificationReport,
   VisionQAIssue,
   VisionQAReport,
 } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildExecutionRepairPrompt } from './systemPrompts';
+import { inferSkillContext, mergeSystemPrompt, selectDirectorSkills } from './directorSkills';
+import { autoFixSceneSpec, describeIssuesForAgent } from '../verification/sceneVerifier';
+import { createDefaultAudioSpec } from '../audio/audioBus';
 
 export {
   detectStoryboardIntent,
@@ -34,7 +39,13 @@ export interface AgentMutationResult {
   assistantMessage: string;
   diffSummary: string[];
   updatedSceneSpec: SceneSpec;
+  /** Phase 4: Director Skill ids injected into this turn. */
+  skillsUsed?: string[];
+  /** Phase 4: verification report of updatedSceneSpec after the deterministic/AI repair loop. */
+  verification?: VerificationReport;
 }
+
+const AUDIO_PROMPT = /\b(sfx|sound|sounds|audio)\b|âm thanh|tiếng động|hiệu ứng âm/i;
 
 export function extractActorCoordinateSummaries(spec: SceneSpec): ActorCoordinateSummary[] {
   return spec.actors.map((a) => ({
@@ -61,6 +72,10 @@ export function applyLocalHeuristicMutation(
   currentSpec: SceneSpec
 ): AgentMutationResult {
   const result = applyLocalHeuristicMutationCore(prompt, currentSpec);
+  if (AUDIO_PROMPT.test(prompt) && !result.updatedSceneSpec.audio?.enabled) {
+    result.updatedSceneSpec.audio = createDefaultAudioSpec(true);
+    result.diffSummary = [...result.diffSummary, 'Enabled procedural SFX cues (collect=coin, jump, hit, win, lose)'];
+  }
   const { spec, notes } = finalizeLogicGraph(result.updatedSceneSpec);
   return {
     ...result,
@@ -1371,7 +1386,11 @@ export function finalizeLogicGraph(spec: SceneSpec): { spec: SceneSpec; notes: s
 // AI-assisted execution repair
 // ---------------------------------------------------------------------------
 
-async function fetchAgentMutation(prompt: string, currentSpec: SceneSpec): Promise<AgentMutationResult | null> {
+async function fetchAgentMutation(
+  prompt: string,
+  currentSpec: SceneSpec,
+  skills: DirectorSkill[] = []
+): Promise<AgentMutationResult | null> {
   const settings = useStudioStore.getState().settings;
   try {
     const response = await fetch('/api/agent/mutate', {
@@ -1381,7 +1400,7 @@ async function fetchAgentMutation(prompt: string, currentSpec: SceneSpec): Promi
         prompt,
         sceneSpec: currentSpec,
         model: settings.geminiModel,
-        customSystemPrompt: settings.customSystemPrompt,
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, skills),
       }),
     });
     if (!response.ok) return null;
@@ -1513,12 +1532,50 @@ export async function fixExecutionIssue(
   return cloneSceneSpec(scene);
 }
 
+/** Max AI repair rounds after deterministic auto-fix (verification loop). */
+const MAX_AI_VERIFY_ROUNDS = 1;
+
+function verificationNotes(fixes: string[], report: VerificationReport): string[] {
+  const notes: string[] = [];
+  if (fixes.length) notes.push(`Verifier auto-fixed ${fixes.length} issue(s): ${fixes.slice(0, 2).join('; ')}${fixes.length > 2 ? '; ...' : ''}`);
+  if (report.errors) notes.push(`Verifier: ${report.errors} error(s) still need attention (${report.issues.find((i) => i.severity === 'error')?.code})`);
+  else notes.push(`Verifier passed${report.warnings ? ` with ${report.warnings} warning(s)` : ''}`);
+  return notes;
+}
+
+/**
+ * AI director turn with Phase 4 skills + verification loop:
+ * 1. Select Director Skills for the prompt and inject them into the system prompt.
+ * 2. Generate (Gemini, or the offline heuristic engine) and finalize the logic graph.
+ * 3. Verify the SceneSpec deterministically, auto-fix what is mechanical, and when errors remain ask the
+ *    model once more with the exact verifier findings (closed loop instead of eyeballing the result).
+ */
 export async function mutateSceneWithAgent(
   prompt: string,
   currentSpec: SceneSpec
 ): Promise<AgentMutationResult> {
-  const result = await fetchAgentMutation(prompt, currentSpec);
-  if (!result) return applyLocalHeuristicMutation(prompt, currentSpec);
+  const store = useStudioStore.getState();
+  const skills = selectDirectorSkills(
+    prompt,
+    inferSkillContext(prompt, { engineType: currentSpec.engineType, mode: currentSpec.mode }),
+    store.learnedSkills
+  );
+  const skillsUsed = skills.map((s) => s.id);
+  store.markSkillsUsed(skillsUsed.filter((id) => id.startsWith('learned-')));
+  const verifyOpts = { scenes: store.scenes };
+
+  const result = await fetchAgentMutation(prompt, currentSpec, skills);
+  if (!result) {
+    const local = applyLocalHeuristicMutation(prompt, currentSpec);
+    const checked = autoFixSceneSpec(local.updatedSceneSpec, verifyOpts);
+    return {
+      ...local,
+      updatedSceneSpec: checked.spec,
+      diffSummary: [...local.diffSummary, ...verificationNotes(checked.fixes, checked.report)],
+      skillsUsed,
+      verification: checked.report,
+    };
+  }
 
   // Keep the user's existing graph if the model dropped it, then validate and wire any mechanic left without nodes.
   const incoming = cloneSceneSpec(result.updatedSceneSpec);
@@ -1526,10 +1583,27 @@ export async function mutateSceneWithAgent(
     incoming.logicGraph = JSON.parse(JSON.stringify(currentSpec.logicGraph));
   }
   const { spec, notes } = finalizeLogicGraph(incoming);
+  let checked = autoFixSceneSpec(spec, verifyOpts);
+  const fixes = [...checked.fixes];
+
+  for (let round = 0; round < MAX_AI_VERIFY_ROUNDS && !checked.report.ok; round++) {
+    const repairPrompt = `VERIFICATION LOOP — the SceneSpec you produced for "${prompt}" fails OmniStage's deterministic verifier.
+Fix ONLY these problems, keep everything else identical:
+${describeIssuesForAgent(checked.report)}`;
+    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills);
+    if (!repaired) break;
+    const candidate = autoFixSceneSpec(finalizeLogicGraph(cloneSceneSpec(repaired.updatedSceneSpec)).spec, verifyOpts);
+    if (candidate.report.errors >= checked.report.errors) break; // no progress: keep the better spec
+    fixes.push(`AI repair round ${round + 1} resolved ${checked.report.errors - candidate.report.errors} error(s)`, ...candidate.fixes);
+    checked = candidate;
+  }
+
   return {
     ...result,
-    updatedSceneSpec: spec,
-    diffSummary: notes.length ? [...result.diffSummary, ...notes] : result.diffSummary,
+    updatedSceneSpec: checked.spec,
+    diffSummary: [...result.diffSummary, ...notes, ...verificationNotes(fixes, checked.report)],
+    skillsUsed,
+    verification: checked.report,
   };
 }
 

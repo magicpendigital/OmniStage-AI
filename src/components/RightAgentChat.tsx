@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
+  BookmarkPlus,
   CheckCircle2,
   Code2,
+  ShieldAlert,
+  ShieldCheck,
   Eye,
   MessageSquareCode,
   Send,
@@ -19,6 +22,12 @@ import {
   runVisionQAInspection,
 } from '../agent/studioAgent';
 import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
+import {
+  BUILTIN_DIRECTOR_SKILLS,
+  inferSkillContext,
+  mergeSystemPrompt,
+  selectDirectorSkills,
+} from '../agent/directorSkills';
 
 type RightTab = 'chat' | 'inspector' | 'json';
 
@@ -29,6 +38,7 @@ const QUICK_PROMPTS = [
   'Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)',
   'Làm một bộ phim 3D gồm 3 cảnh về chú robot phiêu lưu trong rừng',
   'Tạo game 2D vượt chướng ngại vật 3 màn',
+  'Make it a playable ad with a strong hook, CTA and juicy sound effects',
 ];
 
 export const RightAgentChat: React.FC = () => {
@@ -60,6 +70,18 @@ export const RightAgentChat: React.FC = () => {
   const removeActor = useStudioStore((s) => s.removeActor);
   const clearPendingAgentFixPrompt = useStudioStore((s) => s.clearPendingAgentFixPrompt);
   const appendLog = useStudioStore((s) => s.appendLog);
+  const learnedSkills = useStudioStore((s) => s.learnedSkills);
+  const saveLearnedSkill = useStudioStore((s) => s.saveLearnedSkill);
+  const [savedSkillMsgIds, setSavedSkillMsgIds] = useState<Record<string, boolean>>({});
+
+  const skillTitle = (id: string) =>
+    [...BUILTIN_DIRECTOR_SKILLS, ...learnedSkills].find((s) => s.id === id)?.title || id;
+
+  const handleSaveSkill = (msgId: string, prompt: string, spec: any) => {
+    const skill = saveLearnedSkill(prompt, spec);
+    setSavedSkillMsgIds((m) => ({ ...m, [msgId]: true }));
+    appendLog({ level: 'info', message: `Saved learned Director Skill "${skill.title}" (triggers: ${skill.triggers.join(', ')}).` });
+  };
 
   const selectedActor =
     sceneSpec.actors.find((a) => a.id === selectedActorId) || sceneSpec.actors[0] || null;
@@ -125,6 +147,9 @@ export const RightAgentChat: React.FC = () => {
         diffSummary: result.diffSummary,
         previousSpecSnapshot: prevSnapshot,
         updatedSpecSnapshot: nextSpec,
+        sourcePrompt: query.startsWith('Auto-Fix Execution Issue') ? undefined : query,
+        skillsUsed: result.skillsUsed,
+        verification: result.verification,
       });
     } finally {
       setAgentThinking(false);
@@ -158,7 +183,16 @@ export const RightAgentChat: React.FC = () => {
     };
 
     try {
-      const result = await generateStoryboardWithAgent(query, intent, settings, {
+      const storyboardSkills = selectDirectorSkills(
+        query,
+        inferSkillContext(query, { engineType: intent.engineType, mode: sceneSpec.mode }),
+        learnedSkills
+      );
+      const skilledSettings = {
+        ...settings,
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, storyboardSkills),
+      };
+      const result = await generateStoryboardWithAgent(query, intent, skilledSettings, {
         onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
         onProgress: (p) =>
           patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
@@ -297,6 +331,47 @@ export const RightAgentChat: React.FC = () => {
                         <span>{line}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Phase 4: Director Skills + Verification Loop badges */}
+                {msg.role === 'assistant' && (msg.skillsUsed?.length || msg.verification) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {msg.verification && (
+                      <span
+                        title={msg.verification.issues.map((i) => `${i.code}: ${i.message}`).join(' | ') || 'No issues'}
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                          msg.verification.ok
+                            ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                            : 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                        }`}
+                      >
+                        {msg.verification.ok ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                        {msg.verification.ok
+                          ? `VERIFIED${msg.verification.warnings ? ` · ${msg.verification.warnings} warn` : ''}`
+                          : `${msg.verification.errors} ERROR(S)`}
+                      </span>
+                    )}
+                    {msg.skillsUsed?.map((id) => (
+                      <span
+                        key={id}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-950/50 border border-violet-500/40 text-violet-300"
+                      >
+                        {skillTitle(id)}
+                      </span>
+                    ))}
+                    {msg.sourcePrompt && msg.updatedSpecSnapshot && (
+                      <button
+                        type="button"
+                        disabled={savedSkillMsgIds[msg.id]}
+                        onClick={() => handleSaveSkill(msg.id, msg.sourcePrompt!, msg.updatedSpecSnapshot)}
+                        title="Save this result as a learned Director Skill reused for similar prompts"
+                        className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border border-slate-700 text-slate-300 hover:border-violet-400 hover:text-violet-200 disabled:opacity-60 disabled:hover:border-slate-700"
+                      >
+                        <BookmarkPlus className="w-3 h-3" />
+                        {savedSkillMsgIds[msg.id] ? 'Skill saved' : 'Save as skill'}
+                      </button>
+                    )}
                   </div>
                 )}
 

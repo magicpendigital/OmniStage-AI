@@ -18,7 +18,9 @@ import {
   Trees,
   Unlock,
   Upload,
+  Volume2,
 } from 'lucide-react';
+import { AudioCuePanel } from './AudioCuePanel';
 import {
   ASSET_REGISTRY,
   DEFAULT_WORLD_SPEC,
@@ -461,6 +463,8 @@ export const LeftAssetDrawer: React.FC = () => {
            ========================================================= */}
         {activeTab === 'world' && (
           <div className="space-y-4 text-xs">
+            {/* Phase 4: Procedural Game Audio (both engines, embedded in playable exports) */}
+            <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
             {/* Procedural Terrain Selector */}
             <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
               <div className="flex items-center gap-1.5 font-semibold text-slate-100">
