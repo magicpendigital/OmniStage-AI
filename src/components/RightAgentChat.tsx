@@ -22,12 +22,12 @@ import {
   runVisionQAInspection,
 } from '../agent/studioAgent';
 import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
-import {
-  BUILTIN_DIRECTOR_SKILLS,
-  inferSkillContext,
-  mergeSystemPrompt,
-  selectDirectorSkills,
-} from '../agent/directorSkills';
+import { BUILTIN_DIRECTOR_SKILLS, mergeSystemPrompt } from '../agent/directorSkills';
+import { buildDirectorContext } from '../agent/studioAgent';
+import { parseExplicitMemory, suggestMemory } from '../agent/memory';
+import { recommendExtensions } from '../extensions/registry';
+import { EXTENSION_CATALOG } from '../extensions/catalog';
+import { Brain, Puzzle } from 'lucide-react';
 
 type RightTab = 'chat' | 'inspector' | 'json';
 
@@ -72,6 +72,29 @@ export const RightAgentChat: React.FC = () => {
   const appendLog = useStudioStore((s) => s.appendLog);
   const learnedSkills = useStudioStore((s) => s.learnedSkills);
   const saveLearnedSkill = useStudioStore((s) => s.saveLearnedSkill);
+  const workspaceAvailable = useStudioStore((s) => s.workspaceAvailable);
+  const addMemoryEntry = useStudioStore((s) => s.addMemoryEntry);
+  const memories = useStudioStore((s) => s.memories);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProject = useStudioStore((s) => s.activeProject);
+  const openExtensionReview = useStudioStore((s) => s.openExtensionReview);
+  const [savedMemoryMsgIds, setSavedMemoryMsgIds] = useState<Record<string, boolean>>({});
+
+  const nowLabel = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  /** Phase 6: memory + extension suggestions attached to the assistant reply for this prompt. */
+  const suggestionsFor = (query: string, engineType: string, mode: string) => {
+    const memorySuggestion = workspaceAvailable ? suggestMemory(query) : null;
+    const known = memorySuggestion && memories.some((m) => m.text.toLowerCase() === memorySuggestion.text.toLowerCase());
+    const extensionSuggestions = workspaceAvailable
+      ? recommendExtensions(query, { engineType, mode, projectTags: activeProject?.tags }, EXTENSION_CATALOG, installedExtensions.map((e) => e.manifest.id)).map((r) => ({
+          id: r.manifest.id,
+          name: r.manifest.name,
+          reason: r.reason,
+        }))
+      : [];
+    return { memorySuggestion: known ? undefined : memorySuggestion || undefined, extensionSuggestions: extensionSuggestions.length ? extensionSuggestions : undefined };
+  };
   const [savedSkillMsgIds, setSavedSkillMsgIds] = useState<Record<string, boolean>>({});
 
   const skillTitle = (id: string) =>
@@ -101,6 +124,21 @@ export const RightAgentChat: React.FC = () => {
 
     // Multi-step storyboard: "phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...
     // Auto-Fix repair prompts must never be mistaken for a storyboard request.
+    // Phase 6: "nhớ rằng …" / "remember …" goes straight to memory (no AI call).
+    const explicitMemory = parseExplicitMemory(query);
+    if (explicitMemory) {
+      const entry = workspaceAvailable ? await addMemoryEntry(explicitMemory, 'preference', 'explicit', 'global') : null;
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: entry
+          ? `Đã ghi nhớ: "${entry.text}". I'll use this in future requests (Settings → Memory to edit or remove).`
+          : 'Memory needs the local workspace (run OmniStage on this computer).',
+        timestamp: nowLabel(),
+      });
+      return;
+    }
+
     const storyboardIntent = query.startsWith('Auto-Fix Execution Issue')
       ? null
       : detectStoryboardIntent(query);
@@ -150,6 +188,7 @@ export const RightAgentChat: React.FC = () => {
         sourcePrompt: query.startsWith('Auto-Fix Execution Issue') ? undefined : query,
         skillsUsed: result.skillsUsed,
         verification: result.verification,
+        ...(query.startsWith('Auto-Fix Execution Issue') ? {} : suggestionsFor(query, nextSpec.engineType, nextSpec.mode)),
       });
     } finally {
       setAgentThinking(false);
@@ -183,14 +222,10 @@ export const RightAgentChat: React.FC = () => {
     };
 
     try {
-      const storyboardSkills = selectDirectorSkills(
-        query,
-        inferSkillContext(query, { engineType: intent.engineType, mode: sceneSpec.mode }),
-        learnedSkills
-      );
+      const director = buildDirectorContext(query, { engineType: intent.engineType, mode: sceneSpec.mode });
       const skilledSettings = {
         ...settings,
-        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, storyboardSkills),
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, director.skills, director.extraContext),
       };
       const result = await generateStoryboardWithAgent(query, intent, skilledSettings, {
         onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
@@ -374,6 +409,51 @@ export const RightAgentChat: React.FC = () => {
                     )}
                   </div>
                 )}
+
+                {/* Phase 6: memory suggestion (user confirms) */}
+                {msg.memorySuggestion && (
+                  <div className="mt-2 p-2 rounded-lg bg-violet-950/30 border border-violet-500/30 flex items-start gap-2">
+                    <Brain className="w-3.5 h-3.5 text-violet-300 shrink-0 mt-0.5" />
+                    <div className="flex-1 text-[11px] text-slate-200">
+                      Remember this for next time? <span className="italic">"{msg.memorySuggestion.text}"</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={savedMemoryMsgIds[msg.id]}
+                      onClick={async () => {
+                        await addMemoryEntry(msg.memorySuggestion!.text, msg.memorySuggestion!.kind, 'confirmed-suggestion', 'global');
+                        setSavedMemoryMsgIds((m) => ({ ...m, [msg.id]: true }));
+                      }}
+                      className="px-2 py-0.5 rounded border border-violet-500/40 text-[10px] text-violet-100 disabled:opacity-60"
+                    >
+                      {savedMemoryMsgIds[msg.id] ? 'Remembered' : 'Remember'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Phase 6: extension suggestions (install goes through the review dialog) */}
+                {msg.extensionSuggestions?.map((sug) => {
+                  const manifest = EXTENSION_CATALOG.find((m) => m.id === sug.id);
+                  const installed = installedExtensions.some((e) => e.manifest.id === sug.id);
+                  if (!manifest) return null;
+                  return (
+                    <div key={sug.id} className="mt-2 p-2 rounded-lg bg-cyan-950/20 border border-cyan-500/30 flex items-start gap-2">
+                      <Puzzle className="w-3.5 h-3.5 text-cyan-300 shrink-0 mt-0.5" />
+                      <div className="flex-1 text-[11px] text-slate-200">
+                        Suggested extension: <span className="font-semibold">{sug.name}</span>
+                        <div className="text-[10px] text-slate-400">{manifest.description} {sug.reason ? `(${sug.reason})` : ''}</div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={installed}
+                        onClick={() => openExtensionReview({ manifest, source: 'builtin-catalog', reason: sug.reason })}
+                        className="px-2 py-0.5 rounded border border-cyan-500/40 text-[10px] text-cyan-100 disabled:opacity-60"
+                      >
+                        {installed ? 'Installed' : 'Review'}
+                      </button>
+                    </div>
+                  );
+                })}
 
                 {/* Vision QA Diagnostic Report Card */}
                 {msg.visionReport && (

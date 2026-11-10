@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore } from '../state/useStudioStore';
+import { playerClipFor, spriteFrameAt } from '../animation/spriteSheet';
+import { particleRuntimeFor } from '../vfx/particles2D';
+import { activeCaptions, drawCaptionOnCanvas } from '../media/captions';
+
 import { playSceneSfx } from '../audio/audioBus';
 import { sampleKeyframes } from '../animation/easing';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
@@ -826,7 +830,16 @@ function drawStage2D(
     const w = node.width;
     const h = node.height;
 
-    if (node.imageUrl) {
+    if (node.type === 'particle-emitter' && node.emitter) {
+      // Phase 5: deterministic particles — a pure function of (preset, seed, timeline time).
+      particleRuntimeFor(useStudioStore.getState().sceneSpec.particleLibrary).draw(ctx, node.emitter.preset, node.emitter.seed ?? 7, currentTime, w, h, node.emitter.rate, node.emitter.color);
+      if (!isPlaying) {
+        ctx.strokeStyle = 'rgba(167, 139, 250, 0.55)';
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(-w / 2, -h / 2, w, h);
+        ctx.setLineDash([]);
+      }
+    } else if (node.imageUrl) {
       let img = imageCache[node.imageUrl];
       if (!img) {
         img = new Image();
@@ -834,7 +847,17 @@ function drawStage2D(
         img.src = node.imageUrl;
         imageCache[node.imageUrl] = img;
       }
-      if (img.complete && img.naturalWidth > 0) {
+      const frame = node.spriteSheet
+        ? spriteFrameAt(
+            node.spriteSheet,
+            currentTime,
+            node.physics2D === 'player-platformer' && body ? playerClipFor(node.spriteSheet, body.vx, body.onGround) : undefined
+          )
+        : null;
+      if (img.complete && img.naturalWidth > 0 && frame) {
+        if (body && body.vx < -20 && node.physics2D.startsWith('player-')) ctx.scale(-1, 1);
+        ctx.drawImage(img, frame.sx, frame.sy, frame.sw, frame.sh, -w / 2, -h / 2, w, h);
+      } else if (img.complete && img.naturalWidth > 0) {
         ctx.drawImage(img, -w / 2, -h / 2, w, h);
       } else {
         ctx.fillStyle = node.fill;
@@ -932,6 +955,11 @@ function drawStage2D(
       }
     }
     ctx.restore();
+  }
+
+  // Phase 5: captions are drawn into the canvas so recorded video and snapshots include them.
+  for (const cue of activeCaptions(useStudioStore.getState().sceneSpec.captions, currentTime)) {
+    drawCaptionOnCanvas(ctx, cue, DESIGN_WIDTH, DESIGN_HEIGHT);
   }
 }
 

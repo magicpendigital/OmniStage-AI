@@ -58,12 +58,59 @@ Source analysis and adopt-vs-build decisions: [`docs/research/agent-ecosystem-re
   (now honours keyframe times) and the exported 2D runtime use it.
 - [x] **Dev harness** — pointer-index `CLAUDE.md`, scoped `.claude/rules/*.md`, `scene-contract-reviewer` subagent, `npm run verify` (tsc + 28 unit tests).
 
-### Phase 5: Next Handoff (Backlog)
-- [ ] **OmniStage MCP server** (all agents): expose `get_scene`, `apply_patch`, `verify`, `export` so Claude Code / Codex can author scenes headlessly. Highest leverage for the MCA workflow.
-- [ ] **Claude Code**: Rapier3D rigid-body physics; verifier rules for new physics roles; headless `claude -p` review job in CI once CI exists.
-- [ ] **Antigravity**: playable size budget + real DEFLATE in the ZIP bundler (entries are stored uncompressed today);
-  the standalone HTML still loads Three.js r128 from cdnjs, so 3D exports are not fully offline yet — inline or vendor it under a size budget.
-- [ ] **Codex**: GLSL terrain splatmap + post-FX presets; skeletal animation retargeting; 2.5D billboard actors (2D characters in 3D worlds).
-- [ ] **Media**: frame-stepped deterministic video render (fixed timestep + WebCodecs) instead of real-time MediaRecorder; caption track; shot-list view for storyboards.
-- [ ] **2D**: spritesheet animation for `Node2D`; procedural 2D VFX preset library; timeline stagger helpers.
-- [ ] **Audio (optional, BYO key)**: ElevenLabs SFX/TTS adapter through the server proxy, embedded within the export size budget.
+### Phase 5: Agent-Native Studio & Offline Media (Completed 2026-11-10)
+- [x] **OmniStage MCP server** (`mcp/server.ts`, `mcp/projectTools.ts`, guide: `docs/mcp-server.md`): stdio JSON-RPC, 11 tools
+  (contract, director skills, list/get/create, merge-patch + JSON-patch with verify/auto-fix, verify, link scenes, export playable, export captions).
+  Works on studio-compatible `.scenespec.json` bundles; writes are atomic and exports are confined to `--root`. Registered in `.mcp.json`.
+- [x] **Offline playables**: tree-shaken Three.js r187 inlined (`scripts/build-playable-three.mjs` → `src/exporter/generated/`, lazy chunk,
+  ~540 KB / ~140 KB gzip) with light-unit compensation; legacy CDN mode kept as an option. Per-network **size budget + offline report**
+  (`src/exporter/playableBundle.ts`) shown in Publish. **ZIP bundles are DEFLATE-compressed** (CompressionStream, stored fallback).
+- [x] **Exporter physics parity**: exported platformer now uses the verifier/studio envelope (jump 520, gravity 882, run 320) and respawns on
+  pit falls instead of an invisible floor, so verifier-approved levels are beatable in the export too.
+- [x] **2D spritesheets** (`Node2D.spriteSheet`, clips idle/run/jump auto-selected for players, facing flip) in studio + export.
+- [x] **Procedural 2D particles** (`type: 'particle-emitter'`, 8 deterministic presets: sparkle, confetti, fire, smoke, rain, snow, pixel-burst,
+  magic-trail) — pure function of (preset, seed, time), so scrub/record are reproducible; shared verbatim with the export.
+- [x] **Captions** (`SceneSpec.captions`): drawn into the 2D canvas (recorded in WebM), overlay in 3D, editor in World tab, WebVTT/SRT export,
+  offline director heuristic ("add captions"/"phụ đề").
+- [x] Verifier rules for particle presets, spritesheets and captions; prompt + skills updated; `npm run verify` = tsc + 40 tests.
+- [x] **CI**: `.github/workflows/verify.yml` (verify + build); headless read-only agent review: `npm run review:agent` (`claude -p`).
+
+### Phase 6: Creator Platform — Batch 1 "Foundation" (Completed 2026-11-10)
+Decisions (confirmed with the product owner): local-first (Node server on the user's computer; cloud build degrades gracefully),
+strongest plugin model (code allowed, sandboxed, AI may draft/recommend, human approves every install), CLI login for OpenCode / Claude Code /
+Codex / Gemini CLI (later replaced by the Google Antigravity CLI), delivery in batches with the foundation first.
+- [x] **AI providers** (`server/ai/*`, `src/agent/aiClient.ts`, Settings → AI): Gemini, **Anthropic** (official SDK, adaptive thinking,
+  server-side refusal fallback), **OpenRouter**, **OpenAI-compatible** (OpenAI, Ollama, LM Studio, vLLM, Groq, DeepSeek…), and **CLI login**:
+  Claude Code, Codex, OpenCode and **Google Antigravity CLI** (`agy` 1.5.4, stream-json over stdin) — all verified end-to-end on this machine.
+  CLI providers are localhost-only, prompts go via stdin/file, model ids are sanitised; "Test connection" + CLI detection in Settings.
+  Fixed: Settings provider/model/key were never sent to the server before.
+- [x] **Projects** (`server/workspace/*`, Project Hub): `~/OmniStage/projects/<project>/games/*.scenespec.json` (+ shared `assets/`),
+  one game or a collection of games sharing assets, autosave (2.5 s debounce, Ctrl+S), deletes go to `.trash`. Game files are MCP-compatible.
+- [x] **Personal library** (`~/OmniStage/library`) + project-shared library, upload/place/delete from the Library tab.
+- [x] **Extensions** (`src/extensions/*`, Extensions manager): manifest with skills, particle presets, SFX presets, asset libraries and
+  commands; code runs in `<iframe sandbox="allow-scripts">` + CSP `default-src 'none'` with a permissioned `window.omni` RPC
+  (scene read/write via verifier + undo, notify, declared-host fetch). Static risk review + optional AI review; install only after the user
+  approves every permission. Install from the built-in catalog (5 packs), https URL, manifest file, or **"Create with AI"** (director drafts a
+  pack). The director **recommends** catalog extensions in chat. Enable/disable/uninstall globally or per project; built-in skills can be
+  switched off. Extension presets are copied into `SceneSpec.particleLibrary` / `sfxLibrary` so scenes stay portable (export, MCP).
+- [x] **Memory** (`~/OmniStage/memory`, Settings → Memory): "nhớ rằng… / remember…" in chat, confirmed suggestions from preference
+  statements, pin/edit/delete, global or per project; up to 8 relevant memories injected per AI turn.
+- [x] Tech stack evaluation: `docs/research/tech-stack-evaluation.md`. Tests: 58 (`npm run verify`). Fixed esbuild peer conflict that broke `npm install`.
+
+### Phase 6 — Batch 2 "Play & Learn" (next)
+- [ ] **Play Test** mode: fullscreen run of the *exported* runtime in an iframe (exactly what ships), restart / next level / FPS + verifier overlay.
+- [ ] **Full preview** for media: play every storyboard scene in order with transitions, captions and audio (no recording needed).
+- [ ] **Guide**: first-run tour, Help center (how to play test, preview, AI providers, projects, extensions, memory, export), "How do I…?"
+  answers in chat, contextual tips.
+
+### Phase 6 — Batch 3 "Generate" (after batch 2)
+- [ ] Research + **asset-generation providers as extensions** (BYO key, server proxy, results saved to the personal library with license/source):
+  3D (Meshy, Tripo, Rodin/Hyper3D), 2D/sprites (image models via fal.ai / Replicate / OpenRouter image models), audio (ElevenLabs SFX / music / TTS).
+- [ ] **VFX & animation by code as AI skills**: AI-authored particle/SFX recipes (works today via extensions), GLSL shader effects in a
+  validated sandbox, procedural animation (tween/keyframe generation, sprite animation), all reviewable and installable as extensions.
+
+### Phase 7 candidates (from the tech stack evaluation)
+- [ ] Single **OmniStage Player** runtime shared by studio preview, play test and export (ends the two-runtime drift; brings GLB/world to exports).
+- [ ] AI edits as **JSON Patch** + tool-use loop instead of full SceneSpec regeneration (faster, cheaper, safer).
+- [ ] **Desktop packaging** (Electron) for non-coders; split `useStudioStore` into slices; Rapier3D + ECS; Playwright E2E.
+- [ ] Deterministic video (WebCodecs) with audio; NodeGraphView passive `onWheel` fix.

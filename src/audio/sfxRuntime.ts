@@ -14,7 +14,7 @@ export interface OmniSfxPlayer {
   presets: string[];
 }
 
-export function createOmniSfxPlayer(): OmniSfxPlayer {
+export function createOmniSfxPlayer(extraPresets?: Record<string, any>): OmniSfxPlayer {
   // wave: oscillator type or 'noise'; f0 → f1 frequency sweep; notes = arpeggio (Hz) stepped every `step` s;
   // lp0 → lp1 = low-pass cutoff sweep (Hz). All times in seconds.
   var RECIPES: Record<string, any> = {
@@ -29,6 +29,8 @@ export function createOmniSfxPlayer(): OmniSfxPlayer {
     click: { wave: 'sine', f0: 1250, f1: 880, dur: 0.06, vol: 0.25 },
     whoosh: { wave: 'noise', dur: 0.45, vol: 0.35, lp0: 300, lp1: 3200, attack: 0.18 },
   };
+  // Phase 6: presets contributed by extensions (copied into SceneSpec.sfxLibrary).
+  if (extraPresets) for (var key in extraPresets) if (!RECIPES[key]) RECIPES[key] = extraPresets[key];
   var ctx: any = null;
   var noiseBuffer: any = null;
 

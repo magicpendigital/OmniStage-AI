@@ -4,48 +4,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { registerAssetHubRoutes } from './server/assetHubProxy.ts';
+import { aiErrorStatus, generateJSON, registerAiRoutes } from './server/ai/index.ts';
+import { registerWorkspaceRoutes } from './server/workspace/routes.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /** Prompt builders are imported lazily so the port binds before the agent modules load. */
 const loadPrompts = () => import('./src/agent/systemPrompts.ts');
-
-const SUPPORTED_MODELS = new Set([
-  'gemini-3.8-flash',
-  'gemini-3.1-flash-lite',
-  'gemini-flash-latest',
-  'gemini-3.1-pro-preview',
-  'gemini-3-flash-preview',
-  'gemini-2.5-flash',
-]);
-const DEFAULT_MODEL = 'gemini-3.8-flash';
-
-function resolveModel(requested: unknown): string {
-  return typeof requested === 'string' && SUPPORTED_MODELS.has(requested) ? requested : DEFAULT_MODEL;
-}
-
-/** Gemini JSON mode occasionally wraps output in ```json fences; strip them before parsing. */
-function parseModelJSON(raw: string | undefined): any {
-  const text = (raw ?? '{}').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  return JSON.parse(text);
-}
-
-async function getGenAIClient(overrideKey?: string) {
-  const apiKey = (overrideKey && overrideKey.trim()) || process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    return null;
-  }
-  const { GoogleGenAI } = await import('@google/genai');
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
 
 async function startServer() {
   const app = express();
@@ -62,26 +28,28 @@ async function startServer() {
     res.json({ status: 'ok', service: 'omnistage-ai-studio' });
   });
 
+  // Phase 6: provider status + connection test (Gemini, OpenAI-compatible, OpenRouter, Anthropic, local CLIs)
+  registerAiRoutes(app);
+
+  // Phase 6: local workspace (projects, games, personal/project libraries, extensions, memory) — localhost only
+  registerWorkspaceRoutes(app);
+
+  const fail = (res: express.Response, route: string, error: any) => {
+    const status = aiErrorStatus(error);
+    if (status === 500) console.error(`Error in ${route}:`, error?.message || error);
+    res.status(status).json({ error: error?.message || `${route} failed` });
+  };
+
   // 1. Conversational SceneSpec Mutation Endpoint
   app.post('/api/agent/mutate', async (req, res) => {
     try {
-      const { prompt, sceneSpec, model, customSystemPrompt } = req.body;
-      const headerKey = req.headers['x-ai-key'] as string | undefined;
-      const headerModel = req.headers['x-ai-model'] as string | undefined;
-      const ai = await getGenAIClient(headerKey);
-      if (!ai) {
-        res
-          .status(503)
-          .json({ error: 'Gemini API key not configured on server; using studio fallback.' });
-        return;
-      }
-
+      const { prompt, sceneSpec, model, customSystemPrompt } = req.body ?? {};
       const { buildAgentSystemPrompt } = await loadPrompts();
-
-      // A model chosen in Settings (x-ai-model header) wins over the request body.
-      const selectedModel = resolveModel(headerModel || model);
-
-      const userPrompt = `USER INSTRUCTION: "${prompt}"
+      const { data, meta } = await generateJSON(
+        req,
+        {
+          system: buildAgentSystemPrompt(customSystemPrompt),
+          user: `USER INSTRUCTION: "${prompt}"
 
 CURRENT SCENESPEC JSON:
 ${JSON.stringify(sceneSpec, null, 2)}
@@ -91,21 +59,13 @@ Return a JSON object with:
   "assistantMessage": "string explaining what was updated in the 3D/2D scene",
   "diffSummary": ["bullet 1", "bullet 2"],
   "updatedSceneSpec": { ...complete valid SceneSpec object... }
-}`;
-
-      const response = await ai.models.generateContent({
-        model: selectedModel,
-        contents: userPrompt,
-        config: {
-          systemInstruction: buildAgentSystemPrompt(customSystemPrompt),
-          responseMimeType: 'application/json',
+}`,
         },
-      });
-
-      res.json(parseModelJSON(response.text));
+        model
+      );
+      res.json({ ...data, provider: meta.provider, model: meta.model });
     } catch (error: any) {
-      console.error('Error in /api/agent/mutate:', error?.message || error);
-      res.status(500).json({ error: error?.message || 'Agent mutation failed' });
+      fail(res, '/api/agent/mutate', error);
     }
   });
 
@@ -113,30 +73,22 @@ Return a JSON object with:
   app.post('/api/agent/storyboard/plan', async (req, res) => {
     try {
       const { prompt, intent, model, customSystemPrompt } = req.body ?? {};
-      const headerKey = req.headers['x-ai-key'] as string | undefined;
-      const headerModel = req.headers['x-ai-model'] as string | undefined;
-      const ai = await getGenAIClient(headerKey);
-      if (!ai) {
-        res.status(503).json({ error: 'Gemini API key not configured on server; using studio fallback.' });
-        return;
-      }
       const { buildStoryboardPlannerSystemPrompt } = await loadPrompts();
       const count = Math.max(2, Math.min(8, Number(intent?.sceneCount) || 3));
-      const response = await ai.models.generateContent({
-        model: resolveModel(headerModel || model),
-        contents: `USER REQUEST: "${String(prompt ?? '').slice(0, 2000)}"
+      const { data } = await generateJSON(
+        req,
+        {
+          system: buildStoryboardPlannerSystemPrompt(customSystemPrompt),
+          user: `USER REQUEST: "${String(prompt ?? '').slice(0, 2000)}"
 
 Detected intent: ${JSON.stringify({ sceneCount: count, kind: intent?.kind, engineType: intent?.engineType })}
 Plan EXACTLY ${count} beats.`,
-        config: {
-          systemInstruction: buildStoryboardPlannerSystemPrompt(customSystemPrompt),
-          responseMimeType: 'application/json',
         },
-      });
-      res.json(parseModelJSON(response.text));
+        model
+      );
+      res.json(data);
     } catch (error: any) {
-      console.error('Error in /api/agent/storyboard/plan:', error?.message || error);
-      res.status(500).json({ error: error?.message || 'Storyboard planning failed' });
+      fail(res, '/api/agent/storyboard/plan', error);
     }
   });
 
@@ -145,84 +97,92 @@ Plan EXACTLY ${count} beats.`,
     try {
       const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, model, customSystemPrompt } =
         req.body ?? {};
-      const headerKey = req.headers['x-ai-key'] as string | undefined;
-      const headerModel = req.headers['x-ai-model'] as string | undefined;
-      const ai = await getGenAIClient(headerKey);
-      if (!ai) {
-        res.status(503).json({ error: 'Gemini API key not configured on server; using studio fallback.' });
-        return;
-      }
       if (!beat || typeof beat.title !== 'string') {
         res.status(400).json({ error: 'beat is required' });
         return;
       }
-      const { buildAgentSystemPrompt, buildStoryboardSceneRules, buildStoryboardSceneUserPrompt } =
-        await loadPrompts();
-      const response = await ai.models.generateContent({
-        model: resolveModel(headerModel || model),
-        contents: buildStoryboardSceneUserPrompt({
-          prompt: String(prompt ?? '').slice(0, 2000),
-          storyboardTitle: String(storyboardTitle ?? 'Storyboard'),
-          kind: String(kind ?? 'film'),
-          beatIndex: Number(beatIndex) || 0,
-          total: Number(total) || 1,
-          beat,
-          previousScenes: Array.isArray(previousScenes) ? previousScenes.slice(-8) : [],
-        }),
-        config: {
-          systemInstruction: buildAgentSystemPrompt(customSystemPrompt) + buildStoryboardSceneRules(),
-          responseMimeType: 'application/json',
+      const { buildAgentSystemPrompt, buildStoryboardSceneRules, buildStoryboardSceneUserPrompt } = await loadPrompts();
+      const { data: parsed } = await generateJSON(
+        req,
+        {
+          system: buildAgentSystemPrompt(customSystemPrompt) + buildStoryboardSceneRules(),
+          user: buildStoryboardSceneUserPrompt({
+            prompt: String(prompt ?? '').slice(0, 2000),
+            storyboardTitle: String(storyboardTitle ?? 'Storyboard'),
+            kind: String(kind ?? 'film'),
+            beatIndex: Number(beatIndex) || 0,
+            total: Number(total) || 1,
+            beat,
+            previousScenes: Array.isArray(previousScenes) ? previousScenes.slice(-8) : [],
+          }),
         },
-      });
-      const parsed = parseModelJSON(response.text);
+        model
+      );
       // Accept either { sceneSpec } or { updatedSceneSpec } from the model
-      res.json({
-        assistantMessage: parsed.assistantMessage,
-        sceneSpec: parsed.sceneSpec ?? parsed.updatedSceneSpec ?? null,
-      });
+      res.json({ assistantMessage: parsed.assistantMessage, sceneSpec: parsed.sceneSpec ?? parsed.updatedSceneSpec ?? null });
     } catch (error: any) {
-      console.error('Error in /api/agent/storyboard/scene:', error?.message || error);
-      res.status(500).json({ error: error?.message || 'Storyboard scene generation failed' });
+      fail(res, '/api/agent/storyboard/scene', error);
+    }
+  });
+
+  // Phase 6: AI drafts an extension from a description (returned for review — never installed here)
+  app.post('/api/agent/extension/draft', async (req, res) => {
+    try {
+      const { prompt, engineType, mode } = req.body ?? {};
+      if (!prompt || typeof prompt !== 'string') {
+        res.status(400).json({ error: 'prompt is required' });
+        return;
+      }
+      const { buildExtensionDraftSystemPrompt } = await loadPrompts();
+      const { data } = await generateJSON(req, {
+        system: buildExtensionDraftSystemPrompt(),
+        user: `Creator request: "${prompt.slice(0, 2000)}"\nCurrent scene: engine ${engineType || '2d'}, mode ${mode || 'game'}.`,
+      });
+      res.json({ manifest: data });
+    } catch (error: any) {
+      fail(res, '/api/agent/extension/draft', error);
+    }
+  });
+
+  // Phase 6: AI plain-language review of an extension before the user approves it
+  app.post('/api/agent/extension/review', async (req, res) => {
+    try {
+      const { manifest, language } = req.body ?? {};
+      const { buildExtensionReviewSystemPrompt } = await loadPrompts();
+      const { mainSource, ...rest } = manifest || {};
+      const { data } = await generateJSON(req, {
+        system: buildExtensionReviewSystemPrompt(),
+        user: `Answer in ${language === 'vi' ? 'Vietnamese' : 'English'}.\nMANIFEST:\n${JSON.stringify(rest, null, 2).slice(0, 20000)}\n\nSCRIPT:\n${String(mainSource || '(none)').slice(0, 40000)}`,
+      });
+      res.json({ aiRisk: ['low', 'medium', 'high'].includes(data?.aiRisk) ? data.aiRisk : 'medium', aiSummary: String(data?.aiSummary || '').slice(0, 1500) });
+    } catch (error: any) {
+      fail(res, '/api/agent/extension/review', error);
     }
   });
 
   // 1d. Online Asset Hub proxy (Poly Pizza / Sketchfab / Poly Haven) — CORS-free model & HDRI loading
   registerAssetHubRoutes(app);
 
-  // 2. Multimodal Vision QA Endpoint
+  // 2. Multimodal Vision QA Endpoint (CLI providers get the coordinates/SceneSpec audit without the image)
   app.post('/api/agent/vision-qa', async (req, res) => {
     try {
-      const { screenshotDataUrl, actorCoordinates, sceneSpec } = req.body;
-      const headerKey = req.headers['x-ai-key'] as string | undefined;
-      const ai = await getGenAIClient(headerKey);
-      if (!ai || !screenshotDataUrl) {
+      const { screenshotDataUrl, actorCoordinates, sceneSpec } = req.body ?? {};
+      if (!screenshotDataUrl) {
         res.status(503).json({ error: 'Vision QA fallback active' });
         return;
       }
+      const { buildVisionQASystemPrompt } = await loadPrompts();
+      const match = /^data:(image\/\w+);base64,/.exec(String(screenshotDataUrl));
+      const { data } = await generateJSON(req, {
+        system: buildVisionQASystemPrompt(),
+        image: { mimeType: match?.[1] || 'image/png', base64: String(screenshotDataUrl).replace(/^data:image\/\w+;base64,/, '') },
+        user: `Inspect this viewport screenshot, the Actor World Coordinates & Bounding Boxes summary:
+${JSON.stringify(actorCoordinates || [], null, 2)}
 
-      const { buildVisionQASystemPrompt } = await import('./src/agent/systemPrompts.ts');
-      const base64Data = String(screenshotDataUrl).replace(/^data:image\/\w+;base64,/, '');
+and the full SceneSpec JSON:
+${JSON.stringify(sceneSpec, null, 2)}
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'image/png',
-                data: base64Data,
-              },
-            },
-            {
-              text: `Inspect this viewport screenshot, the Actor World Coordinates & Bounding Boxes summary:\n${JSON.stringify(
-                actorCoordinates || [],
-                null,
-                2
-              )}\n\nand the full SceneSpec JSON:\n${JSON.stringify(
-                sceneSpec,
-                null,
-                2
-              )}\n\nDetect any overlapping objects, off-frame cameras, ungrounded actors, or low-contrast lighting, and return a JSON object with:
+Detect any overlapping objects, off-frame cameras, ungrounded actors, or low-contrast lighting, and return a JSON object with:
 {
   "overallScore": 88,
   "summary": "Diagnostic summary of framing, actor spacing, and lighting contrast",
@@ -238,21 +198,10 @@ Plan EXACTLY ${count} beats.`,
   ],
   "proposedSceneSpec": { ...complete corrected SceneSpec JSON... }
 }`,
-            },
-          ],
-        },
-        config: {
-          systemInstruction: buildVisionQASystemPrompt(),
-          responseMimeType: 'application/json',
-        },
       });
-
-      const rawText = (response.text ?? '{}').trim();
-      const parsed = JSON.parse(rawText);
-      res.json(parsed);
+      res.json(data);
     } catch (error: any) {
-      console.error('Error in /api/agent/vision-qa:', error?.message || error);
-      res.status(500).json({ error: error?.message || 'Vision QA failed' });
+      fail(res, '/api/agent/vision-qa', error);
     }
   });
 

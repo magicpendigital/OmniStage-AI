@@ -44,6 +44,15 @@ Welcome to **OmniStage AI (Phase 3)**, an Agentic **3D WebGL & 2D Vector/Sprite 
      - `src/audio/sfxRuntime.ts` + `src/audio/audioBus.ts` — procedural WebAudio SFX (`SceneSpec.audio`), shared verbatim with exported playables.
      - `src/animation/easing.ts` — GSAP-style easing for `Keyframe2D.ease` / `CameraKeyframe.ease`, mirrored in `EASING_RUNTIME_SOURCE` for the exporter.
      - Run `npm run verify` (tsc + unit tests) before handing work back.
+   - **Phase 5 Agent-Native Studio & Offline Media**:
+     - `mcp/server.ts` + `mcp/projectTools.ts` — OmniStage MCP server (`docs/mcp-server.md`); agents author `.scenespec.json` projects headlessly with verify/auto-fix and offline export.
+     - `src/exporter/playableBundle.ts` + `src/exporter/generated/threePlayableRuntime.ts` — size budgets, offline check, DEFLATE ZIP, inlined Three.js (regenerate with `npm run build:playable-three`).
+     - `src/animation/spriteSheet.ts`, `src/vfx/particles2D.ts`, `src/media/captions.ts` — 2D spritesheets, deterministic 2D particles, captions (WebVTT/SRT); all shared with the exporter via `toString()`.
+   - **Phase 6 Creator Platform (batch 1)** — see `plan.md`, `docs/research/tech-stack-evaluation.md`:
+     - `server/ai/*` + `src/agent/aiClient.ts` — providers: Gemini, Anthropic SDK, OpenRouter, OpenAI-compatible, and CLI login (Claude Code, Codex, OpenCode, Google Antigravity CLI `agy`; localhost only). Headers `x-ai-provider` / `x-ai-model` / `x-ai-key` / `x-ai-base-url`.
+     - `server/workspace/*` — `~/OmniStage` projects (games are MCP-compatible bundles), personal + project libraries, installed extensions, memory; localhost-only `/api/projects|library|extensions|memory`.
+     - `src/extensions/*` — manifest contract, validation/risk review, catalog, sandboxed code plugins (`iframe sandbox` + CSP + permissioned `window.omni`), recommendations. Installs always require user approval.
+     - `src/agent/memory.ts` — memory selection / explicit "remember" / suggestions; `buildDirectorContext` in `studioAgent.ts` merges skills, memory and extension presets per turn.
    - `src/exporter/mediaExporter.ts` — Unified 3D/2D media exporter for PNG snapshots, 60fps `.webm` video streams (`MediaRecorder`), multi-scene `.scenespec.json` project bundles, and self-contained HTML5 Playable Ad bundles supporting both `'3d'` and `'2d'` scenes.
 
 ---

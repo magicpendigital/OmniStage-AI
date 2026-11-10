@@ -1,0 +1,28 @@
+---
+paths:
+  - "server/workspace/**"
+  - "server/ai/**"
+  - "src/extensions/**"
+  - "src/workspace/**"
+  - "src/agent/memory.ts"
+  - "src/agent/aiClient.ts"
+  - "src/components/ExtensionsModal.tsx"
+  - "src/components/ExtensionReviewDialog.tsx"
+  - "src/components/ProjectHubModal.tsx"
+---
+
+# Workspace, extensions, memory & providers
+
+- The workspace is the user's private disk. Every `/api/projects|library|extensions|memory` route and every CLI provider must stay
+  behind the localhost check (`isLoopbackRequest`); never widen it or trust `x-forwarded-for`.
+- Ids that become paths go through `assertId` / `uniqueId`. Writes use `writeJSON` (atomic); deletes use `moveToTrash`, never `rm`.
+- Extensions: nothing installs without `approvedPermissions` covering every requested permission (server enforces it). AI may draft or
+  recommend, never install. Code plugins only run via `ExtensionSandbox` (`sandbox="allow-scripts"` + CSP `default-src 'none'`); new host
+  methods must be added to `METHOD_PERMISSION` with the narrowest permission, and scene writes must go through `autoFixSceneSpec` + `setSceneSpec`.
+- Extension presets used by a scene are copied into `particleLibrary` / `sfxLibrary` (`attachExtensionRecipes`) — scenes must render
+  without the extension installed (export, MCP, another computer).
+- CLI providers: prompts via stdin or a temp file, never argv; model ids through `sanitizeModelId`; run in a temp cwd with tools disabled
+  where the CLI allows. Re-verify flags with `<cli> --help` after CLI upgrades and update `server/ai/cliProviders.ts` comments.
+- Anthropic calls use the official `@anthropic-ai/sdk` (default `claude-opus-5-5`, adaptive thinking, server-side refusal fallback).
+- Memory is user data: only explicit commands or user-confirmed suggestions are stored; keep `selectMemories` scoped (never leak another
+  project's memories) and keep `tests/extensions.test.ts` / `tests/workspace.test.ts` green.

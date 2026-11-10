@@ -8,6 +8,8 @@ Keep this file short. It points to where the rules live; scoped rules load from 
 npm run verify        # tsc --noEmit + all unit tests (tests/*.test.ts) — must exit 0
 npm run build         # vite production build
 npm run dev           # tsx server.ts on :3000 (PORT env overrides)
+npm run mcp -- --project projects/x.scenespec.json   # OmniStage MCP server (stdio)
+npm run build:playable-three                          # regenerate inlined Three.js after upgrading three
 ```
 
 Verification loop: change → `npm run verify` → fix until exit code 0. Do not eyeball results or skip failing tests.
@@ -27,7 +29,10 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 | Contract | `src/types/scene.schema.ts` | `.claude/rules/scene-contract.md` |
 | Renderers 3D/2D | `src/renderer/*` | `.claude/rules/renderers.md` |
 | AI director, skills, verifier | `src/agent/*`, `src/verification/*`, `server.ts` | `.claude/rules/agent-and-verification.md` |
-| Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*` | `.claude/rules/exporter.md` |
+| Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*`, `src/vfx/*`, `src/media/*` | `.claude/rules/exporter.md` |
+| MCP server (agents author projects) | `mcp/*`, `docs/mcp-server.md` | `.claude/rules/agent-and-verification.md` |
+| AI providers (API + CLI login) | `server/ai/*`, `src/agent/aiClient.ts` | `.claude/rules/agent-and-verification.md` |
+| Workspace, extensions, memory | `server/workspace/*`, `src/extensions/*`, `src/workspace/*`, `src/agent/memory.ts` | `.claude/rules/workspace-and-extensions.md` |
 
 Full roles for the multi-agent workflow: `AGENTS.md`. Roadmap: `plan.md`. Renderer QA notes: `docs/renderer-quality.md`.
 

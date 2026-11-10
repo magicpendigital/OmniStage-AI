@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { formatBytes, PlayableBudgetReport } from '../exporter/playableBundle';
 import {
   detectSupportedVideoMimes,
   exportCanvasSnapshotPNG,
@@ -62,6 +63,8 @@ export const PublishModal: React.FC = () => {
   const [autoProgressLevels, setAutoProgressLevels] = useState<boolean>(true);
   const [enableMobileTouch, setEnableMobileTouch] = useState<boolean>(true);
   const [enableAudioSynth, setEnableAudioSynth] = useState<boolean>(true);
+  const [offlineRuntime, setOfflineRuntime] = useState<boolean>(true);
+  const [lastBudget, setLastBudget] = useState<PlayableBudgetReport | null>(null);
 
   // UI Feedback
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -175,22 +178,26 @@ export const PublishModal: React.FC = () => {
   };
 
   // Handler: Standalone Game HTML Export
-  const handleExportStandaloneHTML = (network: StandaloneAdNetwork) => {
-    exportStandalonePlayableHTML(sceneSpec, network, scenes, {
+  const handleExportStandaloneHTML = async (network: StandaloneAdNetwork) => {
+    const { budget } = await exportStandalonePlayableHTML(sceneSpec, network, scenes, {
       autoProgressScenes: autoProgressLevels,
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
+      offline: offlineRuntime,
     });
+    setLastBudget(budget);
     triggerToast(`Exported ${network.toUpperCase()} Standalone HTML5 Game (${scenes.length} scene${scenes.length > 1 ? 's' : ''})`);
   };
 
   // Handler: Standalone Game ZIP Export
   const handleExportStandaloneZIP = async (network: StandaloneAdNetwork) => {
-    await exportStandaloneGameZIP(sceneSpec, network, scenes, {
+    const { budget } = await exportStandaloneGameZIP(sceneSpec, network, scenes, {
       autoProgressScenes: autoProgressLevels,
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
+      offline: offlineRuntime,
     });
+    setLastBudget(budget);
     triggerToast(`Exported complete ${network.toUpperCase()} Game ZIP Package`);
   };
 
@@ -675,6 +682,41 @@ export const PublishModal: React.FC = () => {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Phase 5: offline runtime toggle + size budget report */}
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 text-xs">
+                <label className="flex items-center gap-2 text-slate-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={offlineRuntime}
+                    onChange={(e) => setOfflineRuntime(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  <span>Inline Three.js runtime (offline 3D, adds ~540 KB / ~135 KB gzipped)</span>
+                </label>
+                {lastBudget && (
+                  <div
+                    className={`p-2.5 rounded-lg border font-mono text-[11px] space-y-1 ${
+                      lastBudget.withinBudget && lastBudget.offlineReady
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                        : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <div>
+                      {lastBudget.network.toUpperCase()}: {formatBytes(lastBudget.measuredBytes)} / {formatBytes(lastBudget.limitBytes)}{' '}
+                      {lastBudget.withinBudget ? '✓ within budget' : '✗ over budget'} ·{' '}
+                      {lastBudget.offlineReady ? 'offline-ready' : 'needs network'}
+                    </div>
+                    <div className="text-slate-400">
+                      HTML {formatBytes(lastBudget.htmlBytes)}
+                      {lastBudget.zipBytes !== undefined ? ` · ZIP ${formatBytes(lastBudget.zipBytes)}` : ''} · {lastBudget.limitLabel}
+                    </div>
+                    {lastBudget.notes.map((n) => (
+                      <div key={n}>• {n}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

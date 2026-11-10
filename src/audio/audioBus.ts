@@ -47,29 +47,41 @@ export function resolveAudioSpec(spec: Pick<SceneSpec, 'audio' | 'mode'>): Scene
   return createDefaultAudioSpec(spec.mode === 'game');
 }
 
-export function cueFor(spec: Pick<SceneSpec, 'audio' | 'mode'>, event: GameAudioEvent): SfxPresetId | null {
+export function cueFor(spec: Pick<SceneSpec, 'audio' | 'mode'>, event: GameAudioEvent): string | null {
   const audio = resolveAudioSpec(spec);
   if (!audio.enabled) return null;
   const cue = audio.cues[event];
   return cue && cue !== 'none' ? cue : null;
 }
 
-let player: ReturnType<typeof createOmniSfxPlayer> | null = null;
-function getPlayer() {
-  if (!player) player = createOmniSfxPlayer();
-  return player;
+const players = new Map<string, ReturnType<typeof createOmniSfxPlayer>>();
+/** One player per SFX library (built-ins + a scene's extension presets). AudioContexts are shared per player. */
+function getPlayer(library?: Record<string, unknown>) {
+  const key = library && Object.keys(library).length ? JSON.stringify(library) : '';
+  let p = players.get(key);
+  if (!p) {
+    p = createOmniSfxPlayer(key ? (library as Record<string, any>) : undefined);
+    if (players.size > 8) players.clear();
+    players.set(key, p);
+  }
+  return p;
 }
 
-export function previewSfx(presetId: SfxPresetId, volume = 0.6) {
-  const p = getPlayer();
+export function previewSfx(presetId: string, volume = 0.6, library?: Record<string, unknown>) {
+  const p = getPlayer(library);
   p.unlock();
   p.play(presetId, volume);
 }
 
-export function playSceneSfx(spec: Pick<SceneSpec, 'audio' | 'mode'>, event: GameAudioEvent) {
+export function playSceneSfx(spec: Pick<SceneSpec, 'audio' | 'mode' | 'sfxLibrary'>, event: GameAudioEvent) {
   const cue = cueFor(spec, event);
   if (!cue) return;
-  getPlayer().play(cue, resolveAudioSpec(spec).masterVolume);
+  getPlayer(spec.sfxLibrary).play(cue, resolveAudioSpec(spec).masterVolume);
+}
+
+/** Built-in preset ids plus the scene's extension presets. */
+export function availableSfxPresets(spec?: Pick<SceneSpec, 'sfxLibrary'>): string[] {
+  return [...SFX_PRESET_IDS, ...Object.keys(spec?.sfxLibrary || {}).filter((k) => !(SFX_PRESET_IDS as string[]).includes(k))];
 }
 
 interface AudioRelevantState {

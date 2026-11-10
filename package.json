@@ -12,9 +12,13 @@
     "lint": "tsc --noEmit",
     "test:renderer": "tsx --test tests/animationCrossFade.test.ts",
     "test": "tsx --test tests/*.test.ts",
-    "verify": "npm run lint && npm test"
+    "verify": "npm run lint && npm test",
+    "mcp": "tsx mcp/server.ts",
+    "build:playable-three": "node scripts/build-playable-three.mjs",
+    "review:agent": "bash scripts/agent-review.sh"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.7.0",
     "@google/genai": "^3.0.0",
     "@react-three/drei": "^10.7.9",
     "@react-three/fiber": "^9.8.2",
@@ -32,14 +36,14 @@
     "zustand": "^5.1.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "@types/express": "^4.17.21"
+    "typescript": "^7.0.2"
   }
 }

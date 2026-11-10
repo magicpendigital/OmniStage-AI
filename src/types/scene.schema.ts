@@ -5,6 +5,8 @@
  * Bidirectional Visual Logic Node Graphs (n8n/ComfyUI Style), and Real-Time Execution Logs.
  */
 
+import type { ParticleRecipe, SfxRecipe } from '../extensions/types';
+
 export type EngineType = '3d' | '2d';
 
 export type StudioMode = 'game' | 'media';
@@ -220,7 +222,8 @@ export type Node2DType =
   | 'sprite-actor'
   | 'text-kinetic'
   | 'parallax-layer'
-  | 'tile-platform';
+  | 'tile-platform'
+  | 'particle-emitter';
 
 export type Physics2DRole =
   | 'static-platform'
@@ -266,7 +269,8 @@ export interface SceneAudioSpec {
   enabled: boolean;
   /** 0..1 */
   masterVolume: number;
-  cues: Partial<Record<GameAudioEvent, SfxPresetId | 'none'>>;
+  /** Built-in SfxPresetId, 'none', or an id from SceneSpec.sfxLibrary. */
+  cues: Partial<Record<GameAudioEvent, SfxPresetId | 'none' | (string & {})>>;
 }
 
 /** Reusable director guidance injected into the AI prompt (built-in or learned from a user-approved result). */
@@ -301,6 +305,61 @@ export interface VerificationReport {
   errors: number;
   warnings: number;
   issues: VerificationIssue[];
+}
+
+// ============================================================================
+// PHASE 5: 2D SPRITESHEETS, PROCEDURAL 2D PARTICLES & CAPTIONS
+// ============================================================================
+
+export interface SpriteClipRange {
+  /** First and last frame index (inclusive). */
+  start: number;
+  end: number;
+  fps?: number;
+  loop?: boolean;
+}
+
+/** Grid spritesheet drawn from `Node2D.imageUrl`. Frames are read left→right, top→bottom. */
+export interface SpriteSheetSpec {
+  frameWidth: number;
+  frameHeight: number;
+  columns: number;
+  frameCount: number;
+  fps: number;
+  loop?: boolean;
+  /** Named clips, e.g. idle / run / jump. Player nodes auto-select idle, run and jump when present. */
+  clips?: Record<string, SpriteClipRange>;
+  activeClip?: string;
+}
+
+export type Particle2DPreset =
+  | 'sparkle'
+  | 'confetti'
+  | 'fire'
+  | 'smoke'
+  | 'rain'
+  | 'snow'
+  | 'pixel-burst'
+  | 'magic-trail';
+
+/** Deterministic (seeded, time-sampled) particle emitter for `Node2D.type === 'particle-emitter'`. */
+export interface Particle2DEmitterSpec {
+  /** Built-in preset or an id from SceneSpec.particleLibrary (extension preset). */
+  preset: Particle2DPreset | (string & {});
+  seed?: number;
+  /** Particles per second override. */
+  rate?: number;
+  /** Single colour override (otherwise the preset palette). */
+  color?: string;
+}
+
+export interface CaptionCue {
+  id?: string;
+  start: number;
+  end: number;
+  text: string;
+  position?: 'bottom' | 'top' | 'center';
+  style?: 'subtitle' | 'title';
 }
 
 export interface Keyframe2D {
@@ -341,6 +400,10 @@ export interface Node2D {
   visible?: boolean;
   locked?: boolean;
   keyframeTrack?: Keyframe2D[];
+  /** Phase 5: animate `imageUrl` as a grid spritesheet. */
+  spriteSheet?: SpriteSheetSpec;
+  /** Phase 5: settings for `type: 'particle-emitter'`. */
+  emitter?: Particle2DEmitterSpec;
 }
 
 // ============================================================================
@@ -509,6 +572,12 @@ export interface SceneSpec {
   sequence?: SceneSequenceMeta;
   /** Phase 4: procedural sound cues for gameplay events (also embedded in standalone playable exports). */
   audio?: SceneAudioSpec;
+  /** Phase 5: timed captions / subtitles (drawn on the 2D canvas, overlaid in 3D, exportable as WebVTT). */
+  captions?: CaptionCue[];
+  /** Phase 6: particle presets from extensions used by this scene (recipes copied in, so the scene is portable). */
+  particleLibrary?: Record<string, ParticleRecipe>;
+  /** Phase 6: SFX presets from extensions used by this scene. */
+  sfxLibrary?: Record<string, SfxRecipe>;
 }
 
 export interface BoundingBoxSpec {
@@ -583,7 +652,28 @@ export interface OnlineAssetSearchResponse {
   results: OnlineAssetResult[];
 }
 
+/** Phase 6: AI providers (API keys) and local coding-agent CLIs (signed-in subscriptions). */
+export type AIProviderId =
+  | 'gemini'
+  | 'openai-compatible'
+  | 'openrouter'
+  | 'anthropic'
+  | 'cli-claude'
+  | 'cli-codex'
+  | 'cli-antigravity'
+  | 'cli-opencode';
+
 export interface SettingsConfig {
+  /** Phase 6: active AI provider for the director, storyboard and vision QA. */
+  aiProvider: AIProviderId;
+  /** Model per provider (empty = provider default). */
+  aiModels: Partial<Record<AIProviderId, string>>;
+  /** API keys per provider, kept in this browser's localStorage and sent only to the local OmniStage server. */
+  aiApiKeys: Partial<Record<AIProviderId, string>>;
+  /** Base URL for 'openai-compatible' (OpenAI, Ollama, LM Studio, vLLM, Groq, DeepSeek...). */
+  aiBaseUrl: string;
+  /** Phase 6: built-in director skills the user switched off. */
+  disabledSkills: string[];
   geminiModel: 'gemini-3.8-flash' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';
   polyPizzaApiKey: string;
   sketchfabApiToken: string;
@@ -646,4 +736,8 @@ export interface ChatMessage {
   skillsUsed?: string[];
   /** Phase 4: deterministic verification result of updatedSpecSnapshot. */
   verification?: VerificationReport;
+  /** Phase 6: a lasting preference spotted in the user's prompt, offered as a memory (user confirms). */
+  memorySuggestion?: { text: string; kind: 'preference' | 'style' | 'goal' | 'constraint' | 'feedback' | 'fact' };
+  /** Phase 6: catalog extensions the director suggests for this request (installed only after approval). */
+  extensionSuggestions?: Array<{ id: string; name: string; reason: string }>;
 }

@@ -24,9 +24,15 @@ import {
 } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildExecutionRepairPrompt } from './systemPrompts';
+import { aiHeaders } from './aiClient';
 import { inferSkillContext, mergeSystemPrompt, selectDirectorSkills } from './directorSkills';
+import { buildMemoryContext, selectMemories } from './memory';
+import { attachExtensionRecipes, buildExtensionPresetContext, enabledContributions } from '../extensions/registry';
+import { workspaceApi } from '../workspace/workspaceClient';
 import { autoFixSceneSpec, describeIssuesForAgent } from '../verification/sceneVerifier';
 import { createDefaultAudioSpec } from '../audio/audioBus';
+import { captionsFromScript } from '../media/captions';
+import type { Particle2DPreset } from '../types/scene.schema';
 
 export {
   detectStoryboardIntent,
@@ -46,6 +52,17 @@ export interface AgentMutationResult {
 }
 
 const AUDIO_PROMPT = /\b(sfx|sound|sounds|audio)\b|âm thanh|tiếng động|hiệu ứng âm/i;
+const CAPTION_PROMPT = /\b(captions?|subtitles?)\b|phụ đề|lời thoại/i;
+const PARTICLE_PROMPTS: Array<[RegExp, Particle2DPreset]> = [
+  [/\bfire\b|lửa/i, 'fire'],
+  [/\bsmoke\b|khói/i, 'smoke'],
+  [/\bconfetti\b|pháo giấy/i, 'confetti'],
+  [/\brain\b|mưa/i, 'rain'],
+  [/\bsnow\b|tuyết/i, 'snow'],
+  [/\bpixel\b/i, 'pixel-burst'],
+  [/\bmagic\b|phép thuật/i, 'magic-trail'],
+  [/\bsparkles?\b|\bparticles?\b|lấp lánh/i, 'sparkle'],
+];
 
 export function extractActorCoordinateSummaries(spec: SceneSpec): ActorCoordinateSummary[] {
   return spec.actors.map((a) => ({
@@ -75,6 +92,33 @@ export function applyLocalHeuristicMutation(
   if (AUDIO_PROMPT.test(prompt) && !result.updatedSceneSpec.audio?.enabled) {
     result.updatedSceneSpec.audio = createDefaultAudioSpec(true);
     result.diffSummary = [...result.diffSummary, 'Enabled procedural SFX cues (collect=coin, jump, hit, win, lose)'];
+  }
+  const draft = result.updatedSceneSpec;
+  if (CAPTION_PROMPT.test(prompt) && !draft.captions?.length) {
+    draft.captions = captionsFromScript(`${draft.title}. ${draft.description || ''}`, Math.max(2, draft.durationSeconds || 8));
+    result.diffSummary = [...result.diffSummary, `Added ${draft.captions.length} timed caption cue(s) (WebVTT-exportable)`];
+  }
+  const particle = draft.engineType === '2d' ? PARTICLE_PROMPTS.find(([re]) => re.test(prompt))?.[1] : undefined;
+  if (particle && !draft.nodes2D.some((n) => n.type === 'particle-emitter' && n.emitter?.preset === particle)) {
+    const area = particle === 'rain' || particle === 'snow';
+    draft.nodes2D.push({
+      id: `node2d-fx-${particle}-${Date.now().toString(36)}`,
+      name: `${particle} FX`,
+      type: 'particle-emitter',
+      x: 500,
+      y: area ? 300 : 420,
+      width: area ? 1000 : 160,
+      height: area ? 600 : 140,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      fill: 'transparent',
+      stroke: '#A78BFA',
+      physics2D: 'none',
+      emitter: { preset: particle, seed: 42 },
+    });
+    result.diffSummary = [...result.diffSummary, `Added a deterministic "${particle}" 2D particle emitter`];
   }
   const { spec, notes } = finalizeLogicGraph(result.updatedSceneSpec);
   return {
@@ -1389,25 +1433,26 @@ export function finalizeLogicGraph(spec: SceneSpec): { spec: SceneSpec; notes: s
 async function fetchAgentMutation(
   prompt: string,
   currentSpec: SceneSpec,
-  skills: DirectorSkill[] = []
+  skills: DirectorSkill[] = [],
+  extraContext: string[] = []
 ): Promise<AgentMutationResult | null> {
   const settings = useStudioStore.getState().settings;
   try {
     const response = await fetch('/api/agent/mutate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiHeaders(settings),
       body: JSON.stringify({
         prompt,
         sceneSpec: currentSpec,
         model: settings.geminiModel,
-        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, skills),
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext),
       }),
     });
     if (!response.ok) return null;
     const data = await response.json();
     if (data && data.updatedSceneSpec && Array.isArray(data.updatedSceneSpec.actors)) {
       return {
-        assistantMessage: data.assistantMessage || `Updated SceneSpec via ${settings.geminiModel}.`,
+        assistantMessage: data.assistantMessage || `Updated SceneSpec via ${data.provider || settings.aiProvider}${data.model ? ` · ${data.model}` : ''}.`,
         diffSummary: Array.isArray(data.diffSummary) ? data.diffSummary : ['Updated SceneSpec state'],
         updatedSceneSpec: data.updatedSceneSpec,
       };
@@ -1532,6 +1577,32 @@ export async function fixExecutionIssue(
   return cloneSceneSpec(scene);
 }
 
+export interface DirectorContext {
+  skills: DirectorSkill[];
+  extraContext: string[];
+  memoryIds: string[];
+  contributions: ReturnType<typeof enabledContributions>;
+}
+
+/**
+ * Phase 6: everything the director knows for this turn — matching skills (built-in, learned, extension),
+ * relevant memories of the creator, and the extension presets it may use.
+ */
+export function buildDirectorContext(prompt: string, current: { engineType: SceneSpec['engineType']; mode: SceneSpec['mode'] }): DirectorContext {
+  const store = useStudioStore.getState();
+  const contributions = enabledContributions(store.installedExtensions, store.activeProject?.extensions);
+  const skills = selectDirectorSkills(
+    prompt,
+    inferSkillContext(prompt, current),
+    [...store.learnedSkills, ...contributions.skills],
+    3,
+    store.settings.disabledSkills || []
+  );
+  const memories = store.memoryEnabled ? selectMemories(prompt, store.memories, store.activeProject?.id) : [];
+  const extraContext = [buildMemoryContext(memories), buildExtensionPresetContext(contributions)].filter(Boolean);
+  return { skills, extraContext, memoryIds: memories.map((m) => m.id), contributions };
+}
+
 /** Max AI repair rounds after deterministic auto-fix (verification loop). */
 const MAX_AI_VERIFY_ROUNDS = 1;
 
@@ -1555,18 +1626,17 @@ export async function mutateSceneWithAgent(
   currentSpec: SceneSpec
 ): Promise<AgentMutationResult> {
   const store = useStudioStore.getState();
-  const skills = selectDirectorSkills(
-    prompt,
-    inferSkillContext(prompt, { engineType: currentSpec.engineType, mode: currentSpec.mode }),
-    store.learnedSkills
-  );
+  const director = buildDirectorContext(prompt, { engineType: currentSpec.engineType, mode: currentSpec.mode });
+  const { skills, extraContext, contributions } = director;
   const skillsUsed = skills.map((s) => s.id);
   store.markSkillsUsed(skillsUsed.filter((id) => id.startsWith('learned-')));
+  if (director.memoryIds.length) workspaceApi.markMemoriesUsed(director.memoryIds).catch(() => undefined);
   const verifyOpts = { scenes: store.scenes };
 
-  const result = await fetchAgentMutation(prompt, currentSpec, skills);
+  const result = await fetchAgentMutation(prompt, currentSpec, skills, extraContext);
   if (!result) {
     const local = applyLocalHeuristicMutation(prompt, currentSpec);
+    attachExtensionRecipes(local.updatedSceneSpec, contributions);
     const checked = autoFixSceneSpec(local.updatedSceneSpec, verifyOpts);
     return {
       ...local,
@@ -1582,6 +1652,11 @@ export async function mutateSceneWithAgent(
   if (!incoming.logicGraph?.nodes?.length && currentSpec.logicGraph?.nodes?.length) {
     incoming.logicGraph = JSON.parse(JSON.stringify(currentSpec.logicGraph));
   }
+  // Keep extension presets portable: copy recipes for any extension particle / SFX preset the model used.
+  for (const lib of ['particleLibrary', 'sfxLibrary'] as const) {
+    if (!incoming[lib] && currentSpec[lib]) (incoming as any)[lib] = JSON.parse(JSON.stringify(currentSpec[lib]));
+  }
+  const attachedPresets = attachExtensionRecipes(incoming, contributions);
   const { spec, notes } = finalizeLogicGraph(incoming);
   let checked = autoFixSceneSpec(spec, verifyOpts);
   const fixes = [...checked.fixes];
@@ -1590,7 +1665,7 @@ export async function mutateSceneWithAgent(
     const repairPrompt = `VERIFICATION LOOP — the SceneSpec you produced for "${prompt}" fails OmniStage's deterministic verifier.
 Fix ONLY these problems, keep everything else identical:
 ${describeIssuesForAgent(checked.report)}`;
-    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills);
+    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills, extraContext);
     if (!repaired) break;
     const candidate = autoFixSceneSpec(finalizeLogicGraph(cloneSceneSpec(repaired.updatedSceneSpec)).spec, verifyOpts);
     if (candidate.report.errors >= checked.report.errors) break; // no progress: keep the better spec
@@ -1601,7 +1676,12 @@ ${describeIssuesForAgent(checked.report)}`;
   return {
     ...result,
     updatedSceneSpec: checked.spec,
-    diffSummary: [...result.diffSummary, ...notes, ...verificationNotes(fixes, checked.report)],
+    diffSummary: [
+      ...result.diffSummary,
+      ...notes,
+      ...(attachedPresets.length ? [`Embedded extension presets: ${attachedPresets.join(', ')}`] : []),
+      ...verificationNotes(fixes, checked.report),
+    ],
     skillsUsed,
     verification: checked.report,
   };
@@ -1622,7 +1702,7 @@ export async function runVisionQAInspection(
   try {
     const response = await fetch('/api/agent/vision-qa', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiHeaders(useStudioStore.getState().settings),
       body: JSON.stringify({
         screenshotDataUrl,
         actorCoordinates,

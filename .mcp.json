@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "omnistage": {
+      "command": "npx",
+      "args": ["tsx", "mcp/server.ts", "--project", "projects/omnistage.scenespec.json"]
+    }
+  }
+}

@@ -71,7 +71,9 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Use 'text-kinetic' nodes, one idea per node, ≤ 4 words each, fontSize 48-96 for headlines.
 - Animate with keyframeTrack: entrance 0.3-0.6s with ease 'back.out' or 'expo.out', hold ≥ 1.2s for reading, exit with 'power2.inOut'.
 - Offset entrances by 0.15-0.25s to create rhythm; keep text inside x 80-920, y 80-520.
-- Contrast: light fill on dark background (or vice versa); add a 'parallax-layer' backdrop for depth.`,
+- Contrast: light fill on dark background (or vice versa); add a 'parallax-layer' backdrop for depth.
+- Mirror the spoken/written message in sceneSpec.captions (style 'title' for the hero line, 'subtitle' for the rest).
+- Accent reveals with a 'particle-emitter' (preset 'sparkle' or 'magic-trail') behind the headline.`,
   },
   {
     id: 'game-juice',
@@ -85,7 +87,8 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Set sceneSpec.audio = { enabled: true, masterVolume: 0.6, cues: { collect, jump, hit, win, lose, click, 'scene-start' } }.
 - Available presets: 'coin' | 'jump' | 'hit' | 'powerup' | 'explosion' | 'laser' | 'win' | 'lose' | 'click' | 'whoosh' | 'none'.
 - Pair every scoring action with a sound AND a visual (sparkles/confetti VFX or bouncing animation).
-- Use 'powerup' for rare high-value collectibles, 'whoosh' for scene-start in fast-paced games.`,
+- Use 'powerup' for rare high-value collectibles, 'whoosh' for scene-start in fast-paced games.
+- 2D: place a small 'particle-emitter' (preset 'sparkle') on high-value collectibles and 'confetti' near the goal; use 'fire'/'smoke' for hazards.`,
   },
 ];
 
@@ -139,9 +142,10 @@ export function selectDirectorSkills(
   prompt: string,
   ctx: SkillSelectionContext,
   learned: DirectorSkill[] = [],
-  max = 3
+  max = 3,
+  disabled: string[] = []
 ): DirectorSkill[] {
-  return [...BUILTIN_DIRECTOR_SKILLS, ...learned]
+  return [...BUILTIN_DIRECTOR_SKILLS.filter((s) => !disabled.includes(s.id)), ...learned]
     .map((skill) => ({ skill, score: scoreSkill(skill, prompt, ctx) }))
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score || a.skill.id.localeCompare(b.skill.id))
@@ -157,8 +161,8 @@ export function buildSkillContext(skills: DirectorSkill[]): string {
     .join('\n\n')}`;
 }
 
-export function mergeSystemPrompt(customSystemPrompt: string | undefined, skills: DirectorSkill[]): string {
-  return [customSystemPrompt?.trim(), buildSkillContext(skills)].filter(Boolean).join('\n\n');
+export function mergeSystemPrompt(customSystemPrompt: string | undefined, skills: DirectorSkill[], extra: string[] = []): string {
+  return [customSystemPrompt?.trim(), buildSkillContext(skills), ...extra.map((e) => e.trim())].filter(Boolean).join('\n\n');
 }
 
 /** Structural fingerprint of a scene, used as the "recipe" part of a learned skill. */

@@ -33,6 +33,7 @@ import {
   WorldSpec,
 } from '../types/scene.schema';
 import { autoFixSceneSpec } from '../verification/sceneVerifier';
+import { aiHeaders } from './aiClient';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -823,10 +824,10 @@ function sanitizePlan(raw: StoryboardPlan, intent: StoryboardIntent, fallback: S
   };
 }
 
-async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promise<any> {
+async function postJSON(url: string, body: unknown, signal?: AbortSignal, headers?: Record<string, string>): Promise<any> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers || { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   });
@@ -837,7 +838,7 @@ async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promi
 export async function generateStoryboardWithAgent(
   prompt: string,
   intent: StoryboardIntent,
-  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt'>,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
   callbacks: StoryboardGenerationCallbacks = {},
   signal?: AbortSignal
 ): Promise<StoryboardGenerationResult> {
@@ -852,7 +853,8 @@ export async function generateStoryboardWithAgent(
     const data = await postJSON(
       '/api/agent/storyboard/plan',
       { prompt, intent, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
-      signal
+      signal,
+      aiHeaders(settings)
     );
     if (isValidPlan(data, intent.sceneCount)) {
       plan = sanitizePlan(data, intent, localPlan);
@@ -889,7 +891,8 @@ export async function generateStoryboardWithAgent(
             model: settings.geminiModel,
             customSystemPrompt: settings.customSystemPrompt,
           },
-          signal
+          signal,
+          aiHeaders(settings)
         );
         if (data && data.sceneSpec && typeof data.sceneSpec === 'object') {
           spec = normalizeGeneratedSceneSpec(data.sceneSpec, beat.engineType);
@@ -929,7 +932,7 @@ export async function generateStoryboardWithAgent(
     scenes,
     source,
     assistantMessage: `Generated storyboard "${plan.storyboardTitle}" with ${scenes.length} ${unit}s (${
-      source === 'local' ? 'offline studio generator' : source === 'gemini' ? settings.geminiModel : `${settings.geminiModel} + offline fallback`
+      source === 'local' ? 'offline studio generator' : source === 'gemini' ? settings.aiProvider : `${settings.aiProvider} + offline fallback`
     }). ${
       plan.kind === 'game-levels'
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'

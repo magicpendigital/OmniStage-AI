@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Brain,
   CheckCircle2,
   Cpu,
   Database,
@@ -14,10 +15,12 @@ import {
   X,
 } from 'lucide-react';
 import { BUILTIN_DIRECTOR_SKILLS } from '../agent/directorSkills';
+import { AIProviderPanel } from './AIProviderPanel';
+import { MemoryPanel } from './MemoryPanel';
 import { DEFAULT_SETTINGS, useStudioStore } from '../state/useStudioStore';
 import { EngineType, SettingsConfig } from '../types/scene.schema';
 
-type SettingsTab = 'ai' | 'libraries' | 'engine';
+type SettingsTab = 'ai' | 'libraries' | 'engine' | 'memory';
 
 export const SettingsModal: React.FC = () => {
   const isOpen = useStudioStore((s) => s.isSettingsModalOpen);
@@ -71,6 +74,7 @@ export const SettingsModal: React.FC = () => {
             { id: 'ai', label: '1. AI Director & Prompts', icon: <Sparkles className="w-3.5 h-3.5" /> },
             { id: 'libraries', label: '2. External Asset CDNs', icon: <Database className="w-3.5 h-3.5" /> },
             { id: 'engine', label: '3. Engine & Render Quality', icon: <Sliders className="w-3.5 h-3.5" /> },
+            { id: 'memory', label: '4. Memory', icon: <Brain className="w-3.5 h-3.5" /> },
           ].map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -94,46 +98,8 @@ export const SettingsModal: React.FC = () => {
         <div className="p-6 overflow-y-auto space-y-5 flex-1 text-xs">
           {activeTab === 'ai' && (
             <div className="space-y-4">
-              {/* Server-Side API Key Security Badge */}
-              <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-start gap-3">
-                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <div className="font-semibold text-emerald-300">
-                    Server-Side Gemini API Key Active (GEMINI_API_KEY)
-                  </div>
-                  <p className="text-slate-300 leading-relaxed">
-                    Credentials are securely injected via the backend Express proxy (
-                    <code className="text-emerald-300 font-mono">/api/agent/mutate</code> &{' '}
-                    <code className="text-emerald-300 font-mono">/api/agent/vision-qa</code>) so keys are never exposed in client bundles.
-                  </p>
-                </div>
-              </div>
-
-              {/* Gemini Model Selector */}
-              <div className="space-y-1.5">
-                <label className="block font-semibold text-slate-200">
-                  Gemini Reasoning & Spatial Authoring Model
-                </label>
-                <select
-                  value={settings.geminiModel}
-                  onChange={(e) =>
-                    updateSettings({
-                      geminiModel: e.target.value as SettingsConfig['geminiModel'],
-                    })
-                  }
-                  className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
-                >
-                  <option value="gemini-3.8-flash">
-                    gemini-3.8-flash (Recommended · Fast Spatial & World Authoring)
-                  </option>
-                  <option value="gemini-3.1-flash-lite">
-                    gemini-3.1-flash-lite (Ultra-Fast Interactive Turnaround)
-                  </option>
-                  <option value="gemini-flash-latest">
-                    gemini-flash-latest (Latest Stable Multimodal Flash)
-                  </option>
-                </select>
-              </div>
+              {/* Phase 6: provider picker (API keys, OpenRouter, OpenAI-compatible, local coding-agent CLIs) */}
+              <AIProviderPanel />
 
               {/* Custom System Prompt Extension */}
               <div className="space-y-1.5">
@@ -321,6 +287,8 @@ export const SettingsModal: React.FC = () => {
               </div>
             </div>
           )}
+
+          {activeTab === 'memory' && <MemoryPanel />}
 
           {activeTab === 'engine' && (
             <div className="space-y-4">

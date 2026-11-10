@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
+import { activeCaptions } from '../media/captions';
 import { NodeGraphView } from './NodeGraphView';
 import { ExecutionConsole } from './ExecutionConsole';
 import { useStudioStore } from '../state/useStudioStore';
@@ -208,6 +209,26 @@ export const CenterViewport: React.FC = () => {
             >
               {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas */}
               {is2D ? <StageCanvas2D /> : <StageCanvas />}
+              {/* Phase 5: 3D caption overlay (2D draws captions into its canvas). */}
+              {!is2D &&
+                activeCaptions(sceneSpec.captions, currentTime).map((cue, i) => (
+                  <div
+                    key={cue.id || i}
+                    className={`pointer-events-none absolute inset-x-0 flex justify-center px-6 ${
+                      cue.position === 'top' ? 'top-[8%]' : cue.position === 'center' ? 'top-1/2 -translate-y-1/2' : 'bottom-[9%]'
+                    }`}
+                  >
+                    <span
+                      className={
+                        cue.style === 'title'
+                          ? 'text-3xl font-extrabold text-white text-center [text-shadow:0_2px_8px_rgba(0,0,0,0.85)]'
+                          : 'px-3 py-1.5 rounded bg-slate-950/75 text-sm font-semibold text-slate-50 text-center'
+                      }
+                    >
+                      {cue.text}
+                    </span>
+                  </div>
+                ))}
 
               {/* Top Bar Inside Viewport: Scene Info + Playable Score/Timer */}
               <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between pointer-events-none z-10 gap-2">

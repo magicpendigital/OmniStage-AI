@@ -16,6 +16,7 @@ import type {
 } from '../types/scene.schema';
 import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
+import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
 
 // --- 2D physics envelope (mirrors StageCanvas2D: jump vy = -520 px/s, gravity = 9.8 * 90 px/s², run 320 px/s) ---
 export const PLATFORMER_PHYSICS = {
@@ -137,6 +138,13 @@ function verify2D(spec: SceneSpec, issues: VerificationIssue[]) {
     if (n.x < 0 || n.x > STAGE_W || n.y < 0 || n.y > STAGE_H) {
       issues.push(issue('2d.out-of-bounds', 'warning', `"${n.name}" is outside the 1000x600 stage (${Math.round(n.x)}, ${Math.round(n.y)}).`, true, n.id));
     }
+    if (n.type === 'particle-emitter' && (!n.emitter || !(PARTICLE_2D_PRESETS.includes(n.emitter.preset) || spec.particleLibrary?.[n.emitter.preset]))) {
+      issues.push(issue('2d.unknown-particle', 'warning', `Particle emitter "${n.name}" has no valid preset (${PARTICLE_2D_PRESETS.join(', ')}).`, true, n.id));
+    }
+    const sheet = n.spriteSheet;
+    if (sheet && (!n.imageUrl || !(sheet.frameWidth > 0) || !(sheet.frameHeight > 0) || !(sheet.columns > 0) || !(sheet.frameCount > 0) || !(sheet.fps > 0))) {
+      issues.push(issue('2d.invalid-spritesheet', 'warning', `"${n.name}" has an invalid spriteSheet (needs imageUrl and positive frame size, columns, frameCount, fps).`, true, n.id));
+    }
     for (const k of n.keyframeTrack || []) {
       if (k.ease !== undefined && !isEaseId(k.ease)) {
         issues.push(issue('keyframe.unknown-ease', 'warning', `"${n.name}" uses unknown ease "${k.ease}".`, true, n.id));
@@ -239,9 +247,14 @@ function verifyCommon(spec: SceneSpec, issues: VerificationIssue[], opts: Verify
   }
   if (spec.audio) {
     for (const [event, cue] of Object.entries(spec.audio.cues || {})) {
-      if (cue && cue !== 'none' && !(SFX_PRESET_IDS as string[]).includes(cue)) {
+      if (cue && cue !== 'none' && !(SFX_PRESET_IDS as string[]).includes(cue) && !spec.sfxLibrary?.[cue]) {
         issues.push(issue('audio.unknown-cue', 'warning', `Audio cue "${event}" uses unknown preset "${cue}".`, true));
       }
+    }
+  }
+  for (const c of spec.captions || []) {
+    if (!(c.end > c.start) || c.start < 0 || c.start >= duration || !String(c.text || '').trim()) {
+      issues.push(issue('captions.invalid', 'warning', `Caption "${String(c.text || '').slice(0, 30)}" has an invalid time window or empty text (${c.start}s → ${c.end}s).`, true, c.id));
     }
   }
   const next = spec.sequence?.nextSceneId;
@@ -334,7 +347,7 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case 'audio.unknown-cue':
       if (spec.audio) {
         for (const [event, cue] of Object.entries(spec.audio.cues)) {
-          if (cue && cue !== 'none' && !(SFX_PRESET_IDS as string[]).includes(cue)) delete (spec.audio.cues as any)[event];
+          if (cue && cue !== 'none' && !(SFX_PRESET_IDS as string[]).includes(cue) && !spec.sfxLibrary?.[cue]) delete (spec.audio.cues as any)[event];
         }
       }
       return 'Removed unknown audio cues (defaults apply)';
@@ -342,6 +355,25 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
       for (const n of spec.nodes2D || []) for (const k of n.keyframeTrack || []) if (k.ease && !isEaseId(k.ease)) delete k.ease;
       for (const k of spec.camera?.keyframes || []) if (k.ease && !isEaseId(k.ease)) delete k.ease;
       return 'Reset unknown easings to linear';
+    case '2d.unknown-particle': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n) return null;
+      n.emitter = { ...(n.emitter || {}), preset: 'sparkle' } as Node2D['emitter'];
+      return `Reset "${n.name}" particle preset to sparkle`;
+    }
+    case '2d.invalid-spritesheet': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n) return null;
+      delete n.spriteSheet;
+      return `Removed invalid spriteSheet from "${n.name}"`;
+    }
+    case 'captions.invalid': {
+      const duration = Math.max(0.1, spec.durationSeconds || 0);
+      spec.captions = (spec.captions || [])
+        .filter((c) => String(c.text || '').trim() && c.start >= 0 && c.start < duration)
+        .map((c) => (c.end > c.start ? c : { ...c, end: Math.min(duration, c.start + 2) }));
+      return 'Repaired caption time windows';
+    }
     case 'sequence.next-missing':
       if (spec.sequence) {
         const idx = opts.scenes?.findIndex((s) => s.id === spec.id) ?? -1;

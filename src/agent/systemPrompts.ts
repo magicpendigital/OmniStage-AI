@@ -179,7 +179,11 @@ AUTHORING & SPATIAL DESIGN RULES:
    'linear' | 'sine.inOut' | 'power1.out' | 'power2.inOut' | 'power3.out' | 'expo.out' | 'back.out' | 'elastic.out' | 'bounce.out'.
 7. Procedural Game Audio: sceneSpec.audio = { enabled, masterVolume (0..1), cues: { collect, jump, hit, win, lose, click, 'scene-start' } }
    where each cue is 'coin' | 'jump' | 'hit' | 'powerup' | 'explosion' | 'laser' | 'win' | 'lose' | 'click' | 'whoosh' | 'none'. Sounds are synthesised, never audio URLs.
-8. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
+8. 2D Spritesheets & Particles: a Node2D with imageUrl may add spriteSheet { frameWidth, frameHeight, columns, frameCount, fps, clips?: { idle|run|jump: { start, end } } }.
+   Node2D type 'particle-emitter' needs emitter { preset: 'sparkle' | 'confetti' | 'fire' | 'smoke' | 'rain' | 'snow' | 'pixel-burst' | 'magic-trail', seed?, rate?, color? };
+   width/height is the emission area (use 1000x600 centred at 500,300 for rain/snow).
+9. Captions: sceneSpec.captions = [{ start, end, text, position: 'bottom'|'top'|'center', style: 'subtitle'|'title' }] inside 0..durationSeconds, ≤ 12 words each.
+10. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
    every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
@@ -285,4 +289,39 @@ Return a JSON object with:
   "assistantMessage": "one sentence describing this scene",
   "sceneSpec": { ...complete valid SceneSpec object with engineType "${beat.engineType}" and mode "${beat.mode}"... }
 }`;
+}
+
+/** Phase 6: the director drafts an OmniStage extension (skills / presets / optional sandboxed script). */
+export function buildExtensionDraftSystemPrompt(): string {
+  return `You design OmniStage extensions for game and media creators who may not code.
+Return ONE JSON object: an extension manifest with this shape:
+{
+  "id": "lower-case-slug", "name": "Human name", "version": "1.0.0", "description": "one sentence",
+  "kind": "skill-pack" | "vfx-pack" | "sfx-pack" | "tool" | "mixed",
+  "tags": ["genre", "style"], "targets": { "engines": ["2d"|"3d"], "modes": ["game"|"media"], "genres": [] },
+  "permissions": [],
+  "contributes": {
+    "skills": [{ "id": "slug", "title": "...", "description": "...", "triggers": ["lower-case words, VI and EN"], "engine": "2d"|"3d"|"any", "mode": "game"|"media"|"any",
+                 "guidance": "Rules for the AI director, written as concrete SceneSpec instructions (fields, values, timings)." }],
+    "particlePresets": { "slug": { "rate": 1-400, "life": 0.1-10, "speed": [min,max], "angle": [deg,deg], "gravity": number, "size": [min,max],
+                                   "shape": "circle"|"rect"|"line"|"pixel"|"star", "colors": ["#hex"], "alpha"?: 0-1, "fade"?: bool, "shrink"?: bool,
+                                   "grow"?: bool, "additive"?: bool, "spread"?: 0-1, "area"?: bool, "drift"?: number, "spin"?: number, "burst"?: seconds } },
+    "sfxPresets": { "slug": { "wave": "square"|"sine"|"triangle"|"sawtooth"|"noise", "dur": 0.05-4, "vol": 0-1, "f0"?: Hz, "f1"?: Hz,
+                              "notes"?: [Hz...], "step"?: seconds, "lp0"?: Hz, "lp1"?: Hz, "attack"?: seconds } }
+  }
+}
+Rules:
+- Prefer data (skills, particle and sound presets). Only add "commands" + "mainSource" when the user explicitly asks for an automated tool;
+  then mainSource is plain JavaScript using only window.omni (omni.registerCommand(id, async (args) => ...), omni.scene.get(),
+  omni.scene.applyPatch(mergePatch, label), omni.notify(text)) and "permissions" must list exactly what it uses ("scene:read", "scene:write", "ui:notify").
+- Never use network, eval, storage or DOM APIs. Never request "network" unless the user named the host.
+- Skills must make the creator's vision concrete (palette, pacing, mechanics, feedback); 2-3 skills maximum.`;
+}
+
+/** Phase 6: plain-language risk review of an extension manifest + script for non-programmers. */
+export function buildExtensionReviewSystemPrompt(): string {
+  return `You review OmniStage extensions before a non-programmer installs them. The extension runs in a sandbox that blocks network,
+storage and DOM access; it can only call window.omni APIs allowed by its permissions.
+Return JSON: { "aiRisk": "low" | "medium" | "high", "aiSummary": "3-5 short sentences in the user's language: what it does, what it can change, anything suspicious" }.
+Rate "high" if the script tries to escape the sandbox, obfuscates code, or does something unrelated to its description.`;
 }

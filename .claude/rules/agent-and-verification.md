@@ -4,6 +4,7 @@ paths:
   - "src/verification/**"
   - "server.ts"
   - "server/**"
+  - "mcp/**"
 ---
 
 # AI director, Director Skills & verification loop
@@ -14,4 +15,6 @@ paths:
 - Built-in skills live in `BUILTIN_DIRECTOR_SKILLS`; learned skills are user data in localStorage (`omnistage-learned-director-skills`).
 - Verifier rules must be deterministic, pure and covered in `tests/sceneVerifier.test.ts`. Mark an issue `fixable` only when
   `applyFix` really repairs it, and check for false positives against `SCENE_TEMPLATES` and the offline storyboard generator.
+- MCP tools (`mcp/projectTools.ts`) must reuse studio contract code (createBlankSceneSpec, autoFixSceneSpec, exporter); never
+  write outside `ctx.rootDir`, keep scene ids stable, and keep `tests/mcpServer.test.ts` green.
 - API keys arrive via headers (`x-ai-key`, `x-polypizza-key`, ...) or env; never log them or put them in SceneSpec.

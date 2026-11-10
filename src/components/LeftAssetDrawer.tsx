@@ -21,6 +21,10 @@ import {
   Volume2,
 } from 'lucide-react';
 import { AudioCuePanel } from './AudioCuePanel';
+import { CaptionsPanel } from './CaptionsPanel';
+import { PersonalLibraryPanel } from './PersonalLibraryPanel';
+import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { enabledContributions } from '../extensions/registry';
 import {
   ASSET_REGISTRY,
   DEFAULT_WORLD_SPEC,
@@ -32,6 +36,7 @@ import { useStudioStore } from '../state/useStudioStore';
 import { OnlineAssetBrowser } from './OnlineAssetBrowser';
 import {
   LightingPresetId,
+  Particle2DPreset,
   ScatterObjectType,
   SkyboxPreset,
   TerrainType,
@@ -73,6 +78,10 @@ export const LeftAssetDrawer: React.FC = () => {
 
   const updateWorld = useStudioStore((s) => s.updateWorld);
   const updateTerrain = useStudioStore((s) => s.updateTerrain);
+  const addParticleEmitter2D = useStudioStore((s) => s.addParticleEmitter2D);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProjectForExt = useStudioStore((s) => s.activeProject);
+  const extensionParticles = enabledContributions(installedExtensions, activeProjectForExt?.extensions).particlePresets;
   const updateClouds = useStudioStore((s) => s.updateClouds);
   const updateWeather = useStudioStore((s) => s.updateWeather);
   const addScatterLayer = useStudioStore((s) => s.addScatterLayer);
@@ -262,6 +271,28 @@ export const LeftAssetDrawer: React.FC = () => {
                     <Plus className="w-3 h-3" />
                     <span>Kinetic Text</span>
                   </button>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id) return;
+                      addParticleEmitter2D(id as Particle2DPreset, extensionParticles[id]);
+                    }}
+                    aria-label="Add 2D particle emitter"
+                    className="col-span-2 px-2.5 py-1.5 rounded-lg bg-violet-500/15 border border-violet-500/40 text-[11px] font-medium text-violet-200"
+                  >
+                    <option value="">+ Particle FX emitter…</option>
+                    {PARTICLE_2D_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {preset}
+                      </option>
+                    ))}
+                    {Object.keys(extensionParticles).map((preset) => (
+                      <option key={`ext-${preset}`} value={preset}>
+                        {preset} (extension)
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>
@@ -465,6 +496,8 @@ export const LeftAssetDrawer: React.FC = () => {
           <div className="space-y-4 text-xs">
             {/* Phase 4: Procedural Game Audio (both engines, embedded in playable exports) */}
             <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
+            {/* Phase 5: captions / subtitles track */}
+            <CaptionsPanel />
             {/* Procedural Terrain Selector */}
             <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
               <div className="flex items-center gap-1.5 font-semibold text-slate-100">
@@ -676,6 +709,8 @@ export const LeftAssetDrawer: React.FC = () => {
            ========================================================= */}
         {activeTab === 'library' && (
           <div className="space-y-3.5">
+            {/* Phase 6: personal + project-shared library on this computer */}
+            <PersonalLibraryPanel />
             {/* Drag & Drop File Upload Zone (.glb, .gltf, .svg, .png, .json) */}
             <div
               onDragOver={(e) => {

@@ -2,6 +2,17 @@ import { SceneSpec } from '../types/scene.schema';
 import { createOmniSfxPlayer } from '../audio/sfxRuntime';
 import { DEFAULT_AUDIO_CUES } from '../audio/audioBus';
 import { EASING_RUNTIME_SOURCE } from '../animation/easing';
+import { spriteFrameAt } from '../animation/spriteSheet';
+import { createParticle2DRuntime } from '../vfx/particles2D';
+import { drawCaptionOnCanvas } from '../media/captions';
+import { PLATFORMER_PHYSICS } from '../verification/sceneVerifier';
+import {
+  analyzePlayableBudget,
+  buildZip,
+  escapeInlineScript,
+  loadThreePlayableRuntime,
+  PlayableBudgetReport,
+} from './playableBundle';
 
 /**
  * Utility: Trigger browser file download via temporary anchor element.
@@ -488,6 +499,13 @@ export function exportSceneSpecJSON(sceneSpec: SceneSpec, scenes?: SceneSpec[]) 
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+/** Phase 6: union of extension presets used by any scene (so one inlined runtime serves every scene). */
+function mergeLibraries(scenes: SceneSpec[], key: 'sfxLibrary' | 'particleLibrary'): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const s of scenes) Object.assign(out, s[key] || {});
+  return out;
+}
+
 /**
  * Options for Standalone HTML5 Game & Playable Ad Generation.
  */
@@ -498,6 +516,16 @@ export interface StandalonePlayerOptions {
   enableMobileTouchControls?: boolean;
   enableProceduralAudio?: boolean;
   responsiveScaling?: boolean;
+  /**
+   * Phase 5: Three.js runtime source inlined into the HTML so 3D exports run offline.
+   * When omitted the legacy CDN tag (three r128 from cdnjs) is used.
+   */
+  threeRuntimeSource?: string;
+}
+
+export interface PlayableBuildResult {
+  html: string;
+  budget: PlayableBudgetReport;
 }
 
 /**
@@ -660,7 +688,9 @@ export function generateStandaloneHTMLContent(
     .jump-btn { width: 68px; height: 68px; border-radius: 34px; background: rgba(245, 158, 11, 0.88); border: 2px solid #F59E0B; color: #090D16; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
     .jump-btn:active { background: #FCD34D; transform: scale(0.92); }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  ${options?.threeRuntimeSource
+    ? `<script>${escapeInlineScript(options.threeRuntimeSource)}</script>`
+    : '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>'}
 </head>
 <body>
   <div class="hud-top">
@@ -681,6 +711,7 @@ export function generateStandaloneHTMLContent(
 
   <canvas id="stage3d" class="stage-canvas"></canvas>
   <canvas id="stage2d" class="stage-canvas" style="display:none;"></canvas>
+  <div id="captionBar" style="position:fixed;left:0;right:0;bottom:9%;display:flex;justify-content:center;pointer-events:none;z-index:20;padding:0 24px;"></div>
 
   <!-- Mobile Virtual Controls -->
   <div class="mobile-controls" id="mobileControls" style="${mobileControls ? '' : 'display:none;'}">
@@ -728,7 +759,7 @@ export function generateStandaloneHTMLContent(
 
     // --- PHASE 4: SHARED PROCEDURAL SFX RUNTIME (same synth as the studio, no audio files) ---
     var __name = function (f) { return f; };
-    const OMNI_SFX = (${createOmniSfxPlayer.toString()})();
+    const OMNI_SFX = (${createOmniSfxPlayer.toString()})(${JSON.stringify(mergeLibraries(syncedScenes, 'sfxLibrary'))});
     const DEFAULT_AUDIO_CUES = ${JSON.stringify(DEFAULT_AUDIO_CUES)};
 ${EASING_RUNTIME_SOURCE}
     function initAudio() {
@@ -744,6 +775,30 @@ ${EASING_RUNTIME_SOURCE}
       const preset = cues[event];
       if (!preset || preset === 'none') return;
       OMNI_SFX.play(preset, audio && typeof audio.masterVolume === 'number' ? audio.masterVolume : 0.6);
+    }
+
+    // --- PHASE 5: SHARED 2D RUNTIMES (particles, spritesheets, captions) ---
+    const PARTICLES = (${createParticle2DRuntime.toString()})(${JSON.stringify(mergeLibraries(syncedScenes, 'particleLibrary'))});
+    ${spriteFrameAt.toString()}
+    ${drawCaptionOnCanvas.toString()}
+    let sceneStartedAt = performance.now() / 1000;
+    // Same platformer envelope as the studio stage and the verifier, so verified levels stay beatable here.
+    const PHYS = ${JSON.stringify(PLATFORMER_PHYSICS)};
+    const spriteImages = {};
+    function sceneTime() { return performance.now() / 1000 - sceneStartedAt; }
+    function activeCaptionCues(time) {
+      return (SCENE_SPEC.captions || []).filter((c) => time >= c.start && time < c.end && String(c.text || '').trim());
+    }
+    function getSpriteImage(url) {
+      if (!spriteImages[url]) { const img = new Image(); img.src = url; spriteImages[url] = img; }
+      return spriteImages[url];
+    }
+    function playerClipName(sheet, moving, grounded) {
+      const clips = sheet.clips || {};
+      if (!grounded && clips.jump) return 'jump';
+      if (moving && clips.run) return 'run';
+      if (clips.idle) return 'idle';
+      return sheet.activeClip;
     }
 
     function keyframedPosition2D(n, t) {
@@ -858,14 +913,17 @@ ${EASING_RUNTIME_SOURCE}
     let actorMeshes = [];
 
     function build3DScene() {
+      sceneStartedAt = performance.now() / 1000;
       scene3d = new THREE.Scene();
       scene3d.background = new THREE.Color((SCENE_SPEC.environment && SCENE_SPEC.environment.backgroundColor) || '#0B101B');
       camera3d = new THREE.PerspectiveCamera((SCENE_SPEC.camera && SCENE_SPEC.camera.fov) || 45, window.innerWidth / window.innerHeight, 0.1, 160);
       camera3d.position.set(...((SCENE_SPEC.camera && SCENE_SPEC.camera.position) || [0, 3.2, 7.5]));
       camera3d.lookAt(...((SCENE_SPEC.camera && SCENE_SPEC.camera.target) || [0, 0.9, 0]));
 
-      scene3d.add(new THREE.HemisphereLight(SCENE_SPEC.environment?.keyLightColor || '#38BDF8', SCENE_SPEC.environment?.groundColor || '#0F172A', 0.9));
-      const dirLight = new THREE.DirectionalLight(SCENE_SPEC.environment?.keyLightColor || '#ffffff', 2.0);
+      // three >= r155 uses physically based light units: scale legacy intensities so both runtimes look alike.
+      const LIGHT_SCALE = parseInt(THREE.REVISION, 10) >= 155 ? Math.PI : 1;
+      scene3d.add(new THREE.HemisphereLight(SCENE_SPEC.environment?.keyLightColor || '#38BDF8', SCENE_SPEC.environment?.groundColor || '#0F172A', 0.9 * LIGHT_SCALE));
+      const dirLight = new THREE.DirectionalLight(SCENE_SPEC.environment?.keyLightColor || '#ffffff', 2.0 * LIGHT_SCALE);
       dirLight.position.set(5, 9, 6);
       scene3d.add(dirLight);
 
@@ -922,6 +980,7 @@ ${EASING_RUNTIME_SOURCE}
     let player2dGrounded = false;
 
     function build2DScene() {
+      sceneStartedAt = performance.now() / 1000;
       canvas2d.width = 1000;
       canvas2d.height = 600;
       nodes2D = JSON.parse(JSON.stringify(SCENE_SPEC.nodes2D || []));
@@ -1027,7 +1086,7 @@ ${EASING_RUNTIME_SOURCE}
           }
         });
         if (!hitAny && player2dGrounded) {
-          player2dVelY = -460;
+          player2dVelY = -PHYS.jumpVelocity;
           player2dGrounded = false;
           playSynthSound('jump');
         }
@@ -1091,14 +1150,15 @@ ${EASING_RUNTIME_SOURCE}
         const platforms = nodes2D.filter((n) => n.physics2D === 'static-platform');
         nodes2D.forEach((n) => {
           if (n.physics2D === 'player-platformer') {
-            if (keys['a'] || keys['arrowleft']) n.x -= 280 * dt;
-            if (keys['d'] || keys['arrowright']) n.x += 280 * dt;
+            if (keys['a'] || keys['arrowleft']) n.x -= PHYS.runSpeed * dt;
+            if (keys['d'] || keys['arrowright']) n.x += PHYS.runSpeed * dt;
+            n.x = Math.max(n.width / 2, Math.min(1000 - n.width / 2, n.x));
             if ((keys['w'] || keys['arrowup'] || keys[' ']) && player2dGrounded) {
-              player2dVelY = -480;
+              player2dVelY = -PHYS.jumpVelocity;
               player2dGrounded = false;
               playSynthSound('jump');
             }
-            player2dVelY += 980 * dt;
+            player2dVelY += PHYS.gravity * dt;
             n.y += player2dVelY * dt;
             player2dGrounded = false;
 
@@ -1112,10 +1172,12 @@ ${EASING_RUNTIME_SOURCE}
               }
             });
 
-            if (n.y > 550) {
-              n.y = 550;
+            // Falling into a pit respawns at the start (matches the studio stage).
+            if (n.y > 700) {
+              const spawn = (SCENE_SPEC.nodes2D || []).find((o) => o.id === n.id);
+              n.x = spawn ? spawn.x : 100;
+              n.y = spawn ? spawn.y : 400;
               player2dVelY = 0;
-              player2dGrounded = true;
             }
           }
         });
@@ -1137,12 +1199,25 @@ ${EASING_RUNTIME_SOURCE}
           });
         }
 
+        const st = sceneTime();
         nodes2D.slice().sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).forEach((n) => {
+          if (n.visible === false) return;
           ctx2d.save();
-          const kp = n.physics2D && n.physics2D.indexOf('player-') === 0 ? null : keyframedPosition2D(n, t);
+          const isPlayer = n.physics2D && n.physics2D.indexOf('player-') === 0;
+          const kp = isPlayer ? null : keyframedPosition2D(n, st);
           ctx2d.translate(kp ? kp.x : n.x, kp ? kp.y : n.y);
+          ctx2d.globalAlpha = n.opacity == null ? 1 : n.opacity;
           ctx2d.fillStyle = n.fill || '#06B6D4';
-          if (n.type === 'text-kinetic') {
+          const img = n.imageUrl ? getSpriteImage(n.imageUrl) : null;
+          if (n.type === 'particle-emitter' && n.emitter) {
+            PARTICLES.draw(ctx2d, n.emitter.preset, n.emitter.seed == null ? 7 : n.emitter.seed, st, n.width, n.height, n.emitter.rate, n.emitter.color);
+          } else if (img && img.complete && img.naturalWidth > 0) {
+            const moving = isPlayer && (keys['a'] || keys['arrowleft'] || keys['d'] || keys['arrowright']);
+            const frame = n.spriteSheet ? spriteFrameAt(n.spriteSheet, st, isPlayer ? playerClipName(n.spriteSheet, moving, player2dGrounded) : undefined) : null;
+            if (isPlayer && (keys['a'] || keys['arrowleft'])) ctx2d.scale(-1, 1);
+            if (frame) ctx2d.drawImage(img, frame.sx, frame.sy, frame.sw, frame.sh, -n.width / 2, -n.height / 2, n.width, n.height);
+            else ctx2d.drawImage(img, -n.width / 2, -n.height / 2, n.width, n.height);
+          } else if (n.type === 'text-kinetic') {
             ctx2d.font = '800 ' + (n.fontSize || 36) + 'px system-ui, sans-serif';
             ctx2d.textAlign = 'center';
             ctx2d.textBaseline = 'middle';
@@ -1156,7 +1231,23 @@ ${EASING_RUNTIME_SOURCE}
           }
           ctx2d.restore();
         });
+        activeCaptionCues(st).forEach((cue) => drawCaptionOnCanvas(ctx2d, cue, 1000, 600));
+        const bar2d = document.getElementById('captionBar');
+        if (bar2d.dataset.text) { bar2d.dataset.text = ''; bar2d.innerHTML = ''; }
       } else {
+        const cues3d = activeCaptionCues(sceneTime());
+        const bar = document.getElementById('captionBar');
+        const text = cues3d.map((c) => c.text).join(' ');
+        if (bar.dataset.text !== text) {
+          bar.dataset.text = text;
+          bar.innerHTML = '';
+          if (text) {
+            const span = document.createElement('span');
+            span.textContent = text;
+            span.style.cssText = 'background:rgba(2,6,23,0.75);color:#F8FAFC;font:600 16px system-ui,sans-serif;padding:6px 12px;border-radius:6px;text-align:center;';
+            bar.appendChild(span);
+          }
+        }
         actorMeshes.forEach((g) => {
           g.rotation.y = t * 1.2;
           const baseScale = g.userData.baseScale || [1, 1, 1];
@@ -1174,19 +1265,31 @@ ${EASING_RUNTIME_SOURCE}
 /**
  * 6. Export Standalone Single-File HTML5 Playable Ad
  */
-export function exportStandalonePlayableHTML(
+export async function buildStandalonePlayable(
   sceneSpec: SceneSpec,
   targetNetwork: StandaloneAdNetwork = 'universal',
   scenes?: SceneSpec[],
-  options?: StandalonePlayerOptions
-): string {
-  const htmlContent = generateStandaloneHTMLContent(sceneSpec, targetNetwork, scenes, options);
-  const blob = new Blob([htmlContent], { type: 'text/html' });
+  options?: StandalonePlayerOptions & { offline?: boolean }
+): Promise<PlayableBuildResult> {
+  const threeRuntimeSource =
+    options?.threeRuntimeSource ?? (options?.offline === false ? undefined : await loadThreePlayableRuntime());
+  const html = generateStandaloneHTMLContent(sceneSpec, targetNetwork, scenes, { ...options, threeRuntimeSource });
+  return { html, budget: analyzePlayableBudget(html, targetNetwork) };
+}
+
+export async function exportStandalonePlayableHTML(
+  sceneSpec: SceneSpec,
+  targetNetwork: StandaloneAdNetwork = 'universal',
+  scenes?: SceneSpec[],
+  options?: StandalonePlayerOptions & { offline?: boolean }
+): Promise<PlayableBuildResult> {
+  const result = await buildStandalonePlayable(sceneSpec, targetNetwork, scenes, options);
+  const blob = new Blob([result.html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const slug = slugifyTitle(sceneSpec.title, 'omnistage-game');
   triggerDownload(url, `${slug}-${targetNetwork}-playable.html`);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  return htmlContent;
+  return result;
 }
 
 /**
@@ -1196,14 +1299,14 @@ export async function exportStandaloneGameZIP(
   sceneSpec: SceneSpec,
   targetNetwork: StandaloneAdNetwork = 'itch',
   scenes?: SceneSpec[],
-  options?: StandalonePlayerOptions
-): Promise<void> {
+  options?: StandalonePlayerOptions & { offline?: boolean }
+): Promise<PlayableBuildResult> {
   const syncedScenes =
     scenes && scenes.length > 0
       ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s))
       : [sceneSpec];
 
-  const htmlContent = generateStandaloneHTMLContent(sceneSpec, targetNetwork, syncedScenes, options);
+  const { html: htmlContent } = await buildStandalonePlayable(sceneSpec, targetNetwork, syncedScenes, options);
 
   const manifest = {
     name: slugifyTitle(sceneSpec.title, 'omnistage-game'),
@@ -1251,9 +1354,12 @@ Enjoy creating with OmniStage AI!
     { name: 'README.txt', content: readme },
   ];
 
-  const zipBlob = createZipBlob(files);
+  // Phase 5: DEFLATE-compressed archive (falls back to stored entries without CompressionStream).
+  const zipBytes = await buildZip(files, { compress: true });
+  const zipBlob = new Blob([zipBytes as BlobPart], { type: 'application/zip' });
   const url = URL.createObjectURL(zipBlob);
   const slug = slugifyTitle(sceneSpec.title, 'omnistage-game');
   triggerDownload(url, `${slug}-${targetNetwork}-package.zip`);
   setTimeout(() => URL.revokeObjectURL(url), 6000);
+  return { html: htmlContent, budget: analyzePlayableBudget(htmlContent, targetNetwork, zipBytes.length) };
 }

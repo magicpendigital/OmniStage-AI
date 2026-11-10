@@ -14,6 +14,7 @@ import {
   AnimationType,
   AspectRatioPreset,
   CameraMode,
+  CaptionCue,
   ChatMessage,
   DirectorSkill,
   EngineType,
@@ -23,6 +24,7 @@ import {
   LogicGraphSpec,
   LogicNode,
   Node2D,
+  Particle2DPreset,
   ScatterObjectType,
   SceneAudioSpec,
   SceneSpec,
@@ -46,6 +48,22 @@ import {
   persistLearnedSkills,
 } from '../agent/directorSkills';
 import { resolveAudioSpec } from '../audio/audioBus';
+import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
+import { MemoryEntry, MemoryKind, ProjectMeta, workspaceApi } from '../workspace/workspaceClient';
+
+export type ProjectSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
+
+export interface ExtensionReviewRequest {
+  manifest: ExtensionManifest;
+  source: InstalledExtension['source'];
+  reason?: string;
+}
+
+/** Studio-compatible bundle of the open game (same shape as Export → .scenespec.json and the MCP server). */
+export function buildProjectBundle(state: { sceneSpec: SceneSpec; scenes: SceneSpec[] }) {
+  const scenes = state.scenes.length ? state.scenes.map((s) => (s.id === state.sceneSpec.id ? state.sceneSpec : s)) : [state.sceneSpec];
+  return { ...state.sceneSpec, projectBundleVersion: '3.1.0', activeSceneId: state.sceneSpec.id, scenes };
+}
 
 export interface FloatingScoreFeedback {
   id: string;
@@ -75,6 +93,11 @@ export interface BurstVFXInstance {
 const SETTINGS_STORAGE_KEY = 'omnistage_studio_settings_v3';
 
 export const DEFAULT_SETTINGS: SettingsConfig = {
+  aiProvider: 'gemini',
+  aiModels: {},
+  aiApiKeys: {},
+  aiBaseUrl: 'https://api.openai.com/v1',
+  disabledSkills: [],
   geminiModel: 'gemini-3.8-flash',
   polyPizzaApiKey: '',
   sketchfabApiToken: '',
@@ -97,7 +120,10 @@ function loadInitialSettings(): SettingsConfig {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    // Gemini CLI was replaced by the Google Antigravity CLI.
+    if ((parsed.aiProvider as string) === 'cli-gemini') parsed.aiProvider = 'cli-antigravity';
+    return parsed;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -425,6 +451,19 @@ interface StudioState {
   // Phase 4: Learned Director Skills (persisted in localStorage)
   learnedSkills: DirectorSkill[];
 
+  // Phase 6: local workspace (projects on disk), extensions and memory
+  workspaceAvailable: boolean | null;
+  workspaceHome: string | null;
+  activeProject: ProjectMeta | null;
+  activeGameId: string | null;
+  projectSaveState: ProjectSaveState;
+  installedExtensions: InstalledExtension[];
+  memories: MemoryEntry[];
+  memoryEnabled: boolean;
+  isProjectHubOpen: boolean;
+  isExtensionsOpen: boolean;
+  extensionReview: ExtensionReviewRequest | null;
+
   // Timeline Sequencer & Playback State
   isPlaying: boolean;
   isLooping: boolean;
@@ -565,7 +604,27 @@ interface StudioState {
   saveLearnedSkill: (prompt: string, spec: SceneSpec, title?: string) => DirectorSkill;
   removeLearnedSkill: (skillId: string) => void;
   markSkillsUsed: (skillIds: string[]) => void;
-  updateSceneAudio: (patch: Partial<SceneAudioSpec>) => void;
+  /** `library` copies extension SFX recipes into SceneSpec.sfxLibrary in the same undo step. */
+  updateSceneAudio: (patch: Partial<SceneAudioSpec>, library?: Record<string, SfxRecipe>) => void;
+
+  // Phase 6: workspace, projects, extensions, memory
+  initWorkspace: () => Promise<void>;
+  setProjectHubOpen: (open: boolean) => void;
+  setExtensionsOpen: (open: boolean) => void;
+  openExtensionReview: (request: ExtensionReviewRequest | null) => void;
+  openProjectGame: (project: ProjectMeta, gameId: string) => Promise<void>;
+  closeProject: () => void;
+  saveActiveGame: () => Promise<boolean>;
+  markProjectDirty: () => void;
+  refreshExtensions: () => Promise<void>;
+  refreshMemory: () => Promise<void>;
+  addMemoryEntry: (text: string, kind?: MemoryKind, source?: MemoryEntry['source'], scope?: string) => Promise<MemoryEntry | null>;
+  setDisabledSkill: (skillId: string, disabled: boolean) => void;
+
+  // Phase 5: 2D particles & captions
+  /** `recipe` is given for extension presets and copied into SceneSpec.particleLibrary. */
+  addParticleEmitter2D: (preset: Particle2DPreset | string, recipe?: ParticleRecipe) => void;
+  updateCaptions: (captions: CaptionCue[]) => void;
 
   // UI Modals
   setPublishModalOpen: (open: boolean) => void;
@@ -678,6 +737,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   settings: loadInitialSettings(),
   learnedSkills: loadLearnedSkills(),
+  workspaceAvailable: null,
+  workspaceHome: null,
+  activeProject: null,
+  activeGameId: null,
+  projectSaveState: 'idle',
+  installedExtensions: [],
+  memories: [],
+  memoryEnabled: true,
+  isProjectHubOpen: false,
+  isExtensionsOpen: false,
+  extensionReview: null,
 
   isPlaying: true,
   isLooping: true,
@@ -2312,15 +2382,130 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set({ learnedSkills: next });
   },
 
-  updateSceneAudio: (patch) =>
+  updateSceneAudio: (patch, library) =>
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (library && Object.keys(library).length) nextSpec.sfxLibrary = { ...(nextSpec.sfxLibrary || {}), ...library };
       const current = resolveAudioSpec(nextSpec);
       nextSpec.audio = {
         ...current,
         ...patch,
         cues: { ...current.cues, ...(patch.cues || {}) },
       };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
+      };
+    }),
+
+  initWorkspace: async () => {
+    try {
+      const info = await workspaceApi.info();
+      set({ workspaceAvailable: true, workspaceHome: info.home });
+      await Promise.all([get().refreshExtensions(), get().refreshMemory()]);
+    } catch {
+      set({ workspaceAvailable: false });
+    }
+  },
+
+  setProjectHubOpen: (open) => set({ isProjectHubOpen: open }),
+  setExtensionsOpen: (open) => set({ isExtensionsOpen: open }),
+  openExtensionReview: (request) => set({ extensionReview: request }),
+
+  openProjectGame: async (project, gameId) => {
+    const { bundle } = await workspaceApi.loadGame(project.id, gameId);
+    const scenes: SceneSpec[] = Array.isArray(bundle?.scenes) && bundle.scenes.length ? bundle.scenes : bundle?.id ? [bundle] : [];
+    if (scenes.length) get().loadProjectBundle(scenes, bundle.activeSceneId);
+    set({ activeProject: project, activeGameId: gameId, projectSaveState: 'saved', isProjectHubOpen: false });
+  },
+
+  closeProject: () => set({ activeProject: null, activeGameId: null, projectSaveState: 'idle' }),
+
+  saveActiveGame: async () => {
+    const { activeProject, activeGameId } = get();
+    if (!activeProject || !activeGameId) return false;
+    set({ projectSaveState: 'saving' });
+    try {
+      await workspaceApi.saveGame(activeProject.id, activeGameId, buildProjectBundle(get()));
+      set({ projectSaveState: 'saved' });
+      return true;
+    } catch {
+      set({ projectSaveState: 'error' });
+      return false;
+    }
+  },
+
+  markProjectDirty: () => {
+    if (get().activeGameId && get().projectSaveState !== 'dirty') set({ projectSaveState: 'dirty' });
+  },
+
+  refreshExtensions: async () => {
+    try {
+      set({ installedExtensions: await workspaceApi.listExtensions() });
+    } catch {
+      // workspace unavailable: keep current list
+    }
+  },
+
+  refreshMemory: async () => {
+    try {
+      const file = await workspaceApi.readMemory();
+      set({ memories: file.entries, memoryEnabled: file.enabled });
+    } catch {
+      // workspace unavailable
+    }
+  },
+
+  addMemoryEntry: async (text, kind = 'preference', source = 'explicit', scope) => {
+    try {
+      const entry = await workspaceApi.addMemory({ text, kind, source, scope: scope || 'global' });
+      set({ memories: [entry, ...get().memories.filter((m) => m.id !== entry.id)] });
+      return entry;
+    } catch {
+      return null;
+    }
+  },
+
+  setDisabledSkill: (skillId, disabled) => {
+    const current = get().settings.disabledSkills || [];
+    const next = disabled ? [...new Set([...current, skillId])] : current.filter((s) => s !== skillId);
+    get().updateSettings({ disabledSkills: next });
+  },
+
+  addParticleEmitter2D: (preset, recipe) => {
+    if (recipe) {
+      // Extension preset: carry the recipe with the scene so export / MCP / other machines can render it.
+      set((state) => {
+        const nextSpec = cloneSceneSpec(state.sceneSpec);
+        nextSpec.particleLibrary = { ...(nextSpec.particleLibrary || {}), [preset]: recipe };
+        return { sceneSpec: nextSpec, scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)) };
+      });
+    }
+    const area = preset === 'rain' || preset === 'snow' || !!recipe?.area;
+    get().addCustomNode2D({
+      name: `${preset} FX`,
+      type: 'particle-emitter',
+      x: 500,
+      y: area ? 300 : 360,
+      width: area ? 1000 : 140,
+      height: area ? 600 : 140,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      fill: 'transparent',
+      stroke: '#A78BFA',
+      physics2D: 'none',
+      emitter: { preset, seed: Math.floor(Math.random() * 1000) },
+    });
+  },
+
+  updateCaptions: (captions) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.captions = captions;
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
