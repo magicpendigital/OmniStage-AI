@@ -46,7 +46,7 @@ Welcome to **OmniStage AI (Phase 3)**, an Agentic **3D WebGL & 2D Vector/Sprite 
      - Run `npm run verify` (tsc + unit tests) before handing work back.
    - **Phase 5 Agent-Native Studio & Offline Media**:
      - `mcp/server.ts` + `mcp/projectTools.ts` — OmniStage MCP server (`docs/mcp-server.md`); agents author `.scenespec.json` projects headlessly with verify/auto-fix and offline export.
-     - `src/exporter/playableBundle.ts` + `src/exporter/generated/threePlayableRuntime.ts` — size budgets, offline check, DEFLATE ZIP, inlined Three.js (regenerate with `npm run build:playable-three`).
+     - `src/exporter/playableBundle.ts` — size budgets, offline check, DEFLATE ZIP (Phase 7: exports inline the OmniStage Player bundle instead of a separate Three.js build).
      - `src/animation/spriteSheet.ts`, `src/vfx/particles2D.ts`, `src/media/captions.ts` — 2D spritesheets, deterministic 2D particles, captions (WebVTT/SRT); all shared with the exporter via `toString()`.
    - **Phase 6 Creator Platform (batch 1)** — see `plan.md`, `docs/research/tech-stack-evaluation.md`:
      - `server/ai/*` + `src/agent/aiClient.ts` — providers: Gemini, Anthropic SDK, OpenRouter, OpenAI-compatible, and CLI login (Claude Code, Codex, OpenCode, Google Antigravity CLI `agy`; localhost only). Headers `x-ai-provider` / `x-ai-model` / `x-ai-key` / `x-ai-base-url`.
