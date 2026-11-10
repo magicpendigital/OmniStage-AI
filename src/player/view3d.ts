@@ -17,13 +17,17 @@ import { buildCompositeActor } from '../render3d/compositeActors';
 import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/actorMotion';
 import { disposeObject } from '../render3d/h';
 import { createWorld } from '../render3d/world3d';
-import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
+import { clickRunsBuiltIn } from '../runtime/gameSlice';
+import { createContactShadows } from '../render3d/contactShadows';
+import { createBloom, PostFx } from '../render3d/postfx';
+import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
 import { createActorBadge, createBurst, createVfx } from '../render3d/vfx3d';
 import type { Built3D, FrameContext } from '../render3d/types';
 import type { ActorNode, SceneSpec, VFXNode } from '../types/scene.schema';
 import type { InputManager } from './input';
 
-export type QualityLevel = 'low' | 'high';
+/** low = phones (DPR 1, no shadows, cheap water); high = default; ultra = high + bloom (studio "Ultra"). */
+export type QualityLevel = 'low' | 'high' | 'ultra';
 
 interface ActorView {
   root: THREE.Group;
@@ -87,17 +91,19 @@ export class View3D {
   private curves: { pos: THREE.CatmullRomCurve3; target: THREE.CatmullRomCurve3 } | null = null;
   private clock = 0;
   private ro: ResizeObserver;
+  private bloom?: PostFx;
 
   constructor(private parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string, quality: QualityLevel) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', alpha: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality === 'high' ? 2 : 1));
-    this.renderer.shadowMap.enabled = quality === 'high';
+    this.renderer = new THREE.WebGLRenderer({ antialias: quality !== 'low', alpha: false, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality !== 'low' ? 2 : 1));
+    this.renderer.shadowMap.enabled = quality !== 'low';
     configureRenderer(this.renderer);
     this.quality = quality;
     this.disposeEnv = applyStudioEnvironment(this.renderer, this.scene);
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'omni-stage omni-stage-3d';
     parent.appendChild(this.canvas);
+    if (quality === 'ultra') this.bloom = createBloom(this.renderer, this.scene, this.camera);
     this.scene.add(this.world, this.actorsGroup, this.fxGroup);
     this.canvas.addEventListener('pointerdown', this.onPointer);
     this.ro = new ResizeObserver(() => this.resize());
@@ -113,6 +119,7 @@ export class View3D {
     this.canvas.style.height = '100%';
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.bloom?.setSize(w, h, this.renderer.getPixelRatio());
   }
 
   // ---------------------------------------------------------------- world
@@ -125,9 +132,11 @@ export class View3D {
     const parts: Built3D[] = [createLightingRig(env, this.renderer.shadowMap.enabled)];
     if (env.reflectivePedestal) parts.push(createPedestal(env));
     if (env.groundGrid) parts.push(createGroundGrid(env));
+    parts.push(createAmbientDust(env));
+    if (this.quality !== 'low') parts.push(createContactShadows({ scale: 16, far: 5, opacity: 0.55, blur: 2 }));
     const w = spec.world;
     const hdri = w?.hdri?.url ? w.hdri : undefined;
-    if (w) parts.push(createWorld(w, { quality: this.quality, reflectionSize: this.quality === 'high' ? 512 : 256, hdriBackground: Boolean(hdri?.showBackground) }));
+    if (w) parts.push(createWorld(w, { quality: this.quality === 'low' ? 'low' : 'high', reflectionSize: this.quality !== 'low' ? 512 : 256, hdriBackground: Boolean(hdri?.showBackground) }));
     for (const part of parts) this.world.add(part.object);
     this.worldParts = parts;
     this.loadHdri(hdri);
@@ -331,8 +340,8 @@ export class View3D {
       const view = this.actors.get(actor.id);
       if (view) view.clickPulse = 1;
       if (!state.isPlaying) return;
-      if (this.runtime.emit('actor-click', { actorId: actor.id })) return;
-      if (state.sceneSpec.mode === 'game' || actor.onClickAction !== 'none') state.triggerActorInteraction(actor);
+      const graphHandled = this.runtime.emit('actor-click', { actorId: actor.id });
+      if (clickRunsBuiltIn(actor, state.sceneSpec.mode, graphHandled)) runtimeStore.getState().triggerActorInteraction(actor);
       return;
     }
   };
@@ -453,7 +462,9 @@ export class View3D {
     for (const view of this.actors.values()) view.mixer?.update(dt);
     for (const part of this.worldParts) part.update?.(ctx);
     this.updateCamera(state.sceneSpec, state.currentTime, sceneChanged);
-    this.renderer.render(this.scene, this.camera);
+    for (const part of this.worldParts) part.prerender?.(this.renderer, this.scene);
+    if (this.bloom) this.bloom.render(dt);
+    else this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
@@ -463,6 +474,7 @@ export class View3D {
     for (const b of this.bursts.values()) b.dispose();
     this.hdriTexture?.dispose();
     this.disposeEnv?.();
+    this.bloom?.dispose();
     this.ro.disconnect();
     this.canvas.removeEventListener('pointerdown', this.onPointer);
     this.renderer.dispose();

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useStudioStore } from '../state/useStudioStore';
 import { easedSplineProgress } from '../animation/easing';
@@ -8,7 +8,8 @@ import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 import { WorldRenderer } from './WorldRenderer';
 import { Built } from './Built';
-import { applyBackgroundAndFog, applyStudioEnvironment, createLightingRig, createPedestal } from '../render3d/stage3d';
+import { applyBackgroundAndFog, applyStudioEnvironment, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
+import { createContactShadows } from '../render3d/contactShadows';
 import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
 
 const _targetVec = new THREE.Vector3();
@@ -236,15 +237,8 @@ export const SceneDirector: React.FC = () => {
       <Built factory={() => createLightingRig(env, gl.shadowMap.enabled)}
         deps={[env.keyLightColor, env.groundColor, env.ambientIntensity, env.keyLightIntensity, env.rimLightColor, gl.shadowMap.enabled]} />
 
-      {/* Subtle Ambient Studio Sparkle Dust */}
-      <Sparkles
-        count={24}
-        scale={10}
-        size={1.6}
-        speed={0.25}
-        opacity={0.35}
-        color={env.rimLightColor || '#38BDF8'}
-      />
+      {/* Subtle Ambient Studio Sparkle Dust (shared builder, also in the Player) */}
+      <Built factory={() => createAmbientDust(env)} deps={[env.rimLightColor]} />
 
       {/* Rich 3D World Environment (Terrains, Skybox, Clouds, Weather, Scatter Props) */}
       <WorldRenderer />
@@ -273,29 +267,10 @@ export const SceneDirector: React.FC = () => {
 
       {env.reflectivePedestal && <Built factory={() => createPedestal(env)} deps={[env.groundColor, env.rimLightColor]} />}
 
-      {env.groundGrid && (
-        <Grid
-          position={[0, 0.008, 0]}
-          args={[30, 30]}
-          cellSize={1}
-          cellThickness={0.6}
-          cellColor="#1E293B"
-          sectionSize={5}
-          sectionThickness={1.1}
-          sectionColor={env.rimLightColor || '#06B6D4'}
-          fadeDistance={24}
-          fadeStrength={1.2}
-        />
-      )}
+      {env.groundGrid && <Built factory={() => createGroundGrid(env)} deps={[env.rimLightColor]} />}
 
-      <ContactShadows
-        position={[0, 0.012, 0]}
-        opacity={0.55}
-        scale={16}
-        blur={2.0}
-        far={5}
-        color="#000000"
-      />
+      {/* Phase 7C: shared builder (also used by the Player) instead of drei's <ContactShadows> */}
+      <Built factory={() => createContactShadows({ scale: 16, far: 5, opacity: 0.55, blur: 2 })} deps={[]} />
 
       {/* Declarative 3D Actors from SceneSpec */}
       {sceneSpec.actors.map((actor) => (

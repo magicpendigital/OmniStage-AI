@@ -36,12 +36,16 @@ export interface OmniPlayerHandle {
   destroy: () => void;
   /** Advance one frame manually (deterministic tests / headless capture). */
   step: (dt: number) => void;
+  /** Phase 7C: stop (true) or restart (false) the requestAnimationFrame loop so only step() advances time (E2E tests). */
+  manual: (on: boolean) => void;
+  /** Phase 7C: runtime-only state for tests (2D physics bodies live outside the store). */
+  inspect: () => { engine: string; bodies2D: Record<string, { x: number; y: number; collected: boolean }> };
   /** Hold or release a logical key ('arrowright', ' ', …) as if pressed (tests / accessibility tools). */
   setKey: (key: string, down: boolean) => void;
 }
 
 function pickQuality(q: OmniPlayerOptions['quality']): QualityLevel {
-  if (q === 'low' || q === 'high') return q;
+  if (q === 'low' || q === 'high' || q === 'ultra') return q;
   const nav = navigator as Navigator & { deviceMemory?: number };
   const weak = (nav.deviceMemory !== undefined && nav.deviceMemory <= 4) || (navigator.hardwareConcurrency || 8) <= 4;
   return isTouchDevice() && weak ? 'low' : 'high';
@@ -175,6 +179,14 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     store,
     restart: restartScene,
     step: (dt) => tick(Math.min(Math.max(dt, 0), 0.05)),
+    inspect: () => ({ engine: viewEngine, bodies2D: view instanceof View2D ? view.bodyPositions() : {} }),
+    manual: (on) => {
+      cancelAnimationFrame(raf);
+      if (!on) {
+        last = performance.now();
+        raf = requestAnimationFrame(loop);
+      }
+    },
     setKey: (key, down) => input.setVirtualKey(key.toLowerCase(), down),
     destroy: () => {
       cancelAnimationFrame(raf);

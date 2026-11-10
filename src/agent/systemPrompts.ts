@@ -4,6 +4,7 @@ import {
   PRESET_2D_ASSETS,
   VFX_PRESETS,
 } from '../registry/assetRegistry';
+import { PATCH_RESPONSE_FORMAT } from './patchLoop';
 
 /**
  * Visual Logic Graph authoring contract (scene.logicGraph).
@@ -123,7 +124,7 @@ ${brief.autoDiagnosis.length ? brief.autoDiagnosis.map((d) => `- ${d}`).join('\n
 ${brief.userFeedback ? `\nUSER FEEDBACK ABOUT THE PROBLEM:\n${brief.userFeedback}\n` : ''}`;
 }
 
-export function buildAgentSystemPrompt(customRules?: string): string {
+export function buildAgentSystemPrompt(customRules?: string, format: 'full' | 'patch' = 'full'): string {
   const assetSummary = Object.values(ASSET_REGISTRY)
     .map(
       (a) =>
@@ -190,11 +191,13 @@ ${LOGIC_GRAPH_PROMPT_SECTION}
 
 ${EXECUTION_REPAIR_PROMPT_SECTION}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
-Return ONLY valid JSON matching the requested response schema with:
+${format === 'patch' ? PATCH_RESPONSE_FORMAT : FULL_RESPONSE_FORMAT}`;
+}
+
+const FULL_RESPONSE_FORMAT = `Return ONLY valid JSON matching the requested response schema with:
 - assistantMessage: concise, helpful explanation of the changes made (mention which logic-graph chains were added or changed).
 - diffSummary: array of 2-4 short bullet strings describing exact mutations (include logicGraph changes).
 - updatedSceneSpec: the complete, valid updated SceneSpec JSON object, including logicGraph { nodes, edges }.`;
-}
 
 export function buildVisionQASystemPrompt(): string {
   return `You are the OmniStage AI Multimodal Vision QA Inspector.

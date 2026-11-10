@@ -216,7 +216,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
   {
     name: 'omnistage_apply_patch',
     description:
-      'Mutates a scene with a JSON Merge Patch (object; null deletes a key; arrays are replaced) and/or JSON Patch ops (add/replace/remove/test with JSON pointers, e.g. "/nodes2D/-"). The result is verified and deterministic problems are auto-fixed (autoFix=false to skip). Returns the verification report.',
+      'Mutates a scene with a JSON Merge Patch (object; null deletes a key; arrays are replaced) and/or JSON Patch ops (add/replace/remove/move/copy/test with JSON pointers, e.g. "/nodes2D/-"; address array items by id with "@", e.g. "/actors/@hero/position"). The result is verified and deterministic problems are auto-fixed (autoFix=false to skip). Returns the verification report.',
     mutates: true,
     inputSchema: {
       type: 'object',
@@ -228,7 +228,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
           description: 'RFC 6902 operations applied after the merge patch.',
           items: {
             type: 'object',
-            properties: { op: { type: 'string', enum: ['add', 'replace', 'remove', 'test'] }, path: { type: 'string' }, value: {} },
+            properties: { op: { type: 'string', enum: ['add', 'replace', 'remove', 'move', 'copy', 'test'] }, path: { type: 'string' }, from: { type: 'string' }, value: {} },
             required: ['op', 'path'],
           },
         },

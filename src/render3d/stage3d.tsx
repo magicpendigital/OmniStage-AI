@@ -9,6 +9,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { SceneSpec } from '../types/scene.schema';
 import { disposeObject, h } from './h';
 import type { Built3D } from './types';
+import { createGpuParticles } from './gpuParticles';
 
 type Env = SceneSpec['environment'];
 
@@ -47,13 +48,72 @@ export function createPedestal(env: Env): Built3D<THREE.Group> {
   return { object: group, dispose: () => disposeObject(group) };
 }
 
-/** Simple ground grid for hosts without drei's shader grid (the Player). */
-export function createGroundGrid(env: Env): Built3D<THREE.GridHelper> {
-  const grid = new THREE.GridHelper(30, 30, env.rimLightColor || '#06B6D4', '#1E293B');
+/**
+ * Phase 7C — anti-aliased shader grid with cell + section lines that fade with camera distance (same look and
+ * parameters as drei's <Grid>, which the studio used before), shared by the studio and the Player.
+ */
+export function createGroundGrid(env: Env, opts: { size?: number; cellSize?: number; sectionSize?: number; fadeDistance?: number } = {}): Built3D<THREE.Mesh> {
+  const size = opts.size ?? 30;
+  const geometry = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      cellSize: { value: opts.cellSize ?? 1 },
+      cellThickness: { value: 0.6 },
+      cellColor: { value: new THREE.Color('#1E293B') },
+      sectionSize: { value: opts.sectionSize ?? 5 },
+      sectionThickness: { value: 1.1 },
+      sectionColor: { value: new THREE.Color(env.rimLightColor || '#06B6D4') },
+      fadeDistance: { value: opts.fadeDistance ?? 24 },
+      fadeStrength: { value: 1.2 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vLocal;
+      varying vec3 vWorld;
+      void main() {
+        vLocal = position;
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }`,
+    fragmentShader: /* glsl */ `
+      varying vec3 vLocal;
+      varying vec3 vWorld;
+      uniform float cellSize, cellThickness, sectionSize, sectionThickness, fadeDistance, fadeStrength;
+      uniform vec3 cellColor, sectionColor;
+      float gridLine(float s, float thickness) {
+        vec2 r = vLocal.xz / s;
+        vec2 g = abs(fract(r - 0.5) - 0.5) / fwidth(r);
+        float line = min(g.x, g.y) + 1.0 - thickness;
+        return 1.0 - min(line, 1.0);
+      }
+      void main() {
+        float g1 = gridLine(cellSize, cellThickness);
+        float g2 = gridLine(sectionSize, sectionThickness);
+        float d = 1.0 - min(distance(cameraPosition, vWorld) / fadeDistance, 1.0);
+        vec3 color = mix(cellColor, sectionColor, min(1.0, sectionThickness * g2));
+        float alpha = (g1 + g2) * pow(d, fadeStrength);
+        alpha = mix(0.75 * alpha, alpha, g2);
+        if (alpha <= 0.0) discard;
+        gl_FragColor = vec4(color, alpha);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+  const grid = new THREE.Mesh(geometry, material);
+  grid.name = 'GroundGrid';
   grid.position.y = 0.008;
-  const mats = (Array.isArray(grid.material) ? grid.material : [grid.material]) as THREE.Material[];
-  for (const m of mats) Object.assign(m, { transparent: true, opacity: 0.55 });
-  return { object: grid, dispose: () => { grid.geometry.dispose(); mats.forEach((m) => m.dispose()); } };
+  grid.frustumCulled = false;
+  return { object: grid, dispose: () => { geometry.dispose(); material.dispose(); } };
+}
+
+/** Phase 7C: the studio's subtle ambient sparkle dust (was drei <Sparkles>), now also in the Player. */
+export function createAmbientDust(env: Env): Built3D<THREE.Points> {
+  const dust = createGpuParticles({ kind: 'sparkles', count: 24, spread: 10, size: 0.06, color: env.rimLightColor || '#38BDF8' });
+  dust.object.name = 'AmbientDust';
+  return dust;
 }
 
 /** Background colour + horizon fog exactly as the studio sets them. */

@@ -17,6 +17,8 @@ export interface FrameContext {
 export interface Built3D<T extends THREE.Object3D = THREE.Object3D> {
   object: T;
   update?: (ctx: FrameContext) => void;
+  /** Phase 7C: extra off-screen rendering before the main render (e.g. contact-shadow depth pass). */
+  prerender?: (renderer: THREE.WebGLRenderer, scene: THREE.Scene) => void;
   dispose: () => void;
 }
 

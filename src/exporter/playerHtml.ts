@@ -15,7 +15,7 @@ export interface PlayerHtmlOptions {
   touchControls?: boolean | 'auto';
   sound?: boolean;
   showFps?: boolean;
-  quality?: 'auto' | 'low' | 'high';
+  quality?: 'auto' | 'low' | 'high' | 'ultra';
 }
 
 /** JSON safe inside an inline <script> (no `</script>` / `<!--` breakouts). */

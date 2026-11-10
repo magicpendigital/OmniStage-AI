@@ -73,6 +73,31 @@ Return a JSON object with:
     }
   });
 
+  // 1a. Phase 7C: one round of the JSON Patch tool-use loop. The studio applies the patch, verifies, and calls again
+  // with the verifier's TOOL RESULT until the scene passes (src/agent/patchLoop.ts).
+  app.post('/api/agent/patch', async (req, res) => {
+    try {
+      const { prompt, sceneSpec, toolResults, round, model, customSystemPrompt } = req.body ?? {};
+      if (!sceneSpec || !Array.isArray(sceneSpec.actors)) {
+        res.status(400).json({ error: 'sceneSpec is required' });
+        return;
+      }
+      const { buildAgentSystemPrompt } = await loadPrompts();
+      const { buildPatchUserPrompt } = await import('./src/agent/patchLoop.ts');
+      const { data, meta } = await generateJSON(
+        req,
+        {
+          system: buildAgentSystemPrompt(customSystemPrompt, 'patch'),
+          user: buildPatchUserPrompt({ prompt: String(prompt ?? ''), spec: sceneSpec, round: Number(round) || 0, toolResults: Array.isArray(toolResults) ? toolResults : [] }),
+        },
+        model
+      );
+      res.json({ ...data, provider: meta.provider, model: meta.model });
+    } catch (error: any) {
+      fail(res, '/api/agent/patch', error);
+    }
+  });
+
   // 1b. Multi-Step Storyboard — STEP 1: plan N beats (film shots / game levels)
   app.post('/api/agent/storyboard/plan', async (req, res) => {
     try {

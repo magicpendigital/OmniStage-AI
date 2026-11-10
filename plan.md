@@ -119,7 +119,7 @@ so that moves to the front.
 - [x] **Guide**: Help center (13 topics, VI/EN, search, "Try it" buttons), first-run tour (6 highlighted steps), and "how do I…?" questions
   in the chat answered from the Guide in the user's language without an AI call.
 
-### Phase 7 — One OmniStage Player runtime (7A + 7B completed 2026-11-10; 7C next)
+### Phase 7 — One OmniStage Player runtime (7A, 7B and 7C completed 2026-11-10)
 **7A — shared runtime + Player (done)**
 - [x] **Shared runtime** (`src/runtime/*`, framework-free): game rules / timeline / logs / level progression extracted from the studio store
   into `gameSlice.ts`; logic-graph interpreter + contacts (`logicGraph.ts`), 2D frame step / physics / drawing / hit test (`stage2d.ts`),
@@ -156,9 +156,27 @@ so that moves to the front.
   logic-graph key events work unchanged; auto on touch screens, "📱 Touch" toggle on desktop).
 - [x] Tests: `tests/render3d.test.ts` (factory, all composites, motion rules, world builder, rig, particles). Player bundle ~215 KB gzip.
 
-**7C — next**
-- [ ] AI edits as JSON Patch + tool-use loop; split the rest of `useStudioStore` into slices; Playwright E2E using the Player's `step()` hook.
-- [ ] Contact shadows and the shader grid as shared builders (studio still uses drei's); optional WebGPU renderer; bloom on Ultra.
+**7C — patch edits, store slices, E2E, last shared visuals (done)**
+- [x] **AI edits as JSON Patch in a tool-use loop** (`src/agent/patchLoop.ts`, `POST /api/agent/patch`): the model returns
+  `{ mergePatch?, ops[], diffSummary, done }` instead of a whole SceneSpec; OmniStage applies it, finalizes the logic graph, auto-fixes
+  and verifies, then sends rejected patches / verifier errors back as a TOOL RESULT (up to 3 rounds, never accepting a round that makes
+  verification worse). Plain JSON, so it works for every provider including local CLIs. Array items are addressed by id
+  (`/actors/@hero/position`); `move`/`copy` added (also for MCP `omnistage_apply_patch`). Settings → AI "How the AI edits your scene"
+  keeps the old full-rewrite mode for weak models; no provider → offline director as before.
+- [x] **Studio store split into slices** (`src/state/slices/*`: logic graph, scenes, world, actors, stage content, agent, workspace;
+  types in `studioTypes.ts`, initial state in `storeHelpers.ts`). `useStudioStore.ts` went from ~1,960 to ~120 lines; a test checks
+  every `StudioState` member is still provided.
+- [x] **Shared contact shadows, shader grid and ambient dust** (`src/render3d/contactShadows.ts`, `createGroundGrid`,
+  `createAmbientDust`): the studio no longer uses drei's ContactShadows / Grid / Sparkles; the Player gets the same objects.
+  `Built3D.prerender` runs off-screen passes (shadow depth) in both hosts.
+- [x] **Bloom on Ultra** (`src/render3d/postfx.ts`, Unreal bloom + OutputPass): studio quality "Ultra" + Bloom setting, Player
+  `quality: 'ultra'` (export option). The existing "Enable bloom" setting now actually does something.
+- [x] **Playwright E2E** (`npm run test:e2e`, `e2e/*.e2e.ts`): builds real exported HTML, stops the rAF loop (`__omniPlayer.manual(true)`)
+  and drives frames with `step()`: 3D render high/ultra (pixel stats, no console errors), coin-rush scoring with held keys, tap-to-unbox,
+  2D platformer run (`inspect()` exposes live 2D bodies). Uses the installed Chrome (no browser download; `OMNI_E2E_CHANNEL` overrides).
+- [x] **Bug found by E2E**: when a logic graph reacted to a tap, the gift box skipped its own unbox counter, so "Tap to Unbox" could never
+  be opened or won (studio and exports). Shared rule `clickRunsBuiltIn` (`src/runtime/gameSlice.ts`) now keeps unbox progress.
+- [ ] Later: optional WebGPU renderer (Three r17x WebGPURenderer + TSL) once the custom shaders are ported.
 
 ### Phase 8 — Mobile native (Android first, then iOS)
 - [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.

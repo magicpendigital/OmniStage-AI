@@ -15,7 +15,8 @@
     "verify": "npm run lint && npm test",
     "mcp": "tsx mcp/server.ts",
     "review:agent": "bash scripts/agent-review.sh",
-    "build:player": "node scripts/build-player.mjs"
+    "build:player": "node scripts/build-player.mjs",
+    "test:e2e": "node scripts/build-player.mjs && playwright test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",
@@ -37,6 +38,7 @@
     "zustand": "^5.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",

@@ -93,3 +93,30 @@ test('lighting rig and GPU particles', () => {
   p.update?.({ time: 0, duration: 8, nowMs: 1300, clock: 0, viewportHeight: 600 });
   assert.equal((p.object.material as THREE.ShaderMaterial).uniforms.uTime.value, 0.5);
 });
+
+test('Phase 7C shared builders: shader grid, contact shadows, ambient dust', async () => {
+  const { createGroundGrid, createAmbientDust } = await import('../src/render3d/stage3d');
+  const { createContactShadows } = await import('../src/render3d/contactShadows');
+  const env = createBlankSceneSpec('3d').environment;
+  const grid = createGroundGrid({ ...env, rimLightColor: '#ff0000' });
+  const mat = grid.object.material as THREE.ShaderMaterial;
+  assert.equal(mat.uniforms.sectionColor.value.getHexString(), new THREE.Color('#ff0000').getHexString());
+  assert.equal(mat.uniforms.fadeDistance.value, 24);
+  grid.dispose();
+
+  const shadows = createContactShadows({ scale: 10, far: 4 });
+  const plane = shadows.object.children.find((c) => (c as THREE.Mesh).isMesh) as THREE.Mesh;
+  const cam = shadows.object.children.find((c) => (c as THREE.OrthographicCamera).isOrthographicCamera) as THREE.OrthographicCamera;
+  assert.equal(cam.far, 4);
+  assert.equal(cam.right - cam.left, 10);
+  assert.ok((plane.material as THREE.MeshBasicMaterial).map, 'plane shows the shadow render target');
+  assert.equal(typeof shadows.prerender, 'function');
+  // Camera looks straight up (+y): local -z maps to world +y.
+  const dir = new THREE.Vector3(0, 0, -1).applyEuler(cam.rotation);
+  assert.ok(dir.y > 0.999);
+  shadows.dispose();
+
+  const dust = createAmbientDust(env);
+  assert.equal(dust.object.geometry.getAttribute('position').count, 24);
+  dust.dispose();
+});

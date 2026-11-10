@@ -10,6 +10,7 @@ npm run build         # vite production build
 npm run dev           # tsx server.ts on :3000 (PORT env overrides)
 npm run mcp -- --project projects/x.scenespec.json   # OmniStage MCP server (stdio)
 npm run build:player                                  # regenerate the OmniStage Player bundle after changing src/player or src/runtime
+npm run test:e2e      # Playwright: exported Player in the installed Chrome, frame-stepped (after Player/runtime/render3d changes)
 ```
 
 Verification loop: change → `npm run verify` → fix until exit code 0. Do not eyeball results or skip failing tests.
@@ -17,7 +18,7 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 ## Core invariants
 
 1. Everything renders from the declarative `SceneSpec` (`src/types/scene.schema.ts`). Never generate or `eval` Three.js / Canvas code at runtime.
-2. All mutations go through `src/state/useStudioStore.ts`.
+2. All mutations go through `src/state/useStudioStore.ts` (composed from `src/state/slices/*`; add actions to the matching slice).
 3. New behaviour = union literal in `scene.schema.ts` first, then handlers in renderers/store, then the agent prompt (`src/agent/systemPrompts.ts`).
 4. AI output must pass `verifySceneSpec` (`src/verification/sceneVerifier.ts`). Add a verifier rule + test when you add a gameplay rule.
 5. Anything that must also run in exported playable ads (`src/exporter/mediaExporter.ts`) must be self-contained (see `src/audio/sfxRuntime.ts`, `EASING_RUNTIME_SOURCE`).

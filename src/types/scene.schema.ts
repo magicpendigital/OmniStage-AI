@@ -672,6 +672,11 @@ export interface SettingsConfig {
   aiApiKeys: Partial<Record<AIProviderId, string>>;
   /** Base URL for 'openai-compatible' (OpenAI, Ollama, LM Studio, vLLM, Groq, DeepSeek...). */
   aiBaseUrl: string;
+  /**
+   * Phase 7C: how the AI director edits scenes. 'patch' (default) = small JSON Patch edits in a verify loop;
+   * 'full' = the model rewrites the whole SceneSpec (for models that cannot follow the patch format).
+   */
+  aiEditMode?: 'patch' | 'full';
   /** Phase 6: built-in director skills the user switched off. */
   disabledSkills: string[];
   geminiModel: 'gemini-3.8-flash' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';

@@ -111,6 +111,23 @@ export const SettingsModal: React.FC = () => {
               {/* Phase 6: provider picker (API keys, OpenRouter, OpenAI-compatible, local coding-agent CLIs) */}
               <AIProviderPanel />
 
+              {/* Phase 7C: patch edits vs full rewrites */}
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-slate-200">How the AI edits your scene</label>
+                <select
+                  value={settings.aiEditMode || 'patch'}
+                  onChange={(e) => updateSettings({ aiEditMode: e.target.value as 'patch' | 'full' })}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="patch">Small edits, checked in a loop (recommended)</option>
+                  <option value="full">Rewrite the whole scene each time</option>
+                </select>
+                <p className="text-[11px] text-slate-400">
+                  Small edits are faster and never drop parts of your scene. OmniStage checks each edit and asks the AI to fix
+                  problems (up to 3 rounds). Use "Rewrite" only if your model can't follow the edit format.
+                </p>
+              </div>
+
               {/* Custom System Prompt Extension */}
               <div className="space-y-1.5">
                 <label className="block font-semibold text-slate-200">

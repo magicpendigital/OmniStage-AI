@@ -32,6 +32,7 @@ export function Built<T extends Built3D | null>({ factory, deps, onFrame }: {
     const ctx = studioFrameContext(state);
     onFrame?.(built as NonNullable<T>, ctx);
     built.update?.(ctx);
+    built.prerender?.(state.gl, state.scene);
   });
   return built ? <primitive object={built.object} dispose={null} /> : null;
 }

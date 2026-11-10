@@ -1,3 +1,4 @@
+import { clickRunsBuiltIn } from '../runtime/gameSlice';
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useLoader, useThree, ThreeEvent } from '@react-three/fiber';
 import { TransformControls, useAnimations } from '@react-three/drei';
@@ -198,10 +199,8 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
     e.stopPropagation();
     selectActor(actor.id);
     setClickPulse(1.0);
-    if (isPlaying && onRuntimeClick?.(actor.id)) return;
-    if (mode === 'game' || actor.onClickAction !== 'none') {
-      triggerActorInteraction(actor);
-    }
+    const graphHandled = isPlaying && !!onRuntimeClick?.(actor.id);
+    if (clickRunsBuiltIn(actor, mode, graphHandled)) triggerActorInteraction(actor);
   };
 
   if (actor.visible === false || !isWithinTimelineWindow) return null;

@@ -24,6 +24,7 @@ import {
 } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildExecutionRepairPrompt } from './systemPrompts';
+import { DEFAULT_PATCH_ROUNDS, PatchProposal, runPatchLoop } from './patchLoop';
 import { aiHeaders } from './aiClient';
 import { inferSkillContext, mergeSystemPrompt, selectDirectorSkills } from './directorSkills';
 import { buildMemoryContext, selectMemories } from './memory';
@@ -1615,6 +1616,75 @@ function verificationNotes(fixes: string[], report: VerificationReport): string[
 }
 
 /**
+ * Phase 7C: one director turn as a JSON Patch tool-use loop (src/agent/patchLoop.ts). Each round the server asks the
+ * model for a patch; here we apply it, finalize the logic graph, attach extension recipes, auto-fix and verify, and
+ * send the verifier's findings back as the next TOOL RESULT.
+ * Returns 'unavailable' when no provider is configured (503), null when the model never produced a usable patch.
+ */
+async function runPatchEdit(
+  prompt: string,
+  currentSpec: SceneSpec,
+  skills: DirectorSkill[],
+  extraContext: string[],
+  contributions: ReturnType<typeof enabledContributions>,
+  verifyOpts: { scenes: SceneSpec[] }
+): Promise<Omit<AgentMutationResult, 'skillsUsed'> | 'unavailable' | null> {
+  const settings = useStudioStore.getState().settings;
+  const customSystemPrompt = mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext);
+  let unavailable = false;
+  let providerLabel = '';
+  const graphNotes = new Set<string>();
+  const presets = new Set<string>();
+
+  const loop = await runPatchLoop({
+    prompt,
+    spec: currentSpec,
+    maxRounds: DEFAULT_PATCH_ROUNDS,
+    propose: async (turn) => {
+      try {
+        const res = await fetch('/api/agent/patch', {
+          method: 'POST',
+          headers: aiHeaders(settings),
+          body: JSON.stringify({ ...turn, sceneSpec: turn.spec, spec: undefined, model: settings.geminiModel, customSystemPrompt }),
+        });
+        if (res.status === 503) unavailable = true;
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data || typeof data !== 'object') return null;
+        if (!providerLabel && data.provider) providerLabel = `${data.provider}${data.model ? ` · ${data.model}` : ''}`;
+        return data as PatchProposal;
+      } catch {
+        return null;
+      }
+    },
+    check: (spec) => {
+      const draft = cloneSceneSpec(spec);
+      for (const name of attachExtensionRecipes(draft, contributions)) presets.add(name);
+      const { spec: finalized, notes } = finalizeLogicGraph(draft);
+      notes.forEach((n) => graphNotes.add(n));
+      return autoFixSceneSpec(finalized, verifyOpts);
+    },
+  });
+  if (!loop) return unavailable ? 'unavailable' : null;
+  if (!loop.changed && loop.rounds.some((r) => r.rejected)) return null; // never produced a valid patch: try a full rewrite
+
+  const ops = loop.rounds.reduce((n, r) => n + r.ops, 0);
+  const rejected = loop.rounds.filter((r) => r.rejected).length;
+  return {
+    assistantMessage: loop.assistantMessage || (loop.changed ? `Updated the scene via ${providerLabel || settings.aiProvider}.` : 'No changes were needed.'),
+    diffSummary: [
+      ...loop.diffSummary,
+      `AI edit loop: ${loop.rounds.length} round(s), ${ops} patch op(s)${rejected ? `, ${rejected} rejected patch(es) retried` : ''}`,
+      ...graphNotes,
+      ...(presets.size ? [`Embedded extension presets: ${[...presets].join(', ')}`] : []),
+      ...verificationNotes(loop.fixes, loop.report),
+    ],
+    updatedSceneSpec: loop.spec,
+    verification: loop.report,
+  };
+}
+
+/**
  * AI director turn with Phase 4 skills + verification loop:
  * 1. Select Director Skills for the prompt and inject them into the system prompt.
  * 2. Generate (Gemini, or the offline heuristic engine) and finalize the logic graph.
@@ -1633,7 +1703,16 @@ export async function mutateSceneWithAgent(
   if (director.memoryIds.length) workspaceApi.markMemoriesUsed(director.memoryIds).catch(() => undefined);
   const verifyOpts = { scenes: store.scenes };
 
-  const result = await fetchAgentMutation(prompt, currentSpec, skills, extraContext);
+  // Phase 7C: small JSON Patch edits in a verify loop (default). Falls back to a full rewrite when the model can't
+  // follow the patch format, and to the offline director when no provider is configured.
+  let providerUnavailable = false;
+  if ((store.settings.aiEditMode || 'patch') === 'patch') {
+    const patched = await runPatchEdit(prompt, currentSpec, skills, extraContext, contributions, verifyOpts);
+    if (patched === 'unavailable') providerUnavailable = true;
+    else if (patched) return { ...patched, skillsUsed };
+  }
+
+  const result = providerUnavailable ? null : await fetchAgentMutation(prompt, currentSpec, skills, extraContext);
   if (!result) {
     const local = applyLocalHeuristicMutation(prompt, currentSpec);
     attachExtensionRecipes(local.updatedSceneSpec, contributions);

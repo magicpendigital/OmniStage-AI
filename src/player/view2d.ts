@@ -14,6 +14,13 @@ export class View2D {
   private images: Record<string, HTMLImageElement> = {};
   private sceneId = '';
 
+  /** Phase 7C: live physics positions (E2E tests / debugging); the SceneSpec keeps authored positions. */
+  bodyPositions(): Record<string, { x: number; y: number; collected: boolean }> {
+    const out: Record<string, { x: number; y: number; collected: boolean }> = {};
+    for (const [id, b] of Object.entries(this.bodies)) out[id] = { x: b.x, y: b.y, collected: !!b.collected };
+    return out;
+  }
+
   constructor(parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = DESIGN_WIDTH;

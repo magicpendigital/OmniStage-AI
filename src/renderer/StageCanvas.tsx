@@ -1,6 +1,7 @@
 import React from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { configureRenderer } from '../render3d/stage3d';
+import { createBloom } from '../render3d/postfx';
 import { useStudioStore } from '../state/useStudioStore';
 import { SceneDirector } from './SceneDirector';
 
@@ -20,12 +21,27 @@ const isSoftwareGl = (() => {
   }
 })();
 
+/** Takes over R3F's render loop (useFrame priority 1) and renders through the shared bloom composer. */
+function StudioBloom() {
+  const { gl, scene, camera, size, viewport } = useThree();
+  const fx = React.useMemo(() => createBloom(gl, scene, camera), [gl, scene]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => () => fx.dispose(), [fx]);
+  React.useEffect(() => fx.setSize(size.width, size.height, viewport.dpr), [fx, size.width, size.height, viewport.dpr]);
+  useFrame((_, delta) => {
+    fx.setCamera(camera);
+    fx.render(delta);
+  }, 1);
+  return null;
+}
+
 export const StageCanvas: React.FC = () => {
   const cameraSpec = useStudioStore((s) => s.sceneSpec.camera);
   const setCanvasElement = useStudioStore((s) => s.setCanvasElement);
   // Phase 7B: the viewport quality selector — draft = DPR 1, no shadows (what weak phones get in the Player).
   const quality = useStudioStore((s) => s.settings.renderQuality);
   const draft = isSoftwareGl || quality === 'draft';
+  // Phase 7C: Ultra quality adds bloom (the same post-processing the Player uses at quality=ultra).
+  const bloom = useStudioStore((s) => s.settings.renderQuality === 'ultra-postprocessing' && s.settings.enableBloom) && !draft;
 
   return (
     <div className="relative w-full h-full select-none">
@@ -49,6 +65,7 @@ export const StageCanvas: React.FC = () => {
         }}
       >
         <SceneDirector />
+        {bloom && <StudioBloom />}
       </Canvas>
     </div>
   );

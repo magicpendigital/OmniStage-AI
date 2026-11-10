@@ -59,6 +59,18 @@ export interface GameRuntimeState {
 type SetState<S> = (partial: Partial<S> | S | ((state: S) => Partial<S> | S)) => void;
 type GetState<S> = () => S;
 
+/**
+ * Phase 7C: should a click/tap on a 3D actor run its built-in interaction (collect, unbox, ...)?
+ * When the logic graph handled the click, built-in effects are skipped to avoid double scoring — except unbox
+ * progress, which is the actor's own state (the gift box must still count taps while the graph adds VFX/camera).
+ * Shared by the studio ActorRenderer and the Player so both behave the same.
+ */
+export function clickRunsBuiltIn(actor: Pick<ActorNode, 'onClickAction' | 'assetId'>, mode: 'game' | 'media', graphHandled: boolean): boolean {
+  const unbox = actor.onClickAction === 'unbox-tap' || actor.assetId === 'mystery-gift-box';
+  if (graphHandled && !unbox) return false;
+  return mode === 'game' || actor.onClickAction !== 'none';
+}
+
 export function createGameRuntimeSlice<S extends GameRuntimeState>(setRaw: SetState<S>, getRaw: GetState<S>) {
   // The slice only touches GameRuntimeState fields; widen for the implementation.
   const set = setRaw as unknown as SetState<GameRuntimeState>;
