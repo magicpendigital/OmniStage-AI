@@ -97,20 +97,60 @@ Codex / Gemini CLI (later replaced by the Google Antigravity CLI), delivery in b
   statements, pin/edit/delete, global or per project; up to 8 relevant memories injected per AI turn.
 - [x] Tech stack evaluation: `docs/research/tech-stack-evaluation.md`. Tests: 58 (`npm run verify`). Fixed esbuild peer conflict that broke `npm install`.
 
+## 3. Roadmap after Phase 6 batch 1 (re-prioritised 2026-11-10)
+
+Goal clarified by the product owner: **multi-platform games, including native iOS and Android apps**, alongside web, playable ads and
+Telegram; and **automatic rigging + animation of (often AI-generated) 3D characters**. Analysis and sources:
+[`docs/research/mobile-and-character-pipeline.md`](docs/research/mobile-and-character-pipeline.md),
+[`docs/research/tech-stack-evaluation.md`](docs/research/tech-stack-evaluation.md).
+
+Conclusion: the TypeScript + SceneSpec + web-runtime foundation is the right base for iOS/Android (native shell via Capacitor), but
+mobile was never an explicit target. Every mobile path and every rigged-character export depends on **one shared Player runtime**,
+so that moves to the front.
+
 ### Phase 6 — Batch 2 "Play & Learn" (next)
-- [ ] **Play Test** mode: fullscreen run of the *exported* runtime in an iframe (exactly what ships), restart / next level / FPS + verifier overlay.
-- [ ] **Full preview** for media: play every storyboard scene in order with transitions, captions and audio (no recording needed).
-- [ ] **Guide**: first-run tour, Help center (how to play test, preview, AI providers, projects, extensions, memory, export), "How do I…?"
-  answers in chat, contextual tips.
+- [ ] **Play Test** (desktop): fullscreen run of the exported runtime (exactly what ships), restart / next level / FPS + verifier overlay.
+- [ ] **Play on phone**: LAN preview server + QR code (read-only play route; the private workspace API stays localhost-only);
+  touch input in the studio viewport (virtual stick / buttons, safe-area aware).
+- [ ] **Full preview** for media: every storyboard scene in order with transitions, captions and audio.
+- [ ] **Guide**: first-run tour, Help center (play test, phone preview, providers, projects, extensions, memory, export), "How do I…?" in chat.
 
-### Phase 6 — Batch 3 "Generate" (after batch 2)
-- [ ] Research + **asset-generation providers as extensions** (BYO key, server proxy, results saved to the personal library with license/source):
-  3D (Meshy, Tripo, Rodin/Hyper3D), 2D/sprites (image models via fal.ai / Replicate / OpenRouter image models), audio (ElevenLabs SFX / music / TTS).
-- [ ] **VFX & animation by code as AI skills**: AI-authored particle/SFX recipes (works today via extensions), GLSL shader effects in a
-  validated sandbox, procedural animation (tween/keyframe generation, sprite animation), all reviewable and installable as extensions.
+### Phase 7 — One OmniStage Player runtime (prerequisite for mobile and characters)
+- [ ] Framework-free TypeScript player (Three.js + Canvas2D + WebAudio) shared by studio preview, play test, phone preview and every export;
+  studio editor overlays (gizmos, inspector) sit on top. Ends the studio/export drift.
+- [ ] Exports render real GLB actors (embedded within the size budget), world (terrain/sky/water), VFX and rigged animation.
+- [ ] Unified input layer (keyboard, mouse, touch, gamepad) and responsive layouts (portrait/landscape, safe areas, notches).
+- [ ] Device performance profiles (low/mid/high), frame-time budget overlay, WebGL2 default with optional WebGPU.
+- [ ] AI edits as JSON Patch + tool-use loop (faster/cheaper than full SceneSpec regeneration); split `useStudioStore` into slices.
 
-### Phase 7 candidates (from the tech stack evaluation)
-- [ ] Single **OmniStage Player** runtime shared by studio preview, play test and export (ends the two-runtime drift; brings GLB/world to exports).
-- [ ] AI edits as **JSON Patch** + tool-use loop instead of full SceneSpec regeneration (faster, cheaper, safer).
-- [ ] **Desktop packaging** (Electron) for non-coders; split `useStudioStore` into slices; Rapier3D + ECS; Playwright E2E.
+### Phase 8 — Mobile native (Android first, then iOS)
+- [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.
+- [ ] **Android**: generate a Capacitor project (target API 36+), debug APK for sideload testing, signed AAB for Google Play; keystore wizard.
+- [ ] **iOS**: Capacitor Xcode project; build on a Mac or via a cloud build (Codemagic / Capawesome / Capgo, user's own account); TestFlight upload.
+- [ ] **Native capability plugins** (as Extensions): haptics, persistent saves, Game Center / Play Games leaderboards & achievements,
+  in-app purchases, ads SDK, push — also what keeps apps above Apple guideline 4.2 "minimum functionality".
+- [ ] **Store assistant**: icon/splash generation, screenshots from the Player, privacy/data-safety checklist, version & signing checks.
+- [ ] Mobile verifier rules: touch-reachable UI, text size, performance budget per profile, orientation lock.
+
+### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation)
+- [ ] Import analysis & normalisation (weld, clean, decimate > 300k faces, unit scale, up-axis/facing via PCA + symmetry, watertight voxel proxy).
+- [ ] Classification: vision-LLM JSON (humanoid / quadruped / bird / prop, facing, parts) cross-checked by geometry; ask the user when unsure.
+- [ ] Humanoid auto-rig: render → MediaPipe Pose landmarks → back-project to mesh centres → fit Mixamo/VRM-compatible template
+  (symmetry, bone ratios, consistent bone roll) → bone-heat skin weights (TypeScript, WASM when needed).
+- [ ] Validation: stress poses (arm raise, squat, stride) measuring stretch / volume loss / self-intersection + vision-LLM score; rig quality grade.
+- [ ] Animation: own rest-pose retargeter (not `SkeletonUtils.retargetClip`), clip library (Mixamo-format / licensed mocap / provider presets),
+  procedural locomotion (stride from leg length), foot IK on terrain, look-at, spring bones; LLM outputs the animation state machine as JSON.
+- [ ] Manual fix UI: joint gizmos, simple weight painting, "re-rig". Characters saved to the personal library (rigged GLB + `rig.json` + score).
+- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server
+  for non-humanoid creatures. Quadruped / bird templates.
+
+### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
+- [ ] Asset-generation providers as Extensions (BYO key, server proxy, results saved to the library with license/source):
+  3D (Meshy, Tripo, Rodin), 2D sprites (image models via fal.ai / Replicate / OpenRouter), audio (ElevenLabs SFX / music / TTS).
+- [ ] VFX & animation by code as AI skills: AI-authored particle/SFX recipes (available now via extensions), GLSL shader effects in a
+  validated sandbox, procedural tween/sprite animation, all reviewable and installable.
+
+### Later
+- [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.
+- [ ] Exporter plugins beyond the web runtime (e.g. SceneSpec → Godot project) for heavy 3D games, consoles and Steam.
 - [ ] Deterministic video (WebCodecs) with audio; NodeGraphView passive `onWheel` fix.
