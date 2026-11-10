@@ -693,7 +693,7 @@ export const PublishModal: React.FC = () => {
                     onChange={(e) => setOfflineRuntime(e.target.checked)}
                     className="accent-cyan-500"
                   />
-                  <span>Inline Three.js runtime (offline 3D, adds ~540 KB / ~135 KB gzipped)</span>
+                  <span>Embed models & images for offline play (fits within the network size budget)</span>
                 </label>
                 {lastBudget && (
                   <div

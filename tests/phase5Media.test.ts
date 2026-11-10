@@ -7,7 +7,10 @@ import { createParticle2DRuntime, PARTICLE_2D_PRESETS } from '../src/vfx/particl
 import { activeCaptions, captionsFromScript, captionsToSRT, captionsToWebVTT, drawCaptionOnCanvas } from '../src/media/captions';
 import { analyzePlayableBudget, buildZip, crc32, findExternalDependencies } from '../src/exporter/playableBundle';
 import { generateStandaloneHTMLContent } from '../src/exporter/mediaExporter';
-import { THREE_PLAYABLE_EXPORTS, THREE_PLAYABLE_RUNTIME } from '../src/exporter/generated/threePlayableRuntime';
+import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
+import { createPlayerStore } from '../src/player/playerStore';
+import { PLATFORMER_PHYSICS } from '../src/verification/sceneVerifier';
+import { readFileSync } from 'node:fs';
 import { autoFixSceneSpec, verifySceneSpec } from '../src/verification/sceneVerifier';
 import type { SpriteSheetSpec } from '../src/types/scene.schema';
 
@@ -122,7 +125,7 @@ test('ZIP bundles are DEFLATE-compressed, valid and fall back to stored', async 
   assert.equal(stored['index.html'].method, 0);
 });
 
-test('offline playable: inlined Three.js covers every THREE.* use and stays within the Meta budget', () => {
+test('offline playable: the Player export keeps particles, captions and spritesheets in the scene data, within the Meta budget', () => {
   const spec = { ...createBlankSceneSpec('2d'), mode: 'game' as const };
   spec.captions = [{ start: 0, end: 3, text: 'Collect the stars' }];
   spec.nodes2D.push({
@@ -130,20 +133,12 @@ test('offline playable: inlined Three.js covers every THREE.* use and stays with
     opacity: 1, fill: 'transparent', stroke: '#fff', physics2D: 'none', emitter: { preset: 'confetti' },
   });
   const scene3d = createBlankSceneSpec('3d');
-  const html = generateStandaloneHTMLContent(spec, 'meta', [spec, scene3d], { threeRuntimeSource: THREE_PLAYABLE_RUNTIME });
+  const html = generateStandaloneHTMLContent(spec, 'meta', [spec, scene3d], { playerRuntimeSource: PLAYER_RUNTIME });
   const budget = analyzePlayableBudget(html, 'meta');
   assert.equal(budget.offlineReady, true, budget.notes.join('; '));
   assert.equal(budget.withinBudget, true);
-
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  const main = scripts[scripts.length - 1];
-  for (const source of scripts) assert.doesNotThrow(() => new Function(source));
-  const used = new Set([...main.matchAll(/THREE\.([A-Za-z0-9]+)/g)].map((m) => m[1]));
-  for (const name of used) assert.ok(THREE_PLAYABLE_EXPORTS.includes(name), `THREE.${name} missing from the playable runtime`);
-  assert.ok(main.includes('PARTICLES') && main.includes('drawCaptionOnCanvas') && main.includes('spriteFrameAt'));
-
-  const legacy = generateStandaloneHTMLContent(spec, 'meta', [spec]);
-  assert.equal(analyzePlayableBudget(legacy, 'meta').offlineReady, false, 'CDN mode is reported as online-only');
+  for (const m of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Function(m[1]));
+  assert.ok(html.includes('"preset":"confetti"') && html.includes('Collect the stars'));
 });
 
 test('verifier repairs invalid particle presets, spritesheets and captions', () => {
@@ -163,10 +158,10 @@ test('verifier repairs invalid particle presets, spritesheets and captions', () 
   assert.deepEqual(fixed.spec.captions!.map((c) => [c.text, c.end]), [['Backwards', 3], ['Fine', 1]]);
 });
 
-test('exported platformer uses the verifier physics envelope and respawns on pit falls', () => {
-  const spec = { ...createBlankSceneSpec('2d'), mode: 'game' as const };
-  const html = generateStandaloneHTMLContent(spec, 'universal', [spec]);
-  assert.match(html, /const PHYS = \{"jumpVelocity":520,"gravity":882/);
-  assert.ok(!/980 \* dt|-= 280 \* dt|player2dVelY = -4[68]0/.test(html), 'legacy constants removed');
-  assert.ok(!html.includes('n.y = 550'), 'no invisible floor');
+test('exported platformer physics are the studio physics (shared stage2d) and match the verifier envelope', () => {
+  const stage = readFileSync(new URL('../src/runtime/stage2d.ts', import.meta.url), 'utf8');
+  assert.ok(stage.includes(`b.vy = -${PLATFORMER_PHYSICS.jumpVelocity}`), 'jump velocity');
+  const store = createPlayerStore([{ ...createBlankSceneSpec('2d'), mode: 'game' }]);
+  assert.equal(store.getState().settings.physicsGravity * 90, PLATFORMER_PHYSICS.gravity, 'gravity');
+  assert.ok(stage.includes('DESIGN_HEIGHT + 100'), 'pit falls respawn instead of an invisible floor');
 });

@@ -16,9 +16,8 @@ import { EASE_IDS } from '../src/animation/easing';
 import { SFX_PRESET_IDS, GAME_AUDIO_EVENTS } from '../src/audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../src/vfx/particles2D';
 import { captionsToSRT, captionsToWebVTT } from '../src/media/captions';
-import { generateStandaloneHTMLContent, StandaloneAdNetwork } from '../src/exporter/mediaExporter';
-import { analyzePlayableBudget } from '../src/exporter/playableBundle';
-import { THREE_PLAYABLE_RUNTIME } from '../src/exporter/generated/threePlayableRuntime';
+import { buildStandalonePlayable, StandaloneAdNetwork } from '../src/exporter/mediaExporter';
+import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
 import { applyJsonPatch, mergePatch } from '../src/utils/jsonPatch';
 
 export interface ProjectBundle {
@@ -311,7 +310,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
   {
     name: 'omnistage_export_playable',
     description:
-      'Writes a single-file HTML5 playable (Three.js inlined, works offline) for the whole project and returns the size budget report for the ad network.',
+      'Writes a single-file HTML5 playable (OmniStage Player runtime, models/images embedded within the network budget) for the whole project and returns the size budget report.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -325,11 +324,21 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
       const bundle = await requireProject(ctx);
       const scene = pickScene(bundle, args.sceneId);
       const network = (args.network || 'universal') as StandaloneAdNetwork;
-      const html = generateStandaloneHTMLContent(scene, network, bundle.scenes, { threeRuntimeSource: THREE_PLAYABLE_RUNTIME });
+      // OmniStage Player runtime + models / images embedded within the network budget (http(s) URLs only here;
+      // studio-relative library URLs need the studio's export).
+      const { html, budget, embed } = await buildStandalonePlayable(scene, network, bundle.scenes, {
+        playerRuntimeSource: PLAYER_RUNTIME,
+        fetcher: async (url) => {
+          if (!/^https?:\/\//i.test(url)) throw new Error('not an http(s) URL');
+          const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return { bytes: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+        },
+      });
       const out = safeOutputPath(ctx, args.outPath);
       await fs.mkdir(dirname(out), { recursive: true });
       await fs.writeFile(out, html, 'utf8');
-      return { written: out, budget: analyzePlayableBudget(html, network) };
+      return { written: out, budget, embedded: embed?.embedded.map((e) => e.url) ?? [], notEmbedded: embed?.skipped ?? [] };
     },
   },
   {

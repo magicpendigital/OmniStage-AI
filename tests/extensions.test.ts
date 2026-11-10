@@ -9,6 +9,7 @@ import { autoFixSceneSpec, verifySceneSpec } from '../src/verification/sceneVeri
 import { createParticle2DRuntime } from '../src/vfx/particles2D';
 import { createOmniSfxPlayer } from '../src/audio/sfxRuntime';
 import { generateStandaloneHTMLContent } from '../src/exporter/mediaExporter';
+import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
 import { buildMemoryContext, parseExplicitMemory, selectMemories, suggestMemory } from '../src/agent/memory';
 import type { InstalledExtension } from '../src/extensions/types';
 
@@ -60,7 +61,7 @@ test('extension presets travel with the scene: verifier, runtime and export', ()
   assert.ok(rt.particlesAt('coin-shower', 1, 0.5, 100, 100).length > 0);
   assert.ok(createOmniSfxPlayer(spec.sfxLibrary).presets.includes('8bit-coin'));
 
-  const html = generateStandaloneHTMLContent(spec, 'universal', [spec]);
+  const html = generateStandaloneHTMLContent(spec, 'universal', [spec], { playerRuntimeSource: PLAYER_RUNTIME });
   assert.ok(html.includes('"coin-shower"') && html.includes('"8bit-coin"'), 'export inlines the scene libraries');
 });
 

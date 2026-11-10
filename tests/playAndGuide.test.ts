@@ -5,6 +5,7 @@ import { previewOrder, previewDuration } from '../src/playtest/previewOrder';
 import { createPlaySession, getPlaySession, lanAddresses, SESSION_TTL_MS } from '../server/play/playSessions';
 import { createBlankSceneSpec } from '../src/registry/assetRegistry';
 import { generateStandaloneHTMLContent } from '../src/exporter/mediaExporter';
+import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
 
 test('chat answers app-usage questions from the Guide, not creative requests', () => {
   const cases: Array<[string, string | null]> = [
@@ -68,10 +69,10 @@ test('phone play sessions: unguessable tokens, expiry, validation', () => {
 
 test('play test build includes the FPS meter and still compiles', () => {
   const spec = { ...createBlankSceneSpec('2d'), mode: 'game' as const };
-  const html = generateStandaloneHTMLContent(spec, 'universal', [spec], { showFps: true });
+  const html = generateStandaloneHTMLContent(spec, 'universal', [spec], { showFps: true, playerRuntimeSource: PLAYER_RUNTIME });
   assert.ok(html.includes('id="omniFps"'));
   for (const m of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Function(m[1]));
-  assert.ok(!generateStandaloneHTMLContent(spec, 'universal', [spec]).includes('omniFps'), 'off by default for real exports');
+  assert.ok(!generateStandaloneHTMLContent(spec, 'universal', [spec], { playerRuntimeSource: PLAYER_RUNTIME }).includes('omniFps'), 'off by default for real exports');
 });
 
 test('guide answers follow the language of the question', async () => {

@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/renderer/**"
+  - "src/runtime/**"
 ---
 
 # Renderer rules
@@ -12,3 +13,6 @@ paths:
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
 - Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`.
+- Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or
+  anything DOM-only beyond canvas; they read/write state via `runtimeStore` (`src/runtime/host.ts`). Renderers stay thin wrappers so the
+  OmniStage Player runs the same code. Rebuild the Player (`npm run build:player`) after runtime changes.

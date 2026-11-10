@@ -77,14 +77,15 @@ test('store transitions map to audio events', () => {
   assert.deepEqual(detectAudioEvents({ ...base, isPlaying: false, currentTime: 0 }, { ...base, currentTime: 0 }), ['scene-start']);
 });
 
-test('standalone playable export embeds SFX + easing runtimes and compiles', async () => {
+test('standalone playable export carries audio + eased keyframes in the scene data and compiles', async () => {
   const { generateStandaloneHTMLContent } = await import('../src/exporter/mediaExporter');
+  const { PLAYER_RUNTIME } = await import('../src/exporter/generated/playerRuntime');
   const spec = { ...createBlankSceneSpec('2d'), mode: 'game' as const };
   spec.nodes2D[2].keyframeTrack = [{ time: 0, x: 600, y: 380, ease: 'back.out' }, { time: 2, x: 700, y: 380 }];
   spec.audio = { enabled: true, masterVolume: 0.5, cues: { collect: 'powerup' } };
-  const html = generateStandaloneHTMLContent(spec, 'universal', [spec]);
+  const html = generateStandaloneHTMLContent(spec, 'universal', [spec], { playerRuntimeSource: PLAYER_RUNTIME });
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  assert.ok(scripts.length >= 1);
+  assert.ok(scripts.length >= 2);
   for (const source of scripts) assert.doesNotThrow(() => new Function(source), 'inline script must parse');
-  assert.ok(html.includes('OMNI_SFX') && html.includes('OMNI_EASE') && html.includes('keyframedPosition2D'));
+  assert.ok(html.includes('"ease":"back.out"') && html.includes('"collect":"powerup"'));
 });

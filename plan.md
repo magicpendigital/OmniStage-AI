@@ -119,13 +119,31 @@ so that moves to the front.
 - [x] **Guide**: Help center (13 topics, VI/EN, search, "Try it" buttons), first-run tour (6 highlighted steps), and "how do I…?" questions
   in the chat answered from the Guide in the user's language without an AI call.
 
-### Phase 7 — One OmniStage Player runtime (prerequisite for mobile and characters)
-- [ ] Framework-free TypeScript player (Three.js + Canvas2D + WebAudio) shared by studio preview, play test, phone preview and every export;
-  studio editor overlays (gizmos, inspector) sit on top. Ends the studio/export drift.
-- [ ] Exports render real GLB actors (embedded within the size budget), world (terrain/sky/water), VFX and rigged animation.
-- [ ] Unified input layer (keyboard, mouse, touch, gamepad) and responsive layouts (portrait/landscape, safe areas, notches).
-- [ ] Device performance profiles (low/mid/high), frame-time budget overlay, WebGL2 default with optional WebGPU.
-- [ ] AI edits as JSON Patch + tool-use loop (faster/cheaper than full SceneSpec regeneration); split `useStudioStore` into slices.
+### Phase 7 — One OmniStage Player runtime (7A completed 2026-11-10; 7B next)
+**7A — shared runtime + Player (done)**
+- [x] **Shared runtime** (`src/runtime/*`, framework-free): game rules / timeline / logs / level progression extracted from the studio store
+  into `gameSlice.ts`; logic-graph interpreter + contacts (`logicGraph.ts`), 2D frame step / physics / drawing / hit test (`stage2d.ts`),
+  graph sync and terrain math. Both the studio store and the Player store compose the same slice; runtime modules talk to whichever store is
+  bound in `host.ts`. StageCanvas2D shrank from ~1,000 to ~260 lines and now runs `stepStage2D` — the exact frame the Player runs.
+- [x] **OmniStage Player** (`src/player/*`): vanilla store + shared slice, 2D view (shared frame step), 3D view in plain Three.js (sky
+  gradient, terrain height field, water, scatter, weather, GLB actors with skeletal clips via AnimationMixer + cross-fade, procedural
+  stand-ins per asset category, studio camera modes incl. eased keyframe flythrough, VFX, collect bursts), HUD (score/timer/level, sound,
+  fullscreen, 3D captions, marketing CTA), end cards with next level / retry / replay, media sequences, Telegram / MRAID / Meta CTA bridges.
+- [x] **Unified input**: keyboard, on-screen touch controls (platformer ◀▶+JUMP or d-pad+ACT, safe-area aware), gamepads, programmatic keys;
+  responsive letterboxing for 16:9 / 9:16 / 1:1; quality auto-profile (low on weak touch devices: DPR 1, no AA/shadows).
+- [x] **One build for everything**: `scripts/build-player.mjs` → `src/exporter/generated/playerRuntime.ts` (~740 KB / ~200 KB gzip incl.
+  Three.js), lazily loaded. Exports, ZIP, MCP export, Play Test and phone preview all use it; the hand-written export runtime and the separate
+  inlined Three.js build were removed. A test rebuilds the Player and fails if the generated file is stale.
+- [x] **Embedded assets**: GLB models and images are embedded as data URIs smallest-first within the network budget; anything that does not fit
+  stays online and is reported (`offlineReady=false`). Verified: RobotExpressive.glb (453 KB) embedded, 1.36 MB HTML, offline.
+- [x] `step(dt)` / `setKey()` hooks for deterministic testing; verified in the browser: 2D movement + level win → Next level → 3D level with
+  GLB robot, WASD collect (+25), bursts, CTA.
+
+**7B — next**
+- [ ] Studio 3D viewport on the Player renderer (R3F kept only for gizmos/inspector), so 3D editor preview = Play Test pixel for pixel.
+- [ ] Bring studio-only 3D visuals into the Player: planar-reflection water, volumetric clouds, GPU particles, HDRI, procedural composite assets.
+- [ ] Studio-viewport touch input; FPS/perf overlay and quality selector in the studio; optional WebGPU renderer.
+- [ ] AI edits as JSON Patch + tool-use loop; split the rest of `useStudioStore` into slices; Playwright E2E using the Player's `step()` hook.
 
 ### Phase 8 — Mobile native (Android first, then iOS)
 - [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.

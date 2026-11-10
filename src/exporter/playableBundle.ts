@@ -48,11 +48,12 @@ export function findExternalDependencies(html: string): string[] {
   return [...urls];
 }
 
-export function analyzePlayableBudget(html: string, network: StandaloneAdNetwork, zipBytes?: number): PlayableBudgetReport {
+export function analyzePlayableBudget(html: string, network: StandaloneAdNetwork, zipBytes?: number, remoteAssets: string[] = []): PlayableBudgetReport {
   const limit = PLAYABLE_SIZE_LIMITS[network];
   const htmlBytes = byteLength(html);
   const measuredBytes = limit.measuredOn === 'zip' && zipBytes !== undefined ? zipBytes : htmlBytes;
-  const externalDependencies = findExternalDependencies(html);
+  // Scripts / links in the HTML plus models & images the Player will fetch at runtime (not embedded).
+  const externalDependencies = [...new Set([...findExternalDependencies(html), ...remoteAssets.filter((u) => /^(https?:)?\/\//i.test(u) || u.startsWith('/'))])];
   const notes: string[] = [];
   if (externalDependencies.length) notes.push(`Needs network at runtime: ${externalDependencies.join(', ')}`);
   if (measuredBytes > limit.bytes) notes.push(`Over budget by ${formatBytes(measuredBytes - limit.bytes)}.`);
@@ -183,12 +184,6 @@ export async function buildZip(files: ZipInput[], opts: { compress?: boolean; da
   eocd.setUint32(12, cdBytes.length, true);
   eocd.setUint32(16, offset, true);
   return concat([...local, cdBytes, new Uint8Array(eocd.buffer)]);
-}
-
-/** Lazily loads the inlined Three.js runtime (kept out of the main app chunk). */
-export async function loadThreePlayableRuntime(): Promise<string> {
-  const mod = await import('./generated/threePlayableRuntime');
-  return mod.THREE_PLAYABLE_RUNTIME;
 }
 
 /** Safe to place inside an inline <script>: neutralises any `</script` sequence in the source. */

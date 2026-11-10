@@ -5,6 +5,8 @@ paths:
   - "src/animation/**"
   - "src/vfx/**"
   - "src/media/**"
+  - "src/player/**"
+  - "scripts/build-player.mjs"
   - "src/components/PublishModal.tsx"
 ---
 
@@ -15,8 +17,9 @@ paths:
   outer references inside it); easing ships as `EASING_RUNTIME_SOURCE` and `tests/motionAudio.test.ts` checks it matches `EASINGS`.
 - After touching the exporter run `npm test`; the "standalone playable export ... compiles" test parses every inline script.
 - Keep both `'2d'` and `'3d'` scenes and every scene in `scenes[]` playable in the export.
-- The inlined Three.js (`src/exporter/generated/threePlayableRuntime.ts`) only contains `PLAYABLE_THREE_EXPORTS`. Using a new `THREE.X`
-  in the inline script requires adding it in `scripts/build-playable-three.mjs` and running `npm run build:playable-three`
-  (a test fails otherwise). Never hand-edit the generated file.
-- Exported 2D physics must use `PLATFORMER_PHYSICS` from the verifier, so levels approved by the verifier stay beatable.
-- `createParticle2DRuntime`, `spriteFrameAt`, `drawCaptionOnCanvas`, `createOmniSfxPlayer` are inlined with `toString()`: no outer references.
+- Exports run the OmniStage Player (`src/player/*`, bundled by `npm run build:player` into `src/exporter/generated/playerRuntime.ts`).
+  Never add game logic to the exporter: put it in `src/runtime/*` so the studio and the Player share it. After changing `src/player`,
+  `src/runtime` or anything they import, run `npm run build:player` (tests/player.test.ts fails on a stale bundle). Never hand-edit the generated file.
+- Scene data goes into the HTML through `inlineJSON` only (escapes `<`, U+2028/2029); asset embedding must respect the network budget and
+  report what stays online.
+- 2D physics live in `src/runtime/stage2d.ts` and must match `PLATFORMER_PHYSICS` in the verifier, so verified levels stay beatable everywhere.

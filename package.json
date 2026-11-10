@@ -14,8 +14,8 @@
     "test": "tsx --test tests/*.test.ts",
     "verify": "npm run lint && npm test",
     "mcp": "tsx mcp/server.ts",
-    "build:playable-three": "node scripts/build-playable-three.mjs",
-    "review:agent": "bash scripts/agent-review.sh"
+    "review:agent": "bash scripts/agent-review.sh",
+    "build:player": "node scripts/build-player.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

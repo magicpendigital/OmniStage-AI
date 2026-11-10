@@ -73,7 +73,17 @@ export function previewSfx(presetId: string, volume = 0.6, library?: Record<stri
   p.play(presetId, volume);
 }
 
+let muted = false;
+/** Global mute (Player sound toggle). */
+export function setSfxMuted(value: boolean) {
+  muted = value;
+}
+export function isSfxMuted() {
+  return muted;
+}
+
 export function playSceneSfx(spec: Pick<SceneSpec, 'audio' | 'mode' | 'sfxLibrary'>, event: GameAudioEvent) {
+  if (muted) return;
   const cue = cueFor(spec, event);
   if (!cue) return;
   getPlayer(spec.sfxLibrary).play(cue, resolveAudioSpec(spec).masterVolume);

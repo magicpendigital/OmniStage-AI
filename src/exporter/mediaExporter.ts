@@ -1,18 +1,6 @@
 import { SceneSpec } from '../types/scene.schema';
-import { createOmniSfxPlayer } from '../audio/sfxRuntime';
-import { DEFAULT_AUDIO_CUES } from '../audio/audioBus';
-import { EASING_RUNTIME_SOURCE } from '../animation/easing';
-import { spriteFrameAt } from '../animation/spriteSheet';
-import { createParticle2DRuntime } from '../vfx/particles2D';
-import { drawCaptionOnCanvas } from '../media/captions';
-import { PLATFORMER_PHYSICS } from '../verification/sceneVerifier';
-import {
-  analyzePlayableBudget,
-  buildZip,
-  escapeInlineScript,
-  loadThreePlayableRuntime,
-  PlayableBudgetReport,
-} from './playableBundle';
+import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
+import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML } from './playerHtml';
 
 /**
  * Utility: Trigger browser file download via temporary anchor element.
@@ -499,13 +487,6 @@ export function exportSceneSpecJSON(sceneSpec: SceneSpec, scenes?: SceneSpec[]) 
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-/** Phase 6: union of extension presets used by any scene (so one inlined runtime serves every scene). */
-function mergeLibraries(scenes: SceneSpec[], key: 'sfxLibrary' | 'particleLibrary'): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const s of scenes) Object.assign(out, s[key] || {});
-  return out;
-}
-
 /**
  * Options for Standalone HTML5 Game & Playable Ad Generation.
  */
@@ -516,18 +497,20 @@ export interface StandalonePlayerOptions {
   enableMobileTouchControls?: boolean;
   enableProceduralAudio?: boolean;
   responsiveScaling?: boolean;
-  /**
-   * Phase 5: Three.js runtime source inlined into the HTML so 3D exports run offline.
-   * When omitted the legacy CDN tag (three r128 from cdnjs) is used.
-   */
-  threeRuntimeSource?: string;
+  /** Phase 7: OmniStage Player runtime source (loaded lazily by buildStandalonePlayable when omitted). */
+  playerRuntimeSource?: string;
+  /** Phase 7: asset URL → data URI map embedded in the HTML. */
+  assets?: Record<string, string>;
   /** Phase 6 batch 2: show an FPS / frame-time meter (Play Test). */
   showFps?: boolean;
+  quality?: 'auto' | 'low' | 'high';
 }
 
 export interface PlayableBuildResult {
   html: string;
   budget: PlayableBudgetReport;
+  /** Phase 7: which models / images were embedded for offline play. */
+  embed?: EmbedResult;
 }
 
 /**
@@ -637,9 +620,8 @@ export function createZipBlob(files: ZipFileEntry[]): Blob {
 }
 
 /**
- * 5. Generate Standalone HTML5 Game / Playable Ad String.
- * Self-contained, responsive, multi-scene, dual 3D/2D engines, procedural audio synth,
- * mobile touch controls, level progression, and ad network compliance.
+ * 5. Standalone HTML5 game / playable ad, powered by the OmniStage Player (Phase 7): the same runtime as the
+ * studio's Play Test and phone preview, so what you test is what ships.
  */
 export function generateStandaloneHTMLContent(
   sceneSpec: SceneSpec,
@@ -647,633 +629,20 @@ export function generateStandaloneHTMLContent(
   scenes?: SceneSpec[],
   options?: StandalonePlayerOptions
 ): string {
-  const syncedScenes =
-    scenes && scenes.length > 0
-      ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s))
-      : [sceneSpec];
+  if (!options?.playerRuntimeSource) throw new Error('playerRuntimeSource is required (use buildStandalonePlayable in the browser)');
+  return generatePlayerHTML(sceneSpec, targetNetwork, scenes && scenes.length ? scenes : [sceneSpec], {
+    playerRuntimeSource: options.playerRuntimeSource,
+    assets: options.assets,
+    touchControls: options.enableMobileTouchControls === false ? false : 'auto',
+    sound: options.enableProceduralAudio !== false,
+    showFps: options.showFps,
+    quality: options.quality,
+  });
+}
 
-  const bundleJson = JSON.stringify(syncedScenes);
-  const activeIdJson = JSON.stringify(sceneSpec.id);
-  const autoProgress = options?.autoProgressScenes ?? true;
-  const mobileControls = options?.enableMobileTouchControls ?? true;
-  const proceduralAudio = options?.enableProceduralAudio ?? true;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>${sceneSpec.title} — OmniStage Standalone Game (${targetNetwork.toUpperCase()})</title>
-  ${targetNetwork === 'telegram' ? '<script src="https://telegram.org/js/telegram-web-app.js"></script>' : ''}
-  ${targetNetwork === 'tiktok' ? '<script src="mraid.js"></script>' : ''}
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
-    body, html { width: 100%; height: 100%; overflow: hidden; background: ${sceneSpec.environment?.backgroundColor || '#0B101B'}; font-family: system-ui, -apple-system, sans-serif; color: #F8FAFC; }
-    .stage-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
-    .hud-top { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; z-index: 20; }
-    .hud-left, .hud-right { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
-    .pill { background: rgba(9, 13, 22, 0.9); border: 1px solid rgba(6, 182, 212, 0.45); padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-    .engine-badge { background: rgba(6, 182, 212, 0.2); border: 1px solid rgba(6, 182, 212, 0.55); color: #67E8F9; padding: 5px 9px; border-radius: 7px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-    .scene-select { background: rgba(9, 13, 22, 0.92); border: 1px solid rgba(148, 163, 184, 0.4); color: #F8FAFC; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; outline: none; }
-    .icon-btn { background: rgba(9, 13, 22, 0.9); border: 1px solid rgba(148, 163, 184, 0.4); color: #F8FAFC; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; }
-    .cta-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); width: min(440px, 92vw); background: rgba(9, 13, 22, 0.94); border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; z-index: 25; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
-    .cta-btn { background: ${sceneSpec.marketingOverlay?.brandColor || '#F59E0B'}; color: #090D16; font-weight: 800; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 12px; text-transform: uppercase; white-space: nowrap; transition: transform 0.1s; }
-    .cta-btn:active { transform: scale(0.96); }
-    .toast-banner { position: fixed; top: 62px; left: 50%; transform: translateX(-50%); background: rgba(16, 185, 129, 0.95); color: #052E16; font-weight: 800; font-size: 13px; padding: 8px 18px; border-radius: 999px; z-index: 30; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
-    .overlay-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.82); display: none; align-items: center; justify-content: center; z-index: 50; p: 16px; }
-    .overlay-card { background: #0F172A; border: 1px solid #334155; border-radius: 16px; padding: 24px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 24px 48px rgba(0,0,0,0.7); }
-    .modal-btn { padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 13px; border: none; cursor: pointer; margin-top: 14px; text-transform: uppercase; }
-    /* Mobile Virtual Controls */
-    .mobile-controls { position: fixed; bottom: 84px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 24; }
-    .dpad-btn { width: 56px; height: 56px; border-radius: 28px; background: rgba(15, 23, 42, 0.85); border: 2px solid rgba(6, 182, 212, 0.6); color: #67E8F9; font-size: 22px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
-    .dpad-btn:active { background: rgba(6, 182, 212, 0.4); transform: scale(0.92); }
-    .jump-btn { width: 68px; height: 68px; border-radius: 34px; background: rgba(245, 158, 11, 0.88); border: 2px solid #F59E0B; color: #090D16; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
-    .jump-btn:active { background: #FCD34D; transform: scale(0.92); }
-  </style>
-  ${options?.threeRuntimeSource
-    ? `<script>${escapeInlineScript(options.threeRuntimeSource)}</script>`
-    : '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>'}
-</head>
-<body>
-  ${options?.showFps ? `<div id="omniFps" style="position:fixed;left:8px;bottom:8px;z-index:40;font:600 11px ui-monospace,monospace;color:#A7F3D0;background:rgba(2,6,23,.75);padding:3px 6px;border-radius:6px;pointer-events:none">-- fps</div>
-  <script>
-    (function () {
-      var el = document.getElementById('omniFps'); var frames = 0; var last = performance.now(); var worst = 0; var prev = last;
-      function tick(now) { frames++; worst = Math.max(worst, now - prev); prev = now;
-        if (now - last >= 500) { var fps = Math.round(frames * 1000 / (now - last));
-          el.textContent = fps + ' fps · worst ' + Math.round(worst) + ' ms'; el.style.color = fps >= 55 ? '#A7F3D0' : fps >= 30 ? '#FDE68A' : '#FCA5A5';
-          frames = 0; worst = 0; last = now; }
-        requestAnimationFrame(tick); }
-      requestAnimationFrame(tick);
-    })();
-  </script>` : ''}
-  <div class="hud-top">
-    <div class="hud-left">
-      <span class="engine-badge" id="engineBadge">${(sceneSpec.engineType || '3d').toUpperCase()}</span>
-      <div class="pill" id="scoreDisplay">SCORE: 0 / ${sceneSpec.gameRules?.targetScore || 100}</div>
-      <div class="pill" id="timerDisplay">${Math.ceil(sceneSpec.gameRules?.timeLimitSeconds || 60)}s</div>
-    </div>
-    <div class="hud-right">
-      <select class="scene-select" id="sceneSelect" style="display:none;"></select>
-      <button class="icon-btn" id="audioToggleBtn" title="Toggle Sound">🔊</button>
-      <button class="icon-btn" id="fsToggleBtn" title="Toggle Fullscreen">⛶</button>
-      <div class="pill" id="badgeText">${sceneSpec.marketingOverlay?.badgeText || 'PLAYABLE GAME'}</div>
-    </div>
-  </div>
-
-  <div class="toast-banner" id="toastBanner"></div>
-
-  <canvas id="stage3d" class="stage-canvas"></canvas>
-  <canvas id="stage2d" class="stage-canvas" style="display:none;"></canvas>
-  <div id="captionBar" style="position:fixed;left:0;right:0;bottom:9%;display:flex;justify-content:center;pointer-events:none;z-index:20;padding:0 24px;"></div>
-
-  <!-- Mobile Virtual Controls -->
-  <div class="mobile-controls" id="mobileControls" style="${mobileControls ? '' : 'display:none;'}">
-    <div style="display:flex;gap:12px;">
-      <div class="dpad-btn" id="btnLeft">◄</div>
-      <div class="dpad-btn" id="btnRight">►</div>
-    </div>
-    <div class="jump-btn" id="btnJump">JUMP</div>
-  </div>
-
-  <!-- Marketing CTA Bar -->
-  <div class="cta-bar" id="ctaBar">
-    <div style="min-width:0;">
-      <div id="headlineText" style="font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sceneSpec.marketingOverlay?.headline || sceneSpec.title}</div>
-      <div id="subheadlineText" style="font-size:11px;color:#94A3B8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sceneSpec.marketingOverlay?.subheadline || ''}</div>
-    </div>
-    <button class="cta-btn" id="ctaBtn">${sceneSpec.marketingOverlay?.ctaText || 'Play Now'}</button>
-  </div>
-
-  <!-- Victory / Level Complete Modal -->
-  <div class="overlay-modal" id="levelModal">
-    <div class="overlay-card">
-      <div style="font-size:36px;margin-bottom:8px;" id="modalIcon">🏆</div>
-      <h2 style="font-size:20px;font-weight:800;color:#F8FAFC;" id="modalTitle">LEVEL COMPLETED!</h2>
-      <p style="font-size:13px;color:#94A3B8;margin-top:6px;" id="modalSubtitle">You reached the target score!</p>
-      <div style="margin-top:16px;background:#1E293B;padding:12px;border-radius:10px;font-weight:700;font-size:14px;color:#38BDF8;" id="modalScore">Score: 100 PTS</div>
-      <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;">
-        <button class="modal-btn" id="modalNextBtn" style="background:#06B6D4;color:#090D16;flex:1;">Next Scene ⏩</button>
-        <button class="modal-btn" id="modalReplayBtn" style="background:#334155;color:#F8FAFC;">Replay</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // Embedded Storyboard Scenes Bundle
-    const SCENES_BUNDLE = ${bundleJson};
-    let activeSceneId = ${activeIdJson};
-    let SCENE_SPEC = SCENES_BUNDLE.find((s) => s.id === activeSceneId) || SCENES_BUNDLE[0];
-    const AUTO_PROGRESS = ${autoProgress ? 'true' : 'false'};
-
-    let score = 0;
-    let timeRemaining = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.timeLimitSeconds) || 60;
-    let isGameOver = false;
-    let isSoundMuted = false;
-
-    // --- PHASE 4: SHARED PROCEDURAL SFX RUNTIME (same synth as the studio, no audio files) ---
-    var __name = function (f) { return f; };
-    const OMNI_SFX = (${createOmniSfxPlayer.toString()})(${JSON.stringify(mergeLibraries(syncedScenes, 'sfxLibrary'))});
-    const DEFAULT_AUDIO_CUES = ${JSON.stringify(DEFAULT_AUDIO_CUES)};
-${EASING_RUNTIME_SOURCE}
-    function initAudio() {
-      OMNI_SFX.unlock();
-    }
-
-    function playSynthSound(type) {
-      if (isSoundMuted || !${proceduralAudio ? 'true' : 'false'}) return;
-      const audio = SCENE_SPEC.audio;
-      if (audio && audio.enabled === false) return;
-      const event = type === 'coin' ? 'collect' : type;
-      const cues = Object.assign({}, DEFAULT_AUDIO_CUES, (audio && audio.cues) || {});
-      const preset = cues[event];
-      if (!preset || preset === 'none') return;
-      OMNI_SFX.play(preset, audio && typeof audio.masterVolume === 'number' ? audio.masterVolume : 0.6);
-    }
-
-    // --- PHASE 5: SHARED 2D RUNTIMES (particles, spritesheets, captions) ---
-    const PARTICLES = (${createParticle2DRuntime.toString()})(${JSON.stringify(mergeLibraries(syncedScenes, 'particleLibrary'))});
-    ${spriteFrameAt.toString()}
-    ${drawCaptionOnCanvas.toString()}
-    let sceneStartedAt = performance.now() / 1000;
-    // Same platformer envelope as the studio stage and the verifier, so verified levels stay beatable here.
-    const PHYS = ${JSON.stringify(PLATFORMER_PHYSICS)};
-    const spriteImages = {};
-    function sceneTime() { return performance.now() / 1000 - sceneStartedAt; }
-    function activeCaptionCues(time) {
-      return (SCENE_SPEC.captions || []).filter((c) => time >= c.start && time < c.end && String(c.text || '').trim());
-    }
-    function getSpriteImage(url) {
-      if (!spriteImages[url]) { const img = new Image(); img.src = url; spriteImages[url] = img; }
-      return spriteImages[url];
-    }
-    function playerClipName(sheet, moving, grounded) {
-      const clips = sheet.clips || {};
-      if (!grounded && clips.jump) return 'jump';
-      if (moving && clips.run) return 'run';
-      if (clips.idle) return 'idle';
-      return sheet.activeClip;
-    }
-
-    function keyframedPosition2D(n, t) {
-      const track = n.keyframeTrack;
-      if (!track || !track.length) return null;
-      const keys = track.slice().sort((a, b) => a.time - b.time);
-      const duration = Math.max(keys[keys.length - 1].time, SCENE_SPEC.durationSeconds || 8);
-      const time = SCENE_SPEC.mode === 'media' ? t % duration : Math.min(t, duration);
-      if (time <= keys[0].time) return { x: keys[0].x, y: keys[0].y };
-      const last = keys[keys.length - 1];
-      if (time >= last.time) return { x: last.x, y: last.y };
-      let i = 1;
-      while (i < keys.length && keys[i].time <= time) i++;
-      const a = keys[i - 1], b = keys[i];
-      const p = OMNI_EASE(a.ease, (time - a.time) / Math.max(0.0001, b.time - a.time));
-      return { x: a.x + (b.x - a.x) * p, y: a.y + (b.y - a.y) * p };
-    }
-
-    // Audio & Fullscreen Buttons
-    document.getElementById('audioToggleBtn').addEventListener('click', () => {
-      initAudio();
-      isSoundMuted = !isSoundMuted;
-      document.getElementById('audioToggleBtn').textContent = isSoundMuted ? '🔇' : '🔊';
-    });
-
-    document.getElementById('fsToggleBtn').addEventListener('click', () => {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen?.();
-      } else {
-        document.exitFullscreen?.();
-      }
-    });
-
-    function showNotice(msg) {
-      const el = document.getElementById('toastBanner');
-      el.textContent = msg;
-      el.style.display = 'block';
-      clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);
-    }
-
-    // Storyboard Scene Selector
-    const sceneSelect = document.getElementById('sceneSelect');
-    if (SCENES_BUNDLE.length > 1) {
-      sceneSelect.style.display = 'block';
-      SCENES_BUNDLE.forEach((sc, idx) => {
-        const opt = document.createElement('option');
-        opt.value = sc.id;
-        opt.textContent = (idx + 1) + '. ' + sc.title + ' [' + (sc.engineType || '3d').toUpperCase() + ']';
-        if (sc.id === SCENE_SPEC.id) opt.selected = true;
-        sceneSelect.appendChild(opt);
-      });
-      sceneSelect.addEventListener('change', (e) => {
-        switchActiveScene(e.target.value);
-      });
-    }
-
-    function switchActiveScene(sceneId) {
-      const found = SCENES_BUNDLE.find((s) => s.id === sceneId);
-      if (found) {
-        SCENE_SPEC = JSON.parse(JSON.stringify(found));
-        activeSceneId = SCENE_SPEC.id;
-        score = 0;
-        timeRemaining = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.timeLimitSeconds) || 60;
-        isGameOver = false;
-        document.getElementById('levelModal').style.display = 'none';
-        sceneSelect.value = SCENE_SPEC.id;
-        syncHudAndEngine();
-      }
-    }
-
-    // Ad Network CTA Trigger Hooks
-    document.getElementById('ctaBtn').addEventListener('click', () => {
-      const targetUrl = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.ctaUrl) || 'https://example.com';
-      if (window.Telegram && window.Telegram.WebApp) {
-        window.Telegram.WebApp.HapticFeedback?.impactOccurred('medium');
-        window.Telegram.WebApp.openLink?.(targetUrl);
-      } else if (window.mraid && window.mraid.open) {
-        window.mraid.open(targetUrl);
-      } else if (window.FbPlayableAd && window.FbPlayableAd.onCTAClick) {
-        window.FbPlayableAd.onCTAClick();
-      } else {
-        showNotice('CTA Triggered: ' + (SCENE_SPEC.marketingOverlay?.ctaText || 'Action') + ' -> ' + targetUrl);
-      }
-    });
-
-    // Keyboard state
-    const keys = {};
-    window.addEventListener('keydown', (e) => { initAudio(); keys[e.key.toLowerCase()] = true; });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-
-    // Touch D-Pad bindings
-    const bindTouch = (elId, keyName) => {
-      const el = document.getElementById(elId);
-      if (!el) return;
-      el.addEventListener('pointerdown', (e) => { e.preventDefault(); initAudio(); keys[keyName] = true; });
-      el.addEventListener('pointerup', (e) => { e.preventDefault(); keys[keyName] = false; });
-      el.addEventListener('pointerleave', (e) => { e.preventDefault(); keys[keyName] = false; });
-    };
-    bindTouch('btnLeft', 'arrowleft');
-    bindTouch('btnRight', 'arrowright');
-    bindTouch('btnJump', 'arrowup');
-
-    // --- 3D ENGINE ---
-    const canvas3d = document.getElementById('stage3d');
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas3d, antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-    let scene3d = new THREE.Scene();
-    let camera3d = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 160);
-    let actorMeshes = [];
-
-    function build3DScene() {
-      sceneStartedAt = performance.now() / 1000;
-      scene3d = new THREE.Scene();
-      scene3d.background = new THREE.Color((SCENE_SPEC.environment && SCENE_SPEC.environment.backgroundColor) || '#0B101B');
-      camera3d = new THREE.PerspectiveCamera((SCENE_SPEC.camera && SCENE_SPEC.camera.fov) || 45, window.innerWidth / window.innerHeight, 0.1, 160);
-      camera3d.position.set(...((SCENE_SPEC.camera && SCENE_SPEC.camera.position) || [0, 3.2, 7.5]));
-      camera3d.lookAt(...((SCENE_SPEC.camera && SCENE_SPEC.camera.target) || [0, 0.9, 0]));
-
-      // three >= r155 uses physically based light units: scale legacy intensities so both runtimes look alike.
-      const LIGHT_SCALE = parseInt(THREE.REVISION, 10) >= 155 ? Math.PI : 1;
-      scene3d.add(new THREE.HemisphereLight(SCENE_SPEC.environment?.keyLightColor || '#38BDF8', SCENE_SPEC.environment?.groundColor || '#0F172A', 0.9 * LIGHT_SCALE));
-      const dirLight = new THREE.DirectionalLight(SCENE_SPEC.environment?.keyLightColor || '#ffffff', 2.0 * LIGHT_SCALE);
-      dirLight.position.set(5, 9, 6);
-      scene3d.add(dirLight);
-
-      // Procedural Terrain
-      const terrainCfg = SCENE_SPEC.world && SCENE_SPEC.world.terrain;
-      const groundGeo = new THREE.PlaneGeometry(36, 36, 32, 32);
-      if (terrainCfg && terrainCfg.type && terrainCfg.type !== 'flat' && terrainCfg.type !== 'none') {
-        const pos = groundGeo.attributes.position;
-        const hScale = terrainCfg.heightScale || 2.5;
-        for (let i = 0; i < pos.count; i++) {
-          const x = pos.getX(i);
-          const y = pos.getY(i);
-          const d = Math.sqrt(x * x + y * y);
-          const edge = Math.min(1, Math.max(0, (d - 3.0) / 5.0));
-          pos.setZ(i, (Math.sin(x * 0.25) * Math.cos(y * 0.25)) * hScale * edge);
-        }
-        groundGeo.computeVertexNormals();
-      }
-      const groundMat = new THREE.MeshStandardMaterial({
-        color: (terrainCfg && terrainCfg.primaryColor) || SCENE_SPEC.environment?.groundColor || '#1E293B',
-        roughness: 0.85,
-        metalness: 0.12
-      });
-      const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-      groundMesh.rotation.x = -Math.PI / 2;
-      scene3d.add(groundMesh);
-
-      const grid = new THREE.GridHelper(28, 28, SCENE_SPEC.environment?.rimLightColor || '#06B6D4', '#1E293B');
-      grid.position.y = 0.02;
-      scene3d.add(grid);
-
-      actorMeshes = [];
-      (SCENE_SPEC.actors || []).forEach((a) => {
-        const group = new THREE.Group();
-        const mat = new THREE.MeshStandardMaterial({ color: a.primaryColor || '#06B6D4', metalness: a.metalness ?? 0.65, roughness: a.roughness ?? 0.28 });
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.65, 0.22, 24), new THREE.MeshStandardMaterial({ color: '#1E293B' }));
-        base.position.y = 0.11;
-        const body = new THREE.Mesh(new THREE.OctahedronGeometry(0.55, 1), mat);
-        body.position.y = 0.95;
-        group.add(base, body);
-        group.position.set(...(a.position || [0, 0, 0]));
-        group.scale.set(...(a.scale || [1, 1, 1]));
-        group.userData = { actor: a, baseScale: [...(a.scale || [1, 1, 1])] };
-        scene3d.add(group);
-        actorMeshes.push(group);
-      });
-    }
-
-    // --- 2D ENGINE ---
-    const canvas2d = document.getElementById('stage2d');
-    const ctx2d = canvas2d.getContext('2d');
-    let nodes2D = [];
-    let player2dVelY = 0;
-    let player2dGrounded = false;
-
-    function build2DScene() {
-      sceneStartedAt = performance.now() / 1000;
-      canvas2d.width = 1000;
-      canvas2d.height = 600;
-      nodes2D = JSON.parse(JSON.stringify(SCENE_SPEC.nodes2D || []));
-      player2dVelY = 0;
-      player2dGrounded = false;
-    }
-
-    function checkLevelProgression() {
-      const targetScore = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.targetScore) || 100;
-      if (score >= targetScore && !isGameOver) {
-        isGameOver = true;
-        playSynthSound('win');
-        if (window.Telegram?.WebApp?.HapticFeedback) {
-          window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-        }
-
-        const currentIdx = SCENES_BUNDLE.findIndex((s) => s.id === SCENE_SPEC.id);
-        const hasNext = currentIdx >= 0 && currentIdx < SCENES_BUNDLE.length - 1;
-
-        const modal = document.getElementById('levelModal');
-        const modalTitle = document.getElementById('modalTitle');
-        const modalSubtitle = document.getElementById('modalSubtitle');
-        const modalScore = document.getElementById('modalScore');
-        const nextBtn = document.getElementById('modalNextBtn');
-
-        modalScore.textContent = 'Final Score: ' + score + ' PTS';
-
-        if (hasNext) {
-          modalTitle.textContent = 'SCENE CLEARED! 🏆';
-          modalSubtitle.textContent = 'Advancing to Scene ' + (currentIdx + 2) + ': ' + SCENES_BUNDLE[currentIdx + 1].title;
-          nextBtn.textContent = 'Next Scene ⏩';
-          nextBtn.onclick = () => {
-            switchActiveScene(SCENES_BUNDLE[currentIdx + 1].id);
-          };
-          if (AUTO_PROGRESS) {
-            setTimeout(() => {
-              if (isGameOver) switchActiveScene(SCENES_BUNDLE[currentIdx + 1].id);
-            }, 2400);
-          }
-        } else {
-          modalTitle.textContent = 'VICTORY! ALL LEVELS CLEARED 🎉';
-          modalSubtitle.textContent = 'Congratulations! You mastered all storyboard scenes.';
-          nextBtn.textContent = SCENE_SPEC.marketingOverlay?.ctaText || 'Play Again';
-          nextBtn.onclick = () => {
-            document.getElementById('ctaBtn').click();
-          };
-        }
-
-        document.getElementById('modalReplayBtn').onclick = () => {
-          switchActiveScene(SCENE_SPEC.id);
-        };
-
-        modal.style.display = 'flex';
-      }
-    }
-
-    function updateScoreUI() {
-      document.getElementById('scoreDisplay').textContent = 'SCORE: ' + score + ' / ' + ((SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.targetScore) || 100);
-      document.getElementById('timerDisplay').textContent = Math.max(0, Math.ceil(timeRemaining)) + 's';
-      checkLevelProgression();
-    }
-
-    function syncHudAndEngine() {
-      const is2D = SCENE_SPEC.engineType === '2d';
-      document.getElementById('engineBadge').textContent = is2D ? '2D ENGINE' : '3D ENGINE';
-      document.getElementById('badgeText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.badgeText) || 'PLAYABLE GAME';
-      document.getElementById('headlineText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.headline) || SCENE_SPEC.title;
-      document.getElementById('subheadlineText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.subheadline) || '';
-      document.getElementById('ctaBtn').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.ctaText) || 'Play Now';
-      document.getElementById('ctaBtn').style.background = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.brandColor) || '#F59E0B';
-      updateScoreUI();
-
-      if (is2D) {
-        canvas3d.style.display = 'none';
-        canvas2d.style.display = 'block';
-        build2DScene();
-      } else {
-        canvas2d.style.display = 'none';
-        canvas3d.style.display = 'block';
-        build3DScene();
-      }
-    }
-
-    // Pointer Interaction
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-
-    window.addEventListener('pointerdown', (e) => {
-      initAudio();
-      if (e.target.closest('.cta-bar') || e.target.closest('.hud-top') || e.target.closest('.overlay-modal') || e.target.closest('.mobile-controls')) return;
-
-      if (SCENE_SPEC.engineType === '2d') {
-        const rect = canvas2d.getBoundingClientRect();
-        const px = ((e.clientX - rect.left) / rect.width) * 1000;
-        const py = ((e.clientY - rect.top) / rect.height) * 600;
-        let hitAny = false;
-        nodes2D.forEach((n) => {
-          if (px >= n.x - n.width / 2 && px <= n.x + n.width / 2 && py >= n.y - n.height / 2 && py <= n.y + n.height / 2) {
-            hitAny = true;
-            score += n.scoreValue || 20;
-            playSynthSound('coin');
-            updateScoreUI();
-          }
-        });
-        if (!hitAny && player2dGrounded) {
-          player2dVelY = -PHYS.jumpVelocity;
-          player2dGrounded = false;
-          playSynthSound('jump');
-        }
-      } else {
-        pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-        pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera3d);
-        const hits = raycaster.intersectObjects(actorMeshes, true);
-        if (hits.length > 0) {
-          let obj = hits[0].object;
-          while (obj.parent && !obj.userData.actor) obj = obj.parent;
-          const actor = obj.userData.actor;
-          if (actor) {
-            score += actor.scoreValue || 15;
-            playSynthSound('coin');
-            updateScoreUI();
-            obj.scale.set(1.3, 1.3, 1.3);
-          }
-        }
-      }
-    });
-
-    window.addEventListener('resize', () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      camera3d.aspect = window.innerWidth / window.innerHeight;
-      camera3d.updateProjectionMatrix();
-    });
-
-    // Telegram Mini App initial handshake
-    if (window.Telegram && window.Telegram.WebApp) {
-      window.Telegram.WebApp.ready();
-      window.Telegram.WebApp.expand?.();
-      if (SCENE_SPEC.environment?.backgroundColor) {
-        window.Telegram.WebApp.setHeaderColor?.(SCENE_SPEC.environment.backgroundColor);
-        window.Telegram.WebApp.setBackgroundColor?.(SCENE_SPEC.environment.backgroundColor);
-      }
-    }
-
-    syncHudAndEngine();
-
-    // Main Game Loop
-    const clock = new THREE.Clock();
-    function animate() {
-      requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.05);
-      const t = clock.getElapsedTime();
-
-      if (!isGameOver && timeRemaining > 0) {
-        timeRemaining -= dt;
-        if (timeRemaining <= 0) {
-          timeRemaining = 0;
-          checkLevelProgression();
-        }
-        document.getElementById('timerDisplay').textContent = Math.max(0, Math.ceil(timeRemaining)) + 's';
-      }
-
-      if (SCENE_SPEC.engineType === '2d') {
-        ctx2d.fillStyle = (SCENE_SPEC.environment && SCENE_SPEC.environment.backgroundColor) || '#0B101B';
-        ctx2d.fillRect(0, 0, 1000, 600);
-
-        const platforms = nodes2D.filter((n) => n.physics2D === 'static-platform');
-        nodes2D.forEach((n) => {
-          if (n.physics2D === 'player-platformer') {
-            if (keys['a'] || keys['arrowleft']) n.x -= PHYS.runSpeed * dt;
-            if (keys['d'] || keys['arrowright']) n.x += PHYS.runSpeed * dt;
-            n.x = Math.max(n.width / 2, Math.min(1000 - n.width / 2, n.x));
-            if ((keys['w'] || keys['arrowup'] || keys[' ']) && player2dGrounded) {
-              player2dVelY = -PHYS.jumpVelocity;
-              player2dGrounded = false;
-              playSynthSound('jump');
-            }
-            player2dVelY += PHYS.gravity * dt;
-            n.y += player2dVelY * dt;
-            player2dGrounded = false;
-
-            platforms.forEach((p) => {
-              const overlapX = Math.abs(n.x - p.x) < (n.width + p.width) / 2;
-              const pTop = p.y - p.height / 2;
-              if (overlapX && player2dVelY >= 0 && n.y + n.height / 2 >= pTop && n.y + n.height / 2 <= pTop + 24) {
-                n.y = pTop - n.height / 2;
-                player2dVelY = 0;
-                player2dGrounded = true;
-              }
-            });
-
-            // Falling into a pit respawns at the start (matches the studio stage).
-            if (n.y > 700) {
-              const spawn = (SCENE_SPEC.nodes2D || []).find((o) => o.id === n.id);
-              n.x = spawn ? spawn.x : 100;
-              n.y = spawn ? spawn.y : 400;
-              player2dVelY = 0;
-            }
-          }
-        });
-
-        // Collectibles collision check
-        const player = nodes2D.find((n) => n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown');
-        if (player) {
-          nodes2D = nodes2D.filter((n) => {
-            if (n.physics2D === 'collectible') {
-              const hit = Math.hypot(player.x - n.x, player.y - n.y) < (player.width + n.width) * 0.45;
-              if (hit) {
-                score += n.scoreValue || 25;
-                playSynthSound('coin');
-                updateScoreUI();
-                return false;
-              }
-            }
-            return true;
-          });
-        }
-
-        const st = sceneTime();
-        nodes2D.slice().sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).forEach((n) => {
-          if (n.visible === false) return;
-          ctx2d.save();
-          const isPlayer = n.physics2D && n.physics2D.indexOf('player-') === 0;
-          const kp = isPlayer ? null : keyframedPosition2D(n, st);
-          ctx2d.translate(kp ? kp.x : n.x, kp ? kp.y : n.y);
-          ctx2d.globalAlpha = n.opacity == null ? 1 : n.opacity;
-          ctx2d.fillStyle = n.fill || '#06B6D4';
-          const img = n.imageUrl ? getSpriteImage(n.imageUrl) : null;
-          if (n.type === 'particle-emitter' && n.emitter) {
-            PARTICLES.draw(ctx2d, n.emitter.preset, n.emitter.seed == null ? 7 : n.emitter.seed, st, n.width, n.height, n.emitter.rate, n.emitter.color);
-          } else if (img && img.complete && img.naturalWidth > 0) {
-            const moving = isPlayer && (keys['a'] || keys['arrowleft'] || keys['d'] || keys['arrowright']);
-            const frame = n.spriteSheet ? spriteFrameAt(n.spriteSheet, st, isPlayer ? playerClipName(n.spriteSheet, moving, player2dGrounded) : undefined) : null;
-            if (isPlayer && (keys['a'] || keys['arrowleft'])) ctx2d.scale(-1, 1);
-            if (frame) ctx2d.drawImage(img, frame.sx, frame.sy, frame.sw, frame.sh, -n.width / 2, -n.height / 2, n.width, n.height);
-            else ctx2d.drawImage(img, -n.width / 2, -n.height / 2, n.width, n.height);
-          } else if (n.type === 'text-kinetic') {
-            ctx2d.font = '800 ' + (n.fontSize || 36) + 'px system-ui, sans-serif';
-            ctx2d.textAlign = 'center';
-            ctx2d.textBaseline = 'middle';
-            ctx2d.fillText(n.text || n.name, 0, Math.sin(t * 3.5) * 5);
-          } else if (n.type === 'circle' || n.type === 'star') {
-            ctx2d.beginPath();
-            ctx2d.arc(0, 0, Math.min(n.width, n.height) / 2, 0, Math.PI * 2);
-            ctx2d.fill();
-          } else {
-            ctx2d.fillRect(-n.width / 2, -n.height / 2, n.width, n.height);
-          }
-          ctx2d.restore();
-        });
-        activeCaptionCues(st).forEach((cue) => drawCaptionOnCanvas(ctx2d, cue, 1000, 600));
-        const bar2d = document.getElementById('captionBar');
-        if (bar2d.dataset.text) { bar2d.dataset.text = ''; bar2d.innerHTML = ''; }
-      } else {
-        const cues3d = activeCaptionCues(sceneTime());
-        const bar = document.getElementById('captionBar');
-        const text = cues3d.map((c) => c.text).join(' ');
-        if (bar.dataset.text !== text) {
-          bar.dataset.text = text;
-          bar.innerHTML = '';
-          if (text) {
-            const span = document.createElement('span');
-            span.textContent = text;
-            span.style.cssText = 'background:rgba(2,6,23,0.75);color:#F8FAFC;font:600 16px system-ui,sans-serif;padding:6px 12px;border-radius:6px;text-align:center;';
-            bar.appendChild(span);
-          }
-        }
-        actorMeshes.forEach((g) => {
-          g.rotation.y = t * 1.2;
-          const baseScale = g.userData.baseScale || [1, 1, 1];
-          g.scale.lerp(new THREE.Vector3(...baseScale), 0.08);
-        });
-        renderer.render(scene3d, camera3d);
-      }
-    }
-    animate();
-  </script>
-</body>
-</html>`;
+export async function loadPlayerRuntime(): Promise<string> {
+  const mod = await import('./generated/playerRuntime');
+  return mod.PLAYER_RUNTIME;
 }
 
 /**
@@ -1283,12 +652,20 @@ export async function buildStandalonePlayable(
   sceneSpec: SceneSpec,
   targetNetwork: StandaloneAdNetwork = 'universal',
   scenes?: SceneSpec[],
-  options?: StandalonePlayerOptions & { offline?: boolean }
+  options?: StandalonePlayerOptions & { offline?: boolean; fetcher?: typeof defaultFetcher }
 ): Promise<PlayableBuildResult> {
-  const threeRuntimeSource =
-    options?.threeRuntimeSource ?? (options?.offline === false ? undefined : await loadThreePlayableRuntime());
-  const html = generateStandaloneHTMLContent(sceneSpec, targetNetwork, scenes, { ...options, threeRuntimeSource });
-  return { html, budget: analyzePlayableBudget(html, targetNetwork) };
+  const playerRuntimeSource = options?.playerRuntimeSource ?? (await loadPlayerRuntime());
+  const all = scenes && scenes.length ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s)) : [sceneSpec];
+  let embed: EmbedResult | undefined;
+  let assets = options?.assets;
+  if (!assets && options?.offline !== false) {
+    const shell = generateStandaloneHTMLContent(sceneSpec, targetNetwork, all, { ...options, playerRuntimeSource });
+    embed = await embedAssets(collectAssetUrls(all), assetBudgetFor(targetNetwork, new TextEncoder().encode(shell).length), options?.fetcher ?? defaultFetcher);
+    assets = embed.assets;
+  }
+  const html = generateStandaloneHTMLContent(sceneSpec, targetNetwork, all, { ...options, playerRuntimeSource, assets });
+  const remote = options?.offline === false ? collectAssetUrls(all) : embed?.skipped.map((s) => s.url) || [];
+  return { html, budget: analyzePlayableBudget(html, targetNetwork, undefined, remote), embed };
 }
 
 export async function exportStandalonePlayableHTML(

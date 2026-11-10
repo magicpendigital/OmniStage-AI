@@ -9,7 +9,7 @@ npm run verify        # tsc --noEmit + all unit tests (tests/*.test.ts) — must
 npm run build         # vite production build
 npm run dev           # tsx server.ts on :3000 (PORT env overrides)
 npm run mcp -- --project projects/x.scenespec.json   # OmniStage MCP server (stdio)
-npm run build:playable-three                          # regenerate inlined Three.js after upgrading three
+npm run build:player                                  # regenerate the OmniStage Player bundle after changing src/player or src/runtime
 ```
 
 Verification loop: change → `npm run verify` → fix until exit code 0. Do not eyeball results or skip failing tests.
@@ -27,6 +27,8 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 | Area | Files | Scoped rules |
 | --- | --- | --- |
 | Contract | `src/types/scene.schema.ts` | `.claude/rules/scene-contract.md` |
+| Shared runtime (rules, logic graph, 2D frame) | `src/runtime/*` | `.claude/rules/renderers.md` |
+| OmniStage Player (exports, Play Test, phones) | `src/player/*`, `scripts/build-player.mjs`, `src/exporter/playerHtml.ts` | `.claude/rules/exporter.md` |
 | Renderers 3D/2D | `src/renderer/*` | `.claude/rules/renderers.md` |
 | AI director, skills, verifier | `src/agent/*`, `src/verification/*`, `server.ts` | `.claude/rules/agent-and-verification.md` |
 | Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*`, `src/vfx/*`, `src/media/*` | `.claude/rules/exporter.md` |
