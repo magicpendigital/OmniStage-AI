@@ -26,6 +26,8 @@ import { BUILTIN_DIRECTOR_SKILLS, mergeSystemPrompt } from '../agent/directorSki
 import { buildDirectorContext } from '../agent/studioAgent';
 import { parseExplicitMemory, suggestMemory } from '../agent/memory';
 import { recommendExtensions } from '../extensions/registry';
+import { formatGuideAnswer, guideLangFor, guideTopic, matchGuideQuestion } from '../guide/guideContent';
+import { runGuideAction } from '../guide/guideActions';
 import { EXTENSION_CATALOG } from '../extensions/catalog';
 import { Brain, Puzzle } from 'lucide-react';
 
@@ -125,6 +127,19 @@ export const RightAgentChat: React.FC = () => {
     // Multi-step storyboard: "phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...
     // Auto-Fix repair prompts must never be mistaken for a storyboard request.
     // Phase 6: "nhớ rằng …" / "remember …" goes straight to memory (no AI call).
+    // Phase 6 batch 2: "làm sao…?" / "how do I…?" about the app is answered from the Guide (no AI call).
+    const helpTopic = query.startsWith('Auto-Fix Execution Issue') ? null : matchGuideQuestion(query);
+    if (helpTopic) {
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: formatGuideAnswer(helpTopic, guideLangFor(query)),
+        timestamp: nowLabel(),
+        guideTopicId: helpTopic.id,
+      });
+      return;
+    }
+
     const explicitMemory = parseExplicitMemory(query);
     if (explicitMemory) {
       const entry = workspaceAvailable ? await addMemoryEntry(explicitMemory, 'preference', 'explicit', 'global') : null;
@@ -411,6 +426,27 @@ export const RightAgentChat: React.FC = () => {
                 )}
 
                 {/* Phase 6: memory suggestion (user confirms) */}
+                {msg.guideTopicId && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => useStudioStore.getState().openGuide(msg.guideTopicId)}
+                      className="px-2 py-0.5 rounded border border-amber-500/40 text-[10px] text-amber-100"
+                    >
+                      Open in Guide
+                    </button>
+                    {guideTopic(msg.guideTopicId)?.action && (
+                      <button
+                        type="button"
+                        onClick={() => runGuideAction(guideTopic(msg.guideTopicId)!.action!.id)}
+                        className="px-2 py-0.5 rounded border border-cyan-500/40 text-[10px] text-cyan-100"
+                      >
+                        {guideTopic(msg.guideTopicId)!.action!.label[guideLangFor(msg.content)]}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {msg.memorySuggestion && (
                   <div className="mt-2 p-2 rounded-lg bg-violet-950/30 border border-violet-500/30 flex items-start gap-2">
                     <Brain className="w-3.5 h-3.5 text-violet-300 shrink-0 mt-0.5" />
@@ -597,6 +633,7 @@ export const RightAgentChat: React.FC = () => {
 
           {/* Chat Input Form */}
           <form
+            data-tour="chat"
             onSubmit={(e) => {
               e.preventDefault();
               handleSendPrompt();

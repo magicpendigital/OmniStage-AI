@@ -45,6 +45,7 @@ export const CenterViewport: React.FC = () => {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const isLooping = useStudioStore((s) => s.isLooping);
   const currentTime = useStudioStore((s) => s.currentTime);
+  const fullPreviewActive = useStudioStore((s) => !!s.fullPreview);
   const gameScore = useStudioStore((s) => s.gameScore);
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
   const gameWon = useStudioStore((s) => s.gameWon);
@@ -205,10 +206,17 @@ export const CenterViewport: React.FC = () => {
             } h-full flex items-center justify-center overflow-hidden relative`}
           >
             <div
+              data-tour="viewport"
               className={`relative rounded-xl overflow-hidden border border-slate-800/90 shadow-2xl bg-[#0B101B] transition-all duration-300 ${getStageFrameClass()}`}
             >
-              {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas */}
-              {is2D ? <StageCanvas2D /> : <StageCanvas />}
+              {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas (the full preview mounts its own) */}
+              {fullPreviewActive ? (
+                <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs">Playing in full preview…</div>
+              ) : is2D ? (
+                <StageCanvas2D />
+              ) : (
+                <StageCanvas />
+              )}
               {/* Phase 5: 3D caption overlay (2D draws captions into its canvas). */}
               {!is2D &&
                 activeCaptions(sceneSpec.captions, currentTime).map((cue, i) => (

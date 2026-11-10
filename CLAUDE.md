@@ -32,6 +32,7 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 | Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*`, `src/vfx/*`, `src/media/*` | `.claude/rules/exporter.md` |
 | MCP server (agents author projects) | `mcp/*`, `docs/mcp-server.md` | `.claude/rules/agent-and-verification.md` |
 | AI providers (API + CLI login) | `server/ai/*`, `src/agent/aiClient.ts` | `.claude/rules/agent-and-verification.md` |
+| Play test, phone preview, full preview, guide | `src/components/PlayTestModal.tsx`, `server/play/*`, `src/components/FullPreviewOverlay.tsx`, `src/guide/*`, `src/playtest/*` | `.claude/rules/workspace-and-extensions.md` |
 | Workspace, extensions, memory | `server/workspace/*`, `src/extensions/*`, `src/workspace/*`, `src/agent/memory.ts` | `.claude/rules/workspace-and-extensions.md` |
 
 Full roles for the multi-agent workflow: `AGENTS.md`. Roadmap: `plan.md`. Renderer QA notes: `docs/renderer-quality.md`.

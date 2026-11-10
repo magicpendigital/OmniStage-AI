@@ -9,6 +9,8 @@ paths:
   - "src/components/ExtensionsModal.tsx"
   - "src/components/ExtensionReviewDialog.tsx"
   - "src/components/ProjectHubModal.tsx"
+  - "server/play/**"
+  - "src/components/PlayTestModal.tsx"
 ---
 
 # Workspace, extensions, memory & providers
@@ -24,5 +26,8 @@ paths:
 - CLI providers: prompts via stdin or a temp file, never argv; model ids through `sanitizeModelId`; run in a temp cwd with tools disabled
   where the CLI allows. Re-verify flags with `<cli> --help` after CLI upgrades and update `server/ai/cliProviders.ts` comments.
 - Anthropic calls use the official `@anthropic-ai/sdk` (default `claude-opus-5-5`, adaptive thinking, server-side refusal fallback).
+- Phone preview: `/play/:token` is the ONLY route meant for the LAN. Keep tokens random (crypto) with an expiry, never serve workspace
+  files through it, and keep session creation behind `isLoopbackRequest`. Play Test iframes stay `sandbox="allow-scripts allow-pointer-lock"`
+  (no same-origin). Guide content changes need both `vi` and `en` with the same number of steps (`tests/playAndGuide.test.ts`).
 - Memory is user data: only explicit commands or user-confirmed suggestions are stored; keep `selectMemories` scoped (never leak another
   project's memories) and keep `tests/extensions.test.ts` / `tests/workspace.test.ts` green.

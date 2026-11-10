@@ -108,12 +108,16 @@ Conclusion: the TypeScript + SceneSpec + web-runtime foundation is the right bas
 mobile was never an explicit target. Every mobile path and every rigged-character export depends on **one shared Player runtime**,
 so that moves to the front.
 
-### Phase 6 — Batch 2 "Play & Learn" (next)
-- [ ] **Play Test** (desktop): fullscreen run of the exported runtime (exactly what ships), restart / next level / FPS + verifier overlay.
-- [ ] **Play on phone**: LAN preview server + QR code (read-only play route; the private workspace API stays localhost-only);
-  touch input in the studio viewport (virtual stick / buttons, safe-area aware).
-- [ ] **Full preview** for media: every storyboard scene in order with transitions, captions and audio.
-- [ ] **Guide**: first-run tour, Help center (play test, phone preview, providers, projects, extensions, memory, export), "How do I…?" in chat.
+### Phase 6 — Batch 2 "Play & Learn" (Completed 2026-11-10)
+- [x] **Play Test** (top bar ▶ in Game Mode): runs the exported playable (exactly what ships, Three.js inlined) in a sandboxed iframe;
+  start-from-level, restart, device frames (fit / phone portrait / phone landscape / tablet), FPS + worst-frame meter, per-level verifier panel.
+- [x] **Play on phone**: `POST /api/play/session` (localhost only) stores the build; phones on the same Wi-Fi open
+  `http://<LAN-IP>:<port>/play/<token>` from a QR code. 128-bit tokens, 4 h expiry, read-only; every private API answers 403 over the LAN
+  (verified from the LAN address). Phones use the exported runtime's touch buttons. Studio-viewport touch input moves to Phase 7 (Player runtime).
+- [x] **Full preview** (top bar ▶ in Media): storyboard order (nextSceneId chain, else index / project order), fade transitions, captions,
+  audio cues, progress per scene, ←/→/Space/Esc, end card with replay; undo history is restored on exit.
+- [x] **Guide**: Help center (13 topics, VI/EN, search, "Try it" buttons), first-run tour (6 highlighted steps), and "how do I…?" questions
+  in the chat answered from the Guide in the user's language without an AI call.
 
 ### Phase 7 — One OmniStage Player runtime (prerequisite for mobile and characters)
 - [ ] Framework-free TypeScript player (Three.js + Canvas2D + WebAudio) shared by studio preview, play test, phone preview and every export;

@@ -13,6 +13,10 @@ import { SettingsModal } from './components/SettingsModal';
 import { ProjectHubModal } from './components/ProjectHubModal';
 import { ExtensionsModal } from './components/ExtensionsModal';
 import { ExtensionReviewDialog } from './components/ExtensionReviewDialog';
+import { PlayTestModal } from './components/PlayTestModal';
+import { FullPreviewOverlay } from './components/FullPreviewOverlay';
+import { GuideModal } from './components/GuideModal';
+import { WelcomeTour } from './components/WelcomeTour';
 import { useStudioStore } from './state/useStudioStore';
 import { useProjectAutosave } from './workspace/useProjectAutosave';
 
@@ -45,6 +49,12 @@ export default function App() {
       <ProjectHubModal />
       <ExtensionsModal />
       <ExtensionReviewDialog />
+
+      {/* Phase 6 batch 2: play test, full preview, guide + first-run tour */}
+      <PlayTestModal />
+      <FullPreviewOverlay />
+      <GuideModal />
+      <WelcomeTour />
     </div>
   );
 }

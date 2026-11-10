@@ -50,6 +50,18 @@ import {
 import { resolveAudioSpec } from '../audio/audioBus';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
 import { MemoryEntry, MemoryKind, ProjectMeta, workspaceApi } from '../workspace/workspaceClient';
+import { previewOrder } from '../playtest/previewOrder';
+
+export interface FullPreviewState {
+  order: string[];
+  index: number;
+  originalSceneId: string;
+  wasLooping: boolean;
+  ended: boolean;
+  /** Undo history of the scene that was open; switchScene() clears it, so it is restored on exit. */
+  savedPast: SceneSpec[];
+  savedFuture: SceneSpec[];
+}
 
 export type ProjectSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
@@ -464,6 +476,11 @@ interface StudioState {
   isExtensionsOpen: boolean;
   extensionReview: ExtensionReviewRequest | null;
 
+  // Phase 6 batch 2: play test, full preview, guide
+  playTest: { startSceneId: string } | null;
+  fullPreview: FullPreviewState | null;
+  guide: { open: boolean; topicId: string | null };
+
   // Timeline Sequencer & Playback State
   isPlaying: boolean;
   isLooping: boolean;
@@ -607,6 +624,16 @@ interface StudioState {
   /** `library` copies extension SFX recipes into SceneSpec.sfxLibrary in the same undo step. */
   updateSceneAudio: (patch: Partial<SceneAudioSpec>, library?: Record<string, SfxRecipe>) => void;
 
+  // Phase 6 batch 2: play test, full preview, guide
+  openPlayTest: (startSceneId?: string) => void;
+  closePlayTest: () => void;
+  startFullPreview: (fromSceneId?: string) => void;
+  gotoFullPreviewScene: (index: number) => void;
+  endFullPreview: () => void;
+  stopFullPreview: () => void;
+  openGuide: (topicId?: string | null) => void;
+  closeGuide: () => void;
+
   // Phase 6: workspace, projects, extensions, memory
   initWorkspace: () => Promise<void>;
   setProjectHubOpen: (open: boolean) => void;
@@ -748,6 +775,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   isProjectHubOpen: false,
   isExtensionsOpen: false,
   extensionReview: null,
+  playTest: null,
+  fullPreview: null,
+  guide: { open: false, topicId: null },
 
   isPlaying: true,
   isLooping: true,
@@ -2399,6 +2429,58 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
       };
     }),
+
+  openPlayTest: (startSceneId) => {
+    const { activeSceneId, fullPreview } = get();
+    if (fullPreview) get().stopFullPreview();
+    set({ playTest: { startSceneId: startSceneId || activeSceneId }, isPlaying: false });
+  },
+  closePlayTest: () => set({ playTest: null }),
+
+  startFullPreview: (fromSceneId) => {
+    const state = get();
+    const order = previewOrder(state.scenes.length ? state.scenes : [state.sceneSpec], state.activeSceneId);
+    const startIndex = Math.max(0, fromSceneId ? order.indexOf(fromSceneId) : 0);
+    set({
+      fullPreview: {
+        order,
+        index: startIndex,
+        originalSceneId: state.activeSceneId,
+        wasLooping: state.isLooping,
+        ended: false,
+        savedPast: state.pastSpecs,
+        savedFuture: state.futureSpecs,
+      },
+      playTest: null,
+      isLooping: false,
+    });
+    get().gotoFullPreviewScene(startIndex);
+  },
+
+  gotoFullPreviewScene: (index) => {
+    const fp = get().fullPreview;
+    if (!fp) return;
+    const clamped = Math.max(0, Math.min(fp.order.length - 1, index));
+    const id = fp.order[clamped];
+    if (id !== get().activeSceneId) get().switchScene(id);
+    set({ fullPreview: { ...fp, index: clamped, ended: false }, currentTime: 0, isLooping: false, isPlaying: true });
+  },
+
+  endFullPreview: () => {
+    const fp = get().fullPreview;
+    if (fp) set({ fullPreview: { ...fp, ended: true }, isPlaying: false });
+  },
+
+  stopFullPreview: () => {
+    const fp = get().fullPreview;
+    if (!fp) return;
+    set({ fullPreview: null, isPlaying: false, isLooping: fp.wasLooping });
+    if (fp.originalSceneId !== get().activeSceneId && get().scenes.some((s) => s.id === fp.originalSceneId)) get().switchScene(fp.originalSceneId);
+    set({ currentTime: 0, pastSpecs: fp.savedPast, futureSpecs: fp.savedFuture });
+  },
+
+  openGuide: (topicId = null) => set({ guide: { open: true, topicId } }),
+  closeGuide: () => set({ guide: { open: false, topicId: null } }),
 
   initWorkspace: async () => {
     try {

@@ -521,6 +521,8 @@ export interface StandalonePlayerOptions {
    * When omitted the legacy CDN tag (three r128 from cdnjs) is used.
    */
   threeRuntimeSource?: string;
+  /** Phase 6 batch 2: show an FPS / frame-time meter (Play Test). */
+  showFps?: boolean;
 }
 
 export interface PlayableBuildResult {
@@ -693,6 +695,18 @@ export function generateStandaloneHTMLContent(
     : '<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>'}
 </head>
 <body>
+  ${options?.showFps ? `<div id="omniFps" style="position:fixed;left:8px;bottom:8px;z-index:40;font:600 11px ui-monospace,monospace;color:#A7F3D0;background:rgba(2,6,23,.75);padding:3px 6px;border-radius:6px;pointer-events:none">-- fps</div>
+  <script>
+    (function () {
+      var el = document.getElementById('omniFps'); var frames = 0; var last = performance.now(); var worst = 0; var prev = last;
+      function tick(now) { frames++; worst = Math.max(worst, now - prev); prev = now;
+        if (now - last >= 500) { var fps = Math.round(frames * 1000 / (now - last));
+          el.textContent = fps + ' fps · worst ' + Math.round(worst) + ' ms'; el.style.color = fps >= 55 ? '#A7F3D0' : fps >= 30 ? '#FDE68A' : '#FCA5A5';
+          frames = 0; worst = 0; last = now; }
+        requestAnimationFrame(tick); }
+      requestAnimationFrame(tick);
+    })();
+  </script>` : ''}
   <div class="hud-top">
     <div class="hud-left">
       <span class="engine-badge" id="engineBadge">${(sceneSpec.engineType || '3d').toUpperCase()}</span>

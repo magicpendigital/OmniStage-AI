@@ -740,4 +740,6 @@ export interface ChatMessage {
   memorySuggestion?: { text: string; kind: 'preference' | 'style' | 'goal' | 'constraint' | 'feedback' | 'fact' };
   /** Phase 6: catalog extensions the director suggests for this request (installed only after approval). */
   extensionSuggestions?: Array<{ id: string; name: string; reason: string }>;
+  /** Phase 6 batch 2: this reply answers an app-usage question from the Guide (no AI call). */
+  guideTopicId?: string;
 }

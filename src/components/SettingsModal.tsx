@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Brain,
   CheckCircle2,
@@ -17,6 +17,7 @@ import {
 import { BUILTIN_DIRECTOR_SKILLS } from '../agent/directorSkills';
 import { AIProviderPanel } from './AIProviderPanel';
 import { MemoryPanel } from './MemoryPanel';
+import { SETTINGS_TAB_EVENT } from '../guide/guideActions';
 import { DEFAULT_SETTINGS, useStudioStore } from '../state/useStudioStore';
 import { EngineType, SettingsConfig } from '../types/scene.schema';
 
@@ -31,6 +32,15 @@ export const SettingsModal: React.FC = () => {
   const removeLearnedSkill = useStudioStore((s) => s.removeLearnedSkill);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
+  // Guide "Try it" buttons can open a specific tab.
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<SettingsTab>).detail;
+      if (tab) setActiveTab(tab);
+    };
+    window.addEventListener(SETTINGS_TAB_EVENT, onTab);
+    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onTab);
+  }, []);
   const [savedNotice, setSavedNotice] = useState(false);
 
   if (!isOpen) return null;

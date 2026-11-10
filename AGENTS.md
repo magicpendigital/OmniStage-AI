@@ -53,6 +53,7 @@ Welcome to **OmniStage AI (Phase 3)**, an Agentic **3D WebGL & 2D Vector/Sprite 
      - `server/workspace/*` — `~/OmniStage` projects (games are MCP-compatible bundles), personal + project libraries, installed extensions, memory; localhost-only `/api/projects|library|extensions|memory`.
      - `src/extensions/*` — manifest contract, validation/risk review, catalog, sandboxed code plugins (`iframe sandbox` + CSP + permissioned `window.omni`), recommendations. Installs always require user approval.
      - `src/agent/memory.ts` — memory selection / explicit "remember" / suggestions; `buildDirectorContext` in `studioAgent.ts` merges skills, memory and extension presets per turn.
+   - **Phase 6 batch 2 (Play & Learn)**: `PlayTestModal.tsx` (exported build in a sandboxed iframe, device frames, FPS, verifier panel), `server/play/playSessions.ts` (token-gated `/play/:token` for phones on the LAN; session creation is localhost-only), `FullPreviewOverlay.tsx` + `src/playtest/previewOrder.ts` (storyboard playback), `src/guide/*` + `GuideModal.tsx` + `WelcomeTour.tsx` (help center, tour, chat how-to answers).
    - `src/exporter/mediaExporter.ts` — Unified 3D/2D media exporter for PNG snapshots, 60fps `.webm` video streams (`MediaRecorder`), multi-scene `.scenespec.json` project bundles, and self-contained HTML5 Playable Ad bundles supporting both `'3d'` and `'2d'` scenes.
 
 ---

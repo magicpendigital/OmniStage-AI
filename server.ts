@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { registerAssetHubRoutes } from './server/assetHubProxy.ts';
 import { aiErrorStatus, generateJSON, registerAiRoutes } from './server/ai/index.ts';
 import { registerWorkspaceRoutes } from './server/workspace/routes.ts';
+import { registerPlayRoutes } from './server/play/playSessions.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,9 @@ async function startServer() {
 
   // Phase 6: local workspace (projects, games, personal/project libraries, extensions, memory) — localhost only
   registerWorkspaceRoutes(app);
+
+  // Phase 6 batch 2: Play on phone (token-gated read-only /play/:token over the LAN)
+  registerPlayRoutes(app);
 
   const fail = (res: express.Response, route: string, error: any) => {
     const status = aiErrorStatus(error);
