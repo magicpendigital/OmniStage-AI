@@ -430,6 +430,68 @@ export interface SceneSpec {
   timelineTracks: TimelineTrack[];
   logicGraph?: LogicGraphSpec;
   sequence?: SceneSequenceMeta;
+  /** Timed subtitle / voiceover cues rendered over the stage during playback. */
+  captions?: CaptionCue[];
+  /** Music, SFX and voice clips mixed against the timeline clock. */
+  audioTracks?: AudioTrackSpec[];
+}
+
+export interface CaptionCue {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  /** When true the cue is also read aloud (Web Speech synthesis) as it starts. */
+  speak?: boolean;
+}
+
+export type AudioTrackKind = 'music' | 'sfx' | 'voice';
+
+export interface AudioTrackSpec {
+  id: string;
+  name: string;
+  url: string;
+  kind: AudioTrackKind;
+  startTime: number;
+  volume: number; // 0..1
+  muted?: boolean;
+  loop?: boolean;
+}
+
+// ============================================================================
+// USER ASSET LIBRARY: Local Folder Mounts, Favorites & Custom Label Collections
+// ============================================================================
+
+export type AssetDefinitionKind = 'model' | 'image' | 'svg' | 'audio' | 'hdri';
+
+export type AssetDefinitionSource = 'local-folder' | 'local-file' | 'url' | OnlineAssetProvider;
+
+/** An asset the user brought into the library: mounted from disk, by URL, or bookmarked from the Online Hub. */
+export interface AssetDefinition {
+  id: string;
+  name: string;
+  kind: AssetDefinitionKind;
+  /** Loadable URL. Empty for hub bookmarks that still need a resolve step (see `online`). */
+  url: string;
+  source: AssetDefinitionSource;
+  /** Sub-folder the file was found in when mounted from a local directory. */
+  folder?: string;
+  tags: string[];
+  thumbnailUrl?: string;
+  author?: string;
+  license?: string;
+  sourcePageUrl?: string;
+  sizeBytes?: number;
+  addedAt: number;
+  /** Original hub search result, kept so the download can be resolved again later. */
+  online?: OnlineAssetResult;
+}
+
+export interface AssetCollection {
+  id: string;
+  name: string;
+  color: string;
+  assetIds: string[];
 }
 
 export interface BoundingBoxSpec {

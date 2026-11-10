@@ -1,114 +1,143 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Box,
-  ChevronDown,
-  ChevronUp,
+  Camera,
+  Captions,
+  Clapperboard,
   Columns2,
-  Copy,
-  Eye,
-  GitBranch,
-  Lock,
+  Diamond,
+  Gamepad2,
   Maximize2,
-  Move,
-  Pause,
-  Play,
-  Repeat,
+  Minimize2,
   RotateCcw,
-  RotateCw,
-  Trash2,
-  Trophy,
-  Unlock,
+  Rows2,
   Video,
+  Workflow,
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
 import { NodeGraphView } from './NodeGraphView';
-import { ExecutionConsole } from './ExecutionConsole';
+import { BottomDock } from './BottomDock';
+import { RightAgentChat } from './RightAgentChat';
+import { ActorInspectorPill, CtaBanner, EndCard, Node2DInspectorPill } from './StageOverlays';
+import { speakText } from './panels/AudioPanel';
 import { useStudioStore } from '../state/useStudioStore';
-import {
-  AnimationType,
-  CameraMode,
-  Physics2DRole,
-  TransformMode,
-  WorkspaceViewMode,
-} from '../types/scene.schema';
-import { runVisionQAInspection } from '../agent/studioAgent';
-import { recordCanvasVideoWebM } from '../exporter/mediaExporter';
+import { clamp, isTypingTarget, useShellStore } from '../state/useShellStore';
+import { AspectRatioPreset, CameraMode, GameRule, SettingsConfig } from '../types/scene.schema';
+import { exportCanvasSnapshotPNG, recordCanvasVideoWebM } from '../exporter/mediaExporter';
+import { IconBtn, Kbd, Segmented, startDrag, useSize } from './ui';
 
-export const CenterViewport: React.FC = () => {
+const ASPECT: Record<AspectRatioPreset, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 };
+const PIP_HEAD = 30;
+const DIVIDER = 5;
+
+// ----------------------------------------------------------------------------
+// Audio tracks + spoken captions, slaved to the timeline clock
+// ----------------------------------------------------------------------------
+function useMediaPlayback() {
+  const tracks = useStudioStore((s) => s.sceneSpec.audioTracks);
+  const players = useRef(new Map<string, HTMLAudioElement>());
+
+  // Keep one <audio> per track, dropping players for tracks that were removed.
+  useEffect(() => {
+    const live = new Set((tracks || []).map((t) => t.id));
+    players.current.forEach((audio, id) => {
+      if (!live.has(id)) {
+        audio.pause();
+        players.current.delete(id);
+      }
+    });
+    (tracks || []).forEach((t) => {
+      let audio = players.current.get(t.id);
+      if (!audio || audio.src !== new URL(t.url, window.location.href).href) {
+        audio?.pause();
+        audio = new Audio(t.url);
+        audio.preload = 'auto';
+        players.current.set(t.id, audio);
+      }
+      audio.loop = Boolean(t.loop);
+      audio.volume = t.muted ? 0 : clamp(t.volume, 0, 1);
+    });
+  }, [tracks]);
+
+  useEffect(() => {
+    let lastTime = useStudioStore.getState().currentTime;
+    const sync = () => {
+      const { currentTime, isPlaying, sceneSpec } = useStudioStore.getState();
+      (sceneSpec.audioTracks || []).forEach((t) => {
+        const audio = players.current.get(t.id);
+        if (!audio) return;
+        const local = currentTime - t.startTime;
+        if (!isPlaying || local < 0) {
+          if (!audio.paused) audio.pause();
+          return;
+        }
+        const length = Number.isFinite(audio.duration) ? audio.duration : 0;
+        if (!t.loop && length > 0 && local >= length) {
+          if (!audio.paused) audio.pause();
+          return;
+        }
+        const wanted = t.loop && length > 0 ? local % length : local;
+        if (audio.paused || Math.abs(audio.currentTime - wanted) > 0.45) {
+          try {
+            audio.currentTime = wanted;
+          } catch {
+            // metadata not ready yet; the next tick retries
+          }
+        }
+        if (audio.paused) audio.play().catch(() => undefined);
+      });
+
+      // Speak each voiced caption once as the playhead crosses its start.
+      if (isPlaying && currentTime > lastTime && currentTime - lastTime < 0.5) {
+        const cue = (sceneSpec.captions || []).find((c) => c.speak && c.start > lastTime && c.start <= currentTime);
+        if (cue) speakText(cue.text);
+      }
+      lastTime = currentTime;
+    };
+    const unsubscribe = useStudioStore.subscribe(sync);
+    return () => {
+      unsubscribe();
+      players.current.forEach((audio) => audio.pause());
+    };
+  }, []);
+}
+
+// ----------------------------------------------------------------------------
+// Mode strip: what Game Mode / Media Mode reveal
+// ----------------------------------------------------------------------------
+const ModeBar: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
+  const settings = useStudioStore((s) => s.settings);
   const workspaceView = useStudioStore((s) => s.workspaceView);
-  const selectedActorId = useStudioStore((s) => s.selectedActorId);
-  const selectedNode2DId = useStudioStore((s) => s.selectedNode2DId);
-  const transformMode = useStudioStore((s) => s.transformMode);
-  const isPlaying = useStudioStore((s) => s.isPlaying);
-  const isLooping = useStudioStore((s) => s.isLooping);
-  const currentTime = useStudioStore((s) => s.currentTime);
   const gameScore = useStudioStore((s) => s.gameScore);
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
-  const gameWon = useStudioStore((s) => s.gameWon);
-  const gameEnded = useStudioStore((s) => s.gameEnded);
-  const scorePopups = useStudioStore((s) => s.scorePopups);
-  const isBottomDockCollapsed = useStudioStore((s) => s.isBottomDockCollapsed);
-  const isVisionRunning = useStudioStore((s) => s.isVisionRunning);
   const isRecordingVideo = useStudioStore((s) => s.isRecordingVideo);
   const recordingProgress = useStudioStore((s) => s.recordingProgress);
   const canvasElement = useStudioStore((s) => s.canvasElement);
 
-  const setWorkspaceView = useStudioStore((s) => s.setWorkspaceView);
-  const setTransformMode = useStudioStore((s) => s.setTransformMode);
-  const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
-  const duplicateActor = useStudioStore((s) => s.duplicateActor);
-  const removeActor = useStudioStore((s) => s.removeActor);
-  const updateNode2D = useStudioStore((s) => s.updateNode2D);
-  const duplicateNode2D = useStudioStore((s) => s.duplicateNode2D);
-  const removeNode2D = useStudioStore((s) => s.removeNode2D);
-  const togglePlay = useStudioStore((s) => s.togglePlay);
-  const toggleLoop = useStudioStore((s) => s.toggleLoop);
-  const setCurrentTime = useStudioStore((s) => s.setCurrentTime);
-  const setCameraMode = useStudioStore((s) => s.setCameraMode);
+  const updateGameRules = useStudioStore((s) => s.updateGameRules);
+  const updateMarketingOverlay = useStudioStore((s) => s.updateMarketingOverlay);
+  const updateSettings = useStudioStore((s) => s.updateSettings);
   const resetGameSession = useStudioStore((s) => s.resetGameSession);
-  const dismissEndCard = useStudioStore((s) => s.dismissEndCard);
-  const advanceToNextScene = useStudioStore((s) => s.advanceToNextScene);
-  const scenes = useStudioStore((s) => s.scenes);
-  const setBottomDockCollapsed = useStudioStore((s) => s.setBottomDockCollapsed);
-  const setVisionRunning = useStudioStore((s) => s.setVisionRunning);
-  const setLatestVisionReport = useStudioStore((s) => s.setLatestVisionReport);
-  const addChatMessage = useStudioStore((s) => s.addChatMessage);
+  const setCameraMode = useStudioStore((s) => s.setCameraMode);
+  const setSceneDuration = useStudioStore((s) => s.setSceneDuration);
+  const addCameraKeyframe = useStudioStore((s) => s.addCameraKeyframe);
   const setRecordingState = useStudioStore((s) => s.setRecordingState);
-  const setPublishModalOpen = useStudioStore((s) => s.setPublishModalOpen);
+  const setBottomDockCollapsed = useStudioStore((s) => s.setBottomDockCollapsed);
+
+  const railPanel = useShellStore((s) => s.railPanel);
+  const togglePanel = useShellStore((s) => s.togglePanel);
+  const setDockTab = useShellStore((s) => s.setDockTab);
+  const splitOrientation = useShellStore((s) => s.splitOrientation);
+  const setSplitOrientation = useShellStore((s) => s.setSplitOrientation);
 
   const is2D = sceneSpec.engineType === '2d';
-  const selectedActor = !is2D
-    ? sceneSpec.actors.find((a) => a.id === selectedActorId) || null
-    : null;
-  const selectedNode2D = is2D
-    ? (sceneSpec.nodes2D || []).find((n) => n.id === selectedNode2DId) || null
-    : null;
-  const duration = Math.max(2, sceneSpec.durationSeconds || 8);
+  const isGame = sceneSpec.mode === 'game';
+  const rules = sceneSpec.gameRules;
+  const cta = sceneSpec.marketingOverlay;
 
-  const getActiveCanvas = (): HTMLCanvasElement | null => {
-    if (canvasElement && canvasElement.isConnected) return canvasElement;
-    return document.querySelector('canvas');
-  };
-
-  const handleRunVisionQA = async () => {
-    if (isVisionRunning) return;
-    setVisionRunning(true);
-    try {
-      const report = await runVisionQAInspection(getActiveCanvas(), sceneSpec);
-      setLatestVisionReport(report);
-      addChatMessage({
-        id: `msg-vision-${Date.now()}`,
-        role: 'assistant',
-        content: `Vision QA Diagnostic Complete (Score: ${report.overallScore}/100). ${report.summary} Review the diagnostic report and click "Apply Recommended Fixes" to update the SceneSpec.`,
-        timestamp: report.timestamp,
-        visionReport: report,
-      });
-    } finally {
-      setVisionRunning(false);
-    }
-  };
+  const getActiveCanvas = (): HTMLCanvasElement | null =>
+    canvasElement && canvasElement.isConnected ? canvasElement : document.querySelector('canvas');
 
   const handleQuickRecord5s = async () => {
     const activeCanvas = getActiveCanvas();
@@ -120,641 +149,495 @@ export const CenterViewport: React.FC = () => {
     setRecordingState(false, 0);
   };
 
-  const getStageFrameClass = () => {
-    if (workspaceView === 'split') return 'w-full h-full';
-    switch (sceneSpec.aspectRatio) {
-      case '9:16':
-        return 'h-full aspect-[9/16] max-w-full';
-      case '1:1':
-        return 'h-full aspect-square max-w-full';
-      case '16:9':
-      default:
-        return 'w-full h-full';
-    }
+  const openDock = (tab: 'timeline' | 'captions') => {
+    setDockTab(tab);
+    setBottomDockCollapsed(false);
   };
 
-  const showStage = workspaceView === 'viewport' || workspaceView === 'split';
-  const showNodeGraph = workspaceView === 'node-graph' || workspaceView === 'split';
+  return (
+    <div className="modebar">
+      {isGame ? (
+        <>
+          <span className="modebar-label game">
+            <Gamepad2 size={12} /> Game rules
+          </span>
+          <label className="mb-f">
+            Target
+            <input
+              type="number"
+              className="field sm w-16 text-right font-mono"
+              min={0}
+              step={5}
+              value={rules.targetScore}
+              onChange={(e) => updateGameRules({ targetScore: Math.max(0, parseFloat(e.target.value) || 0) })}
+            />
+          </label>
+          <label className="mb-f">
+            Timer
+            <input
+              type="number"
+              className="field sm w-14 text-right font-mono"
+              min={1}
+              value={rules.timeLimitSeconds}
+              onChange={(e) => updateGameRules({ timeLimitSeconds: Math.max(1, parseFloat(e.target.value) || 1) })}
+            />
+            s
+          </label>
+          <label className="mb-f">
+            Win
+            <select
+              className="field sm"
+              value={rules.winCondition}
+              onChange={(e) => updateGameRules({ winCondition: e.target.value as GameRule['winCondition'] })}
+            >
+              <option value="score-threshold">score threshold</option>
+              <option value="collect-all">collect all</option>
+              <option value="survive-timer">survive timer</option>
+              <option value="unbox-reveal">unbox reveal</option>
+            </select>
+          </label>
+          <label className="mb-f" title="Player physics: gravity used by the 2D platformer and jump impulses">
+            Gravity
+            <input
+              type="number"
+              className="field sm w-14 text-right font-mono"
+              step={0.1}
+              value={settings.physicsGravity}
+              onChange={(e) => updateSettings({ physicsGravity: parseFloat(e.target.value) || 0 })}
+            />
+          </label>
+          <span className="mb-f">
+            <Kbd>WASD</Kbd> move {is2D && <><Kbd>Space</Kbd> jump</>}
+          </span>
+          <span className="topbar-sep" />
+          <label className="mb-f">
+            <input
+              type="checkbox"
+              checked={cta.enabled}
+              onChange={(e) => updateMarketingOverlay({ enabled: e.target.checked })}
+              className="accent-[rgb(var(--game))]"
+            />
+            CTA
+            <input
+              className="field sm w-28"
+              aria-label="Playable CTA label"
+              value={cta.ctaText}
+              onChange={(e) => updateMarketingOverlay({ ctaText: e.target.value })}
+            />
+          </label>
+          <span className="topbar-sep" />
+          <span className="mb-f font-mono text-game">
+            {gameScore}/{rules.targetScore} pts
+          </span>
+          <span className={`mb-f font-mono ${gameTimeRemaining <= 5 ? 'text-err' : ''}`}>{Math.ceil(gameTimeRemaining)}s</span>
+          <button type="button" className="btn ghost sm" onClick={resetGameSession} title="Reset score and timer">
+            <RotateCcw size={11} /> Reset
+          </button>
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={() => railPanel !== 'logic' && togglePanel('logic')}
+            title="Open When → Do rules and HUD settings"
+          >
+            <Workflow size={11} /> Rules
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="modebar-label media">
+            <Clapperboard size={12} /> Cinematic
+          </span>
+          {!is2D ? (
+            <label className="mb-f">
+              Camera track
+              <select
+                className="field sm"
+                value={sceneSpec.camera.mode}
+                onChange={(e) => setCameraMode(e.target.value as CameraMode)}
+              >
+                <option value="orbit-360">orbit-360 (turntable)</option>
+                <option value="dolly-zoom-in">dolly-zoom-in (hero push)</option>
+                <option value="crane-reveal">crane-reveal (sweep up)</option>
+                <option value="top-down-isometric">top-down-isometric</option>
+                <option value="first-person-follow">first-person-follow</option>
+                <option value="cinematic-flythrough">cinematic-flythrough (keyframes)</option>
+              </select>
+            </label>
+          ) : (
+            <span className="mb-f">2D stage · per-layer keyframe tracks</span>
+          )}
+          <label className="mb-f">
+            Duration
+            <input
+              type="number"
+              className="field sm w-14 text-right font-mono"
+              min={2}
+              max={120}
+              value={sceneSpec.durationSeconds}
+              onChange={(e) => setSceneDuration(parseFloat(e.target.value) || 2)}
+            />
+            s
+          </label>
+          {!is2D && (
+            <button
+              type="button"
+              className="btn ghost sm"
+              title="Add a camera keyframe at the playhead"
+              onClick={() => {
+                addCameraKeyframe();
+                openDock('timeline');
+              }}
+            >
+              <Diamond size={11} /> Keyframe
+              <span className="font-mono text-dim">{(sceneSpec.camera.keyframes || []).length}</span>
+            </button>
+          )}
+          <button type="button" className="btn ghost sm" onClick={() => openDock('timeline')}>
+            Sequencer
+          </button>
+          <span className="topbar-sep" />
+          <label className="mb-f" title="Post-processing bloom">
+            <input
+              type="checkbox"
+              checked={settings.enableBloom}
+              onChange={(e) => updateSettings({ enableBloom: e.target.checked })}
+              className="accent-[rgb(var(--media))]"
+            />
+            Bloom
+          </label>
+          <label className="mb-f">
+            Quality
+            <select
+              className="field sm"
+              value={settings.renderQuality}
+              onChange={(e) => updateSettings({ renderQuality: e.target.value as SettingsConfig['renderQuality'] })}
+            >
+              <option value="draft">draft</option>
+              <option value="high">high</option>
+              <option value="ultra-postprocessing">ultra + post</option>
+            </select>
+          </label>
+          <span className="topbar-sep" />
+          <button type="button" className="btn ghost sm" onClick={() => openDock('captions')} title="Voiceover captions and audio mixer">
+            <Captions size={11} /> Captions
+            <span className="font-mono text-dim">{(sceneSpec.captions || []).length}</span>
+          </button>
+          <button type="button" className="btn ghost sm" onClick={handleQuickRecord5s} disabled={isRecordingVideo}>
+            <Video size={11} className="text-err" /> {isRecordingVideo ? `Rec ${recordingProgress}%` : 'Record 5s'}
+          </button>
+        </>
+      )}
+
+      <div className="flex-1" />
+      {workspaceView === 'split' && (
+        <Segmented
+          label="Split orientation"
+          small
+          value={splitOrientation}
+          onChange={setSplitOrientation}
+          options={[
+            { value: 'row', title: 'Side by side', icon: <Columns2 size={13} /> },
+            { value: 'column', title: 'Stacked', icon: <Rows2 size={13} /> },
+          ]}
+        />
+      )}
+      <IconBtn small label="Snapshot PNG" onClick={() => exportCanvasSnapshotPNG(getActiveCanvas(), sceneSpec.title)}>
+        <Camera size={14} />
+      </IconBtn>
+    </div>
+  );
+};
+
+// ----------------------------------------------------------------------------
+// The live stage: one mounted engine canvas, letterboxed to the scene aspect ratio
+// ----------------------------------------------------------------------------
+const StageBody: React.FC<{ compact: boolean; padBottom: number }> = ({ compact, padBottom }) => {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const size = useSize(boxRef);
+
+  const sceneSpec = useStudioStore((s) => s.sceneSpec);
+  const selectedActorId = useStudioStore((s) => s.selectedActorId);
+  const selectedNode2DId = useStudioStore((s) => s.selectedNode2DId);
+  const currentTime = useStudioStore((s) => s.currentTime);
+  const gameScore = useStudioStore((s) => s.gameScore);
+  const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
+  const gameEnded = useStudioStore((s) => s.gameEnded);
+  const scorePopups = useStudioStore((s) => s.scorePopups);
+  const isVisionRunning = useStudioStore((s) => s.isVisionRunning);
+  const resetGameSession = useStudioStore((s) => s.resetGameSession);
+
+  const is2D = sceneSpec.engineType === '2d';
+  const isGame = sceneSpec.mode === 'game';
+  const selectedActor = !is2D ? sceneSpec.actors.find((a) => a.id === selectedActorId) || null : null;
+  const selectedNode2D = is2D ? (sceneSpec.nodes2D || []).find((n) => n.id === selectedNode2DId) || null : null;
+
+  const pad = compact ? 0 : 12;
+  const availW = Math.max(0, size.w - pad * 2);
+  const availH = Math.max(0, size.h - pad * 2 - padBottom);
+  const ratio = ASPECT[sceneSpec.aspectRatio] ?? 16 / 9;
+  const frameW = Math.floor(Math.min(availW, availH * ratio));
+  const frameH = Math.floor(frameW / ratio);
+  const frameX = pad + (availW - frameW) / 2;
+  const frameY = pad + (availH - frameH) / 2;
+
+  const caption = (sceneSpec.captions || []).find((c) => currentTime >= c.start && currentTime <= c.end);
 
   return (
-    <main className="flex-1 h-full bg-[#060911] relative flex flex-col overflow-hidden">
-      {/* Phase 5 Top Workspace Switcher Bar */}
-      <div className="h-10 px-3.5 bg-[#090D16] border-b border-slate-800/90 flex items-center justify-between gap-3 shrink-0 z-30">
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800/90">
-          {(
-            [
-              {
-                id: 'viewport',
-                label: '3D/2D Viewport',
-                icon: <Box className="w-3.5 h-3.5" />,
-              },
-              {
-                id: 'node-graph',
-                label: 'Logic Node Graph (n8n/ComfyUI)',
-                icon: <GitBranch className="w-3.5 h-3.5" />,
-              },
-              {
-                id: 'split',
-                label: 'Split View (Stage + Nodes)',
-                icon: <Columns2 className="w-3.5 h-3.5" />,
-              },
-            ] as { id: WorkspaceViewMode; label: string; icon: React.ReactNode }[]
-          ).map((tab) => {
-            const active = workspaceView === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setWorkspaceView(tab.id)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                  active
-                    ? 'bg-cyan-500 text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {tab.icon}
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
+    <div ref={boxRef} className="stage-bg absolute inset-0 overflow-hidden">
+      <div
+        className="stage-frame"
+        style={{ left: frameX, top: frameY, width: Math.max(frameW, 1), height: Math.max(frameH, 1), borderRadius: compact ? 0 : 6 }}
+      >
+        {/* Dual engine rendering: 3D WebGL vs 2D vector / sprite canvas */}
+        {is2D ? <StageCanvas2D /> : <StageCanvas />}
 
-        <div className="hidden md:flex items-center gap-2 text-[11px] font-mono text-slate-400">
-          <span>
-            Active Graph:{' '}
-            <strong className="text-emerald-400">
-              {sceneSpec.logicGraph?.nodes.length || 0} Nodes
-            </strong>
-          </span>
-          <span>·</span>
-          <span>
-            Bidirectional Sync: <strong className="text-cyan-400">ON</strong>
-          </span>
-        </div>
-      </div>
-
-      {/* Main Center Area: Stage Viewport, Node Graph, or Side-by-Side Split View */}
-      <div className="flex-1 w-full min-h-0 flex overflow-hidden">
-        {/* LEFT / FULL PANE: 3D/2D Visual Stage */}
-        {showStage && (
-          <div
-            className={`${
-              workspaceView === 'split'
-                ? 'w-1/2 border-r border-slate-800/90 p-2'
-                : 'w-full p-3'
-            } h-full flex items-center justify-center overflow-hidden relative`}
-          >
-            <div
-              className={`relative rounded-xl overflow-hidden border border-slate-800/90 shadow-2xl bg-[#0B101B] transition-all duration-300 ${getStageFrameClass()}`}
-            >
-              {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas */}
-              {is2D ? <StageCanvas2D /> : <StageCanvas />}
-
-              {/* Top Bar Inside Viewport: Scene Info + Playable Score/Timer */}
-              <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between pointer-events-none z-10 gap-2">
-                <div className="px-3 py-1.5 rounded-lg bg-[#090D16E6] border border-slate-800 flex items-center gap-2 text-xs truncate">
-                  <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
-                      is2D
-                        ? 'bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40'
-                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                    }`}
-                  >
-                    {is2D ? '2D' : '3D'}
-                  </span>
-                  <span className="font-display font-semibold text-slate-100 truncate">
-                    {sceneSpec.title}
-                  </span>
-                  <span className="text-slate-500">·</span>
-                  <span className="font-mono text-cyan-400 tabular-nums">
-                    {sceneSpec.aspectRatio}
-                  </span>
-                  {!is2D && (
-                    <>
-                      <span className="text-slate-500">·</span>
-                      <span className="font-mono text-slate-400">{sceneSpec.camera.mode}</span>
-                    </>
-                  )}
-                </div>
-
-                {sceneSpec.mode === 'game' && (
-                  <div className="flex items-center gap-2 pointer-events-auto shrink-0">
-                    <div className="px-3 py-1.5 rounded-lg bg-[#090D16F0] border border-amber-500/40 flex items-center gap-3 text-xs font-mono tabular-nums">
-                      <span className="text-amber-400 font-semibold">
-                        SCORE: {gameScore} / {sceneSpec.gameRules.targetScore}
-                      </span>
-                      <span className="text-slate-500">·</span>
-                      <span
-                        className={
-                          gameTimeRemaining <= 5 ? 'text-rose-400 font-bold' : 'text-slate-200'
-                        }
-                      >
-                        {Math.ceil(gameTimeRemaining)}s
-                      </span>
-                    </div>
-                    <button
-                      onClick={resetGameSession}
-                      title="Reset Playable Score & Timer"
-                      className="p-1.5 rounded-lg bg-[#090D16F0] hover:bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* 3D FLOATING ACTOR INSPECTOR & SKELETAL CLIP TOOLBAR */}
-              {selectedActor && (
-                <div className="absolute top-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-xl bg-[#090D16F2] border border-cyan-500/40 shadow-2xl flex items-center gap-2 z-20 max-w-[95%] overflow-x-auto">
-                  <span className="text-xs font-semibold text-cyan-300 whitespace-nowrap pr-1 border-r border-slate-800">
-                    {selectedActor.name}
-                  </span>
-
-                  <div className="flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800">
-                    {(
-                      [
-                        { id: 'translate', label: 'Move [W]', icon: <Move className="w-3 h-3" /> },
-                        {
-                          id: 'rotate',
-                          label: 'Rotate [E]',
-                          icon: <RotateCw className="w-3 h-3" />,
-                        },
-                        {
-                          id: 'scale',
-                          label: 'Scale [R]',
-                          icon: <Maximize2 className="w-3 h-3" />,
-                        },
-                      ] as { id: TransformMode; label: string; icon: React.ReactNode }[]
-                    ).map((g) => (
-                      <button
-                        key={g.id}
-                        onClick={() => setTransformMode(g.id)}
-                        className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition-colors whitespace-nowrap ${
-                          transformMode === g.id
-                            ? 'bg-cyan-500 text-slate-950 font-semibold'
-                            : 'text-slate-400 hover:text-slate-100'
-                        }`}
-                      >
-                        {g.icon}
-                        <span>{g.label}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
-                    <select
-                      value={selectedActor.activeClip || selectedActor.availableClips[0]}
-                      onChange={(e) =>
-                        updateActorProperty(selectedActor.id, { activeClip: e.target.value })
-                      }
-                      title="Select Embedded GLTF Skeletal Animation Clip"
-                      className="px-2 py-1 rounded bg-emerald-950/60 border border-emerald-500/40 text-[11px] font-mono text-emerald-300 focus:outline-none focus:border-emerald-400"
-                    >
-                      {selectedActor.availableClips.map((clip) => (
-                        <option key={clip} value={clip}>
-                          Clip: {clip}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-
-                  <select
-                    value={selectedActor.activeAnimation}
-                    onChange={(e) =>
-                      updateActorProperty(selectedActor.id, {
-                        activeAnimation: e.target.value as AnimationType,
-                      })
-                    }
-                    className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-                  >
-                    {(
-                      ['idle', 'bounce', 'spin', 'walk', 'attack', 'float'] as AnimationType[]
-                    ).map((anim) => (
-                      <option key={anim} value={anim}>
-                        Motion: {anim}
-                      </option>
-                    ))}
-                  </select>
-
-                  <label
-                    title="Change Actor Primary Color"
-                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800 cursor-pointer shrink-0"
-                  >
-                    <input
-                      type="color"
-                      value={selectedActor.primaryColor}
-                      onChange={(e) =>
-                        updateActorProperty(selectedActor.id, { primaryColor: e.target.value })
-                      }
-                      className="w-4 h-4 rounded cursor-pointer bg-transparent border-0"
-                    />
-                    <span className="text-[10px] font-mono text-slate-300">
-                      {selectedActor.primaryColor}
-                    </span>
-                  </label>
-
-                  <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
-                    <button
-                      onClick={() =>
-                        updateActorProperty(selectedActor.id, { locked: !selectedActor.locked })
-                      }
-                      title={
-                        selectedActor.locked ? 'Unlock Actor Transform' : 'Lock Actor Transform'
-                      }
-                      className={`p-1.5 rounded transition-colors ${
-                        selectedActor.locked
-                          ? 'bg-amber-500/20 text-amber-300'
-                          : 'bg-slate-900 hover:bg-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {selectedActor.locked ? (
-                        <Lock className="w-3.5 h-3.5" />
-                      ) : (
-                        <Unlock className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => duplicateActor(selectedActor.id)}
-                      title="Duplicate Actor"
-                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-cyan-300 transition-colors"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => removeActor(selectedActor.id)}
-                      title="Delete Actor"
-                      className="p-1.5 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* 2D FLOATING NODE INSPECTOR */}
-              {selectedNode2D && (
-                <div className="absolute top-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-xl bg-[#090D16F2] border border-fuchsia-500/40 shadow-2xl flex items-center gap-2 z-20 max-w-[95%] overflow-x-auto">
-                  <span className="text-xs font-semibold text-fuchsia-300 whitespace-nowrap pr-1 border-r border-slate-800">
-                    {selectedNode2D.name}
-                  </span>
-
-                  {selectedNode2D.type === 'text-kinetic' && (
-                    <input
-                      type="text"
-                      value={selectedNode2D.text || ''}
-                      onChange={(e) => updateNode2D(selectedNode2D.id, { text: e.target.value })}
-                      placeholder="Text content..."
-                      className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-xs text-slate-100 w-36 focus:outline-none focus:border-fuchsia-400"
-                    />
-                  )}
-
-                  <label
-                    title="2D Node Fill Color"
-                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-900 border border-slate-800 cursor-pointer shrink-0"
-                  >
-                    <input
-                      type="color"
-                      value={selectedNode2D.fill}
-                      onChange={(e) => updateNode2D(selectedNode2D.id, { fill: e.target.value })}
-                      className="w-4 h-4 rounded cursor-pointer bg-transparent border-0"
-                    />
-                    <span className="text-[10px] font-mono text-slate-300">
-                      {selectedNode2D.fill}
-                    </span>
-                  </label>
-
-                  <select
-                    value={selectedNode2D.physics2D}
-                    onChange={(e) =>
-                      updateNode2D(selectedNode2D.id, {
-                        physics2D: e.target.value as Physics2DRole,
-                      })
-                    }
-                    className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-fuchsia-400"
-                  >
-                    <option value="none">Role: None / UI</option>
-                    <option value="player-platformer">Role: 2D Platformer Player</option>
-                    <option value="player-topdown">Role: 2D Top-Down Player</option>
-                    <option value="static-platform">Role: Solid Platform</option>
-                    <option value="collectible">Role: Collectible (+PTS)</option>
-                    <option value="bouncing">Role: Bouncing Orb</option>
-                  </select>
-
-                  <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
-                    <button
-                      onClick={() => duplicateNode2D(selectedNode2D.id)}
-                      title="Duplicate 2D Layer"
-                      className="p-1.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-fuchsia-300 transition-colors"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => removeNode2D(selectedNode2D.id)}
-                      title="Delete 2D Layer"
-                      className="p-1.5 rounded bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Game Mode Instructions Helper Bar */}
-              {sceneSpec.mode === 'game' && !gameEnded && (
-                <div className="absolute top-28 left-3.5 px-3 py-1 rounded-md bg-[#090D16D9] border border-slate-800/80 text-[11px] text-slate-300 pointer-events-none z-10">
-                  {sceneSpec.gameRules.instructions}
-                </div>
-              )}
-
-              {/* Floating Score Popups on Actor Click / Collision */}
-              <div className="absolute top-28 right-4 flex flex-col items-end gap-1.5 pointer-events-none z-10">
-                {scorePopups.slice(-3).map((p) => (
-                  <div
-                    key={p.id}
-                    className="px-2.5 py-1 rounded bg-[#090D16E6] border border-amber-500/50 text-xs font-mono font-semibold text-amber-300 shadow-lg"
-                  >
-                    {p.text}
-                  </div>
-                ))}
-              </div>
-
-              {/* PLAYABLE AD END-CARD OVERLAY */}
-              {sceneSpec.mode === 'game' && gameEnded && (
-                <div className="absolute inset-0 bg-black/75 flex items-center justify-center p-6 z-30">
-                  <div className="w-full max-w-md p-6 rounded-2xl bg-[#090D16] border-2 border-amber-400/80 shadow-2xl flex flex-col items-center text-center space-y-4">
-                    <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-400">
-                      <Trophy className="w-6 h-6" />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[11px] font-mono uppercase tracking-widest text-cyan-400">
-                        {gameWon ? 'PLAYABLE GOAL UNLOCKED' : 'TIME UP · PLAYABLE END-CARD'}
-                      </div>
-                      <h3 className="font-display font-bold text-xl text-white">
-                        {sceneSpec.marketingOverlay.headline}
-                      </h3>
-                      <p className="text-xs text-slate-300">
-                        {sceneSpec.marketingOverlay.subheadline}
-                      </p>
-                    </div>
-
-                    <div className="w-full py-2.5 px-4 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-around text-xs font-mono tabular-nums">
-                      <div>
-                        <span className="text-slate-400 block text-[10px]">FINAL SCORE</span>
-                        <span className="text-amber-400 font-bold text-sm">{gameScore} PTS</span>
-                      </div>
-                      <div className="h-6 w-px bg-slate-800" />
-                      <div>
-                        <span className="text-slate-400 block text-[10px]">TARGET GOAL</span>
-                        <span className="text-cyan-300 font-bold text-sm">
-                          {sceneSpec.gameRules.targetScore} PTS
-                        </span>
-                      </div>
-                    </div>
-
-                    {gameWon &&
-                      sceneSpec.sequence?.nextSceneId &&
-                      scenes.some((s) => s.id === sceneSpec.sequence?.nextSceneId) && (
-                        <button
-                          onClick={() => advanceToNextScene()}
-                          className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 font-display font-bold text-xs uppercase tracking-wider text-slate-950 transition-colors"
-                        >
-                          {sceneSpec.sequence.kind === 'game-levels'
-                            ? `Next Level → ${sceneSpec.sequence.index + 2}/${sceneSpec.sequence.total}`
-                            : 'Next Scene →'}
-                        </button>
-                      )}
-
-                    <div className="w-full flex flex-col sm:flex-row gap-2.5 pt-1">
-                      <button
-                        onClick={() => setPublishModalOpen(true)}
-                        className="flex-1 py-2.5 px-4 rounded-xl font-display font-bold text-xs uppercase tracking-wider text-slate-950 shadow-lg transition-transform active:scale-95"
-                        style={{
-                          backgroundColor: sceneSpec.marketingOverlay.brandColor || '#F59E0B',
-                        }}
-                      >
-                        {sceneSpec.marketingOverlay.ctaText}
-                      </button>
-                      <button
-                        onClick={resetGameSession}
-                        className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition-colors"
-                      >
-                        Replay Game
-                      </button>
-                      <button
-                        onClick={dismissEndCard}
-                        className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs text-slate-400 hover:text-slate-200 transition-colors"
-                      >
-                        Edit Stage
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Programmatic Marketing CTA Banner */}
-              {sceneSpec.marketingOverlay.enabled && !gameEnded && (
-                <div
-                  className={`absolute left-1/2 -translate-x-1/2 w-[min(460px,92%)] px-4 py-2.5 rounded-xl bg-[#090D16EB] border border-slate-800 shadow-xl flex items-center justify-between gap-4 z-10 transition-all ${
-                    isBottomDockCollapsed ? 'bottom-5' : 'bottom-24'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    {sceneSpec.marketingOverlay.badgeText && (
-                      <div
-                        className="text-[10px] font-mono font-semibold uppercase tracking-wider mb-0.5"
-                        style={{ color: sceneSpec.marketingOverlay.brandColor || '#F59E0B' }}
-                      >
-                        {sceneSpec.marketingOverlay.badgeText}
-                      </div>
-                    )}
-                    <div className="font-display font-bold text-sm text-slate-100 truncate">
-                      {sceneSpec.marketingOverlay.headline}
-                    </div>
-                    <div className="text-xs text-slate-400 truncate">
-                      {sceneSpec.marketingOverlay.subheadline}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setPublishModalOpen(true)}
-                    className="px-3.5 py-2 rounded-lg text-xs font-display font-bold uppercase tracking-wide text-slate-950 shrink-0 transition-transform active:scale-95"
-                    style={{ backgroundColor: sceneSpec.marketingOverlay.brandColor || '#F59E0B' }}
-                  >
-                    {sceneSpec.marketingOverlay.ctaText}
-                  </button>
-                </div>
-              )}
-
-              {/* INTERACTIVE TIMELINE SEQUENCER & CAMERA TRACK DOCK */}
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[min(900px,96%)] z-20 flex flex-col items-center">
-                <button
-                  onClick={() => setBottomDockCollapsed(!isBottomDockCollapsed)}
-                  className="px-3 py-1 rounded-t-md bg-[#090D16F0] border border-b-0 border-slate-800 text-[11px] font-mono text-slate-400 hover:text-slate-200 flex items-center gap-1"
-                >
-                  {isBottomDockCollapsed ? (
-                    <>
-                      <ChevronUp className="w-3 h-3" />
-                      <span>Show Sequencer & Camera Dock</span>
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="w-3 h-3" />
-                      <span>Hide Dock</span>
-                    </>
-                  )}
-                </button>
-
-                {!isBottomDockCollapsed && (
-                  <div className="w-full px-3.5 py-2.5 rounded-xl bg-[#090D16F5] border border-slate-800 shadow-2xl flex flex-col gap-2">
-                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-                        <button
-                          onClick={togglePlay}
-                          className="w-8 h-8 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center shrink-0 transition-colors"
-                          title={isPlaying ? 'Pause Sequencer' : 'Play Sequencer'}
-                        >
-                          {isPlaying ? (
-                            <Pause className="w-4 h-4" />
-                          ) : (
-                            <Play className="w-4 h-4 ml-0.5" />
-                          )}
-                        </button>
-
-                        <button
-                          onClick={toggleLoop}
-                          title="Toggle Loop Playback"
-                          className={`p-2 rounded-lg border text-xs transition-colors shrink-0 ${
-                            isLooping
-                              ? 'bg-slate-800 border-cyan-500/40 text-cyan-300'
-                              : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          <Repeat className="w-3.5 h-3.5" />
-                        </button>
-
-                        <div className="flex-1 flex flex-col gap-1">
-                          <div className="flex items-center justify-between text-[11px] font-mono text-slate-300 tabular-nums">
-                            <span className="text-slate-400">Timeline Sequencer</span>
-                            <span>
-                              {currentTime.toFixed(1).padStart(4, '0')}s /{' '}
-                              {duration.toFixed(1).padStart(4, '0')}s
-                            </span>
-                          </div>
-
-                          <div className="relative flex items-center">
-                            <input
-                              type="range"
-                              min={0}
-                              max={duration}
-                              step={0.05}
-                              value={currentTime}
-                              onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
-                              className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg relative z-10"
-                            />
-                          </div>
-
-                          <div className="relative h-2 w-full bg-slate-900/90 rounded overflow-hidden flex items-center">
-                            {is2D
-                              ? (sceneSpec.nodes2D || []).map((node, idx, arr) => {
-                                  const widthPct = Math.max(12, 100 / Math.max(1, arr.length));
-                                  const leftPct = Math.min(100 - widthPct, idx * widthPct);
-                                  return (
-                                    <div
-                                      key={node.id}
-                                      title={`2D Layer: ${node.name} (${node.type})`}
-                                      style={{
-                                        left: `${leftPct}%`,
-                                        width: `${widthPct}%`,
-                                        backgroundColor: node.fill || '#EC4899',
-                                      }}
-                                      className="absolute top-0.5 bottom-0.5 rounded-sm opacity-65"
-                                    />
-                                  );
-                                })
-                              : sceneSpec.actors.map((act) => {
-                                  const st = act.startTime ?? 0;
-                                  const et = act.endTime ?? duration;
-                                  const leftPct = Math.min(100, Math.max(0, (st / duration) * 100));
-                                  const widthPct = Math.min(
-                                    100 - leftPct,
-                                    Math.max(4, ((et - st) / duration) * 100)
-                                  );
-                                  return (
-                                    <div
-                                      key={act.id}
-                                      title={`${act.name}: ${st.toFixed(1)}s – ${et.toFixed(1)}s`}
-                                      style={{
-                                        left: `${leftPct}%`,
-                                        width: `${widthPct}%`,
-                                        backgroundColor: act.primaryColor || '#06B6D4',
-                                      }}
-                                      className="absolute top-0.5 bottom-0.5 rounded-sm opacity-65"
-                                    />
-                                  );
-                                })}
-                          </div>
-                        </div>
-                      </div>
-
-                      {!is2D && workspaceView !== 'split' && (
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">
-                            Camera:
-                          </span>
-                          <select
-                            value={sceneSpec.camera.mode}
-                            onChange={(e) => setCameraMode(e.target.value as CameraMode)}
-                            className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
-                          >
-                            <option value="orbit-360">orbit-360 (Turntable)</option>
-                            <option value="dolly-zoom-in">dolly-zoom-in (Hero Push)</option>
-                            <option value="crane-reveal">crane-reveal (Sweep Up)</option>
-                            <option value="top-down-isometric">top-down-isometric (Arena)</option>
-                            <option value="first-person-follow">first-person-follow</option>
-                            <option value="cinematic-flythrough">
-                              cinematic-flythrough (Spline)
-                            </option>
-                          </select>
-                        </div>
-                      )}
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={handleQuickRecord5s}
-                          disabled={isRecordingVideo}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 transition-colors whitespace-nowrap"
-                        >
-                          <Video className="w-3.5 h-3.5 text-rose-400" />
-                          <span>
-                            {isRecordingVideo ? `Rec ${recordingProgress}%` : 'Record 5s WebM'}
-                          </span>
-                        </button>
-
-                        <button
-                          onClick={handleRunVisionQA}
-                          disabled={isVisionRunning}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-xs font-semibold text-cyan-300 transition-colors whitespace-nowrap"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>{isVisionRunning ? 'Scanning...' : 'Visual QA Snapshot'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+        {!compact && (
+          <div className="pointer-events-none absolute left-2.5 top-2.5 z-10 flex max-w-[60%] items-center gap-2">
+            <span className="chip glass-s">
+              <span className={`font-mono font-semibold ${is2D ? 'text-media' : 'text-accent'}`}>{is2D ? '2D' : '3D'}</span>
+              <span className="truncate text-fg">{sceneSpec.title}</span>
+              <span className="font-mono text-dim">{sceneSpec.aspectRatio}</span>
+              {!is2D && <span className="hidden font-mono text-dim lg:inline">{sceneSpec.camera.mode}</span>}
+            </span>
           </div>
         )}
 
-        {/* RIGHT / FULL PANE: Interactive ComfyUI / n8n Node Graph */}
-        {showNodeGraph && (
-          <div className={`${workspaceView === 'split' ? 'w-1/2' : 'w-full'} h-full relative`}>
+        {isGame && (
+          <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">
+            <span className="chip glass-s font-mono" style={{ borderColor: 'rgb(var(--game) / 0.45)' }}>
+              <span className="font-semibold text-game">
+                {gameScore}/{sceneSpec.gameRules.targetScore}
+              </span>
+              <span className={gameTimeRemaining <= 5 ? 'font-bold text-err' : 'text-fg'}>{Math.ceil(gameTimeRemaining)}s</span>
+            </span>
+            {!compact && (
+              <button type="button" className="chip glass-s" onClick={resetGameSession} title="Reset playable score & timer" aria-label="Reset playable score and timer">
+                <RotateCcw size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {!compact && selectedActor && <ActorInspectorPill selectedActor={selectedActor} />}
+        {!compact && selectedNode2D && <Node2DInspectorPill selectedNode2D={selectedNode2D} />}
+
+        {!compact && isGame && !gameEnded && sceneSpec.gameRules.instructions && (
+          <div className="pointer-events-none absolute left-2.5 top-24 z-10 max-w-[70%] rounded-md px-2.5 py-1 text-[11px] text-mute glass-s">
+            {sceneSpec.gameRules.instructions}
+          </div>
+        )}
+
+        <div className="pointer-events-none absolute right-3 top-24 z-10 flex flex-col items-end gap-1.5">
+          {scorePopups.slice(-3).map((p) => (
+            <div key={p.id} className="rise rounded px-2.5 py-1 font-mono text-xs font-semibold text-game glass-s">
+              {p.text}
+            </div>
+          ))}
+        </div>
+
+        {caption && (
+          <div className="pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4" style={{ bottom: compact ? '5%' : '9%' }}>
+            <span className="cap" style={{ fontSize: clamp(frameW * 0.022, 10, 22) }}>
+              {caption.text}
+            </span>
+          </div>
+        )}
+
+        {isGame && gameEnded &&
+          (compact ? (
+            <div className="absolute inset-0 z-30 grid place-items-center bg-black/70">
+              <button type="button" className="btn warn sm" onClick={resetGameSession}>
+                <RotateCcw size={11} /> Replay
+              </button>
+            </div>
+          ) : (
+            <EndCard />
+          ))}
+
+        {!compact && sceneSpec.marketingOverlay.enabled && !gameEnded && <CtaBanner raised={Boolean(caption)} />}
+
+        {isVisionRunning && (
+          <div className="scan">
+            <span>Vision QA · scanning canvas</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ----------------------------------------------------------------------------
+// Workspace: Stage / Node Graph + live PiP / Split View, with the unified dock below
+// ----------------------------------------------------------------------------
+export const CenterViewport: React.FC = () => {
+  const wsRef = useRef<HTMLDivElement | null>(null);
+  const ws = useSize(wsRef);
+  const [draggingDivider, setDraggingDivider] = useState(false);
+  const dragStart = useRef({ ratio: 0.5, right: 0, top: 0, width: 0 });
+
+  const workspaceView = useStudioStore((s) => s.workspaceView);
+  const aspectRatio = useStudioStore((s) => s.sceneSpec.aspectRatio);
+  const is2D = useStudioStore((s) => s.sceneSpec.engineType === '2d');
+  const setWorkspaceView = useStudioStore((s) => s.setWorkspaceView);
+
+  const focusMode = useShellStore((s) => s.focusMode);
+  const toggleFocusMode = useShellStore((s) => s.toggleFocusMode);
+  const aiMode = useShellStore((s) => s.aiMode);
+  const splitOrientation = useShellStore((s) => s.splitOrientation);
+  const splitRatio = useShellStore((s) => s.splitRatio);
+  const setSplitRatio = useShellStore((s) => s.setSplitRatio);
+  const pip = useShellStore((s) => s.pip);
+  const setPip = useShellStore((s) => s.setPip);
+
+  useMediaPlayback();
+
+  // Global shell shortcuts: [\] focus mode, [`] collapse dock.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === '\\') {
+        e.preventDefault();
+        useShellStore.getState().toggleFocusMode();
+      } else if (e.key === '`') {
+        e.preventDefault();
+        const s = useStudioStore.getState();
+        s.setBottomDockCollapsed(!s.isBottomDockCollapsed);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const W = ws.w;
+  const H = ws.h;
+  const isSplit = workspaceView === 'split';
+  const isPip = workspaceView === 'node-graph';
+  const isRow = splitOrientation === 'row';
+
+  // Geometry of the two panes. The stage element is always mounted, only its rectangle changes,
+  // so switching views never tears down the WebGL context.
+  let stageStyle: React.CSSProperties = { left: 0, top: 0, width: W, height: H };
+  let graphStyle: React.CSSProperties | null = null;
+  let dividerStyle: React.CSSProperties | null = null;
+
+  if (isSplit) {
+    if (isRow) {
+      const cut = Math.round(W * splitRatio);
+      stageStyle = { left: 0, top: 0, width: cut - DIVIDER / 2, height: H };
+      graphStyle = { left: cut + DIVIDER / 2, top: 0, width: W - cut - DIVIDER / 2, height: H };
+      dividerStyle = { left: cut - DIVIDER / 2, top: 0, height: H };
+    } else {
+      const cut = Math.round(H * splitRatio);
+      stageStyle = { left: 0, top: 0, width: W, height: cut - DIVIDER / 2 };
+      graphStyle = { left: 0, top: cut + DIVIDER / 2, width: W, height: H - cut - DIVIDER / 2 };
+      dividerStyle = { left: 0, top: cut - DIVIDER / 2, width: W };
+    }
+  } else if (isPip) {
+    const ratio = ASPECT[aspectRatio] ?? 16 / 9;
+    const maxBodyH = Math.max(120, H - PIP_HEAD - 24);
+    const width = clamp(Math.min(pip.width, maxBodyH * ratio), 200, Math.max(200, W - 24));
+    const height = Math.round(width / ratio) + PIP_HEAD;
+    const right = clamp(pip.right, 8, Math.max(8, W - width - 8));
+    const top = clamp(pip.top, 8, Math.max(8, H - height - 8));
+    stageStyle = { left: W - right - width, top, width, height, zIndex: 30 };
+    graphStyle = { left: 0, top: 0, width: W, height: H };
+  }
+
+  // The command bar floats over the bottom edge, so give the frame room when the stage reaches it.
+  const stageReachesBottom = workspaceView === 'viewport' || (isSplit && isRow);
+  const padBottom = !focusMode && aiMode === 'bar' && stageReachesBottom ? 58 : 0;
+
+  return (
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {!focusMode && <ModeBar />}
+
+      <div ref={wsRef} className="stage-bg relative min-h-0 flex-1 overflow-hidden">
+        {graphStyle && (
+          <div className="absolute overflow-hidden" style={graphStyle}>
             <NodeGraphView />
           </div>
         )}
+
+        <div className={`absolute ${isPip ? 'pip glass' : ''}`} style={stageStyle}>
+          {isPip && (
+            <div
+              key="pip-head"
+              className="pip-head"
+              onPointerDown={(e) => {
+                if ((e.target as HTMLElement).closest('button')) return;
+                dragStart.current = { ...dragStart.current, right: pip.right, top: pip.top };
+                startDrag(e, (dx, dy) =>
+                  setPip({ right: Math.max(8, dragStart.current.right - dx), top: Math.max(8, dragStart.current.top + dy) })
+                );
+              }}
+            >
+              <span className="live-dot" />
+              <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-fg">Live {is2D ? '2D' : '3D'} stage</span>
+              <IconBtn small label="Split view" onClick={() => setWorkspaceView('split')}>
+                <Columns2 size={12} />
+              </IconBtn>
+              <IconBtn small label="Expand to full stage" onClick={() => setWorkspaceView('viewport')}>
+                <Maximize2 size={12} />
+              </IconBtn>
+            </div>
+          )}
+          <div key="stage-body" className="absolute inset-x-0 bottom-0" style={{ top: isPip ? PIP_HEAD : 0 }}>
+            <StageBody compact={isPip} padBottom={padBottom} />
+          </div>
+          {isPip && (
+            <div
+              key="pip-resize"
+              className="pip-resize"
+              role="separator"
+              aria-label="Resize live stage window"
+              onPointerDown={(e) => {
+                dragStart.current = { ...dragStart.current, width: Number(stageStyle.width) || pip.width };
+                startDrag(e, (dx) => setPip({ width: clamp(dragStart.current.width - dx, 200, 900) }));
+              }}
+            />
+          )}
+        </div>
+
+        {dividerStyle && (
+          <div
+            className={`divider ${splitOrientation} ${draggingDivider ? 'drag' : ''}`}
+            style={dividerStyle}
+            role="separator"
+            tabIndex={0}
+            aria-orientation={isRow ? 'vertical' : 'horizontal'}
+            aria-label="Resize stage and node graph (double-click to reset)"
+            onDoubleClick={() => setSplitRatio(0.5)}
+            onKeyDown={(e) => {
+              const step = e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -0.03 : e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 0.03 : 0;
+              if (step) {
+                e.preventDefault();
+                setSplitRatio(splitRatio + step);
+              }
+            }}
+            onPointerDown={(e) => {
+              dragStart.current = { ...dragStart.current, ratio: splitRatio };
+              setDraggingDivider(true);
+              startDrag(
+                e,
+                (dx, dy) => setSplitRatio(dragStart.current.ratio + (isRow ? dx / Math.max(1, W) : dy / Math.max(1, H))),
+                () => setDraggingDivider(false)
+              );
+            }}
+          >
+            <span />
+          </div>
+        )}
+
+        {focusMode && (
+          <button type="button" className="chip glass-s focus-exit" onClick={toggleFocusMode}>
+            <Minimize2 size={12} /> Exit focus <Kbd>\</Kbd>
+          </button>
+        )}
+
+        <RightAgentChat hidden={focusMode} />
       </div>
 
-      {/* Collapsible Real-Time Execution Log & Debugger Console at Bottom */}
-      <ExecutionConsole />
+      {!focusMode && <BottomDock />}
     </main>
   );
 };

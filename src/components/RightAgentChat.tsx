@@ -1,16 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  CheckCircle2,
+  ArrowUp,
   Code2,
-  Eye,
-  MessageSquareCode,
-  Send,
+  MessageSquare,
+  PanelBottom,
+  PanelRightOpen,
+  ScanEye,
   Sliders,
   Sparkles,
-  Trash2,
-  Wand2,
+  X,
 } from 'lucide-react';
 import { StoryboardJobState, useStudioStore } from '../state/useStudioStore';
+import { AgentIntentMode, useShellStore } from '../state/useShellStore';
 import type { StoryboardIntent } from '../agent/studioAgent';
 import {
   detectStoryboardIntent,
@@ -18,9 +19,11 @@ import {
   mutateSceneWithAgent,
   runVisionQAInspection,
 } from '../agent/studioAgent';
-import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
+import { createBlankSceneSpec } from '../registry/assetRegistry';
+import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
+import { Dropdown, IconBtn, Segmented } from './ui';
 
-type RightTab = 'chat' | 'inspector' | 'json';
+type DrawerTab = 'chat' | 'inspector' | 'json';
 
 const QUICK_PROMPTS = [
   'Build a 3D Forest Valley with pine trees, boulders & a running Fox (.glb)',
@@ -31,57 +34,146 @@ const QUICK_PROMPTS = [
   'Tạo game 2D vượt chướng ngại vật 3 màn',
 ];
 
-export const RightAgentChat: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<RightTab>('chat');
+const INTENT_HELP: Record<AgentIntentMode, { label: string; title: string; placeholder: string }> = {
+  patch: {
+    label: 'Patch',
+    title: 'Patch: edit the current scene in place',
+    placeholder: 'Ask the Director to add actors, wire nodes or fix logic…',
+  },
+  replace: {
+    label: 'Replace',
+    title: 'Replace: rebuild this scene from a blank stage',
+    placeholder: 'Describe a scene to build from scratch (replaces this one)…',
+  },
+  storyboard: {
+    label: 'Storyboard',
+    title: 'Storyboard: generate a linked multi-scene film or set of levels',
+    placeholder: 'Describe a multi-scene film or multi-level game…',
+  },
+};
+
+const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/**
+ * AI Director in two interchangeable shells: a compact floating command bar docked to the
+ * bottom of the workspace, and a slide-over drawer with the full chat, inspector and SceneSpec.
+ * Mounted once, so auto-fix requests are picked up whichever shell is showing.
+ */
+export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('chat');
   const [promptInput, setPromptInput] = useState('');
+  const [dismissedReplyId, setDismissedReplyId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const aiMode = useShellStore((s) => s.aiMode);
+  const setAiMode = useShellStore((s) => s.setAiMode);
+  const intent = useShellStore((s) => s.agentIntent);
+  const setIntent = useShellStore((s) => s.setAgentIntent);
 
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
-  const selectedActorId = useStudioStore((s) => s.selectedActorId);
   const chatMessages = useStudioStore((s) => s.chatMessages);
   const isAgentThinking = useStudioStore((s) => s.isAgentThinking);
   const storyboardJob = useStudioStore((s) => s.storyboardJob);
   const settings = useStudioStore((s) => s.settings);
-  const setStoryboardJob = useStudioStore((s) => s.setStoryboardJob);
-  const appendStoryboardScene = useStudioStore((s) => s.appendStoryboardScene);
-  const linkStoryboardScenes = useStudioStore((s) => s.linkStoryboardScenes);
   const isVisionRunning = useStudioStore((s) => s.isVisionRunning);
-  const latestVisionReport = useStudioStore((s) => s.latestVisionReport);
   const canvasElement = useStudioStore((s) => s.canvasElement);
   const pendingAgentFixPrompt = useStudioStore((s) => s.pendingAgentFixPrompt);
 
+  const setStoryboardJob = useStudioStore((s) => s.setStoryboardJob);
+  const appendStoryboardScene = useStudioStore((s) => s.appendStoryboardScene);
+  const linkStoryboardScenes = useStudioStore((s) => s.linkStoryboardScenes);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
   const addChatMessage = useStudioStore((s) => s.addChatMessage);
   const setAgentThinking = useStudioStore((s) => s.setAgentThinking);
   const setVisionRunning = useStudioStore((s) => s.setVisionRunning);
   const setLatestVisionReport = useStudioStore((s) => s.setLatestVisionReport);
-  const applyVisionFixes = useStudioStore((s) => s.applyVisionFixes);
-  const selectActor = useStudioStore((s) => s.selectActor);
-  const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
-  const removeActor = useStudioStore((s) => s.removeActor);
   const clearPendingAgentFixPrompt = useStudioStore((s) => s.clearPendingAgentFixPrompt);
   const appendLog = useStudioStore((s) => s.appendLog);
 
-  const selectedActor =
-    sceneSpec.actors.find((a) => a.id === selectedActorId) || sceneSpec.actors[0] || null;
+  const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent) => {
+    setAgentThinking(true);
+    let job: StoryboardJobState = {
+      storyboardId: 'pending',
+      title: 'Planning storyboard',
+      status: 'planning',
+      total: storyboardIntent.sceneCount,
+      completed: 0,
+      currentLabel: 'Planning storyboard beats',
+      source: 'local',
+    };
+    setStoryboardJob(job);
+    const patchJob = (patch: Partial<StoryboardJobState>) => {
+      job = { ...job, ...patch };
+      setStoryboardJob(job);
+    };
+
+    try {
+      const result = await generateStoryboardWithAgent(query, storyboardIntent, settings, {
+        onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
+        onProgress: (p) =>
+          patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
+        onScene: (scene, index) => {
+          if (job.storyboardId === 'pending' && scene.sequence) {
+            patchJob({ storyboardId: scene.sequence.storyboardId });
+          }
+          // Show each scene on stage as soon as it is authored
+          appendStoryboardScene(scene, true);
+          patchJob({ completed: index + 1 });
+        },
+      });
+      linkStoryboardScenes(result.storyboardId, true);
+      patchJob({ status: 'done', completed: result.scenes.length, currentLabel: 'Storyboard ready' });
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: result.assistantMessage,
+        timestamp: now(),
+        diffSummary: result.diffSummary,
+      });
+    } catch (e: any) {
+      patchJob({ status: 'error', error: e?.message || 'Storyboard generation failed' });
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: `Storyboard generation stopped: ${e?.message || 'unknown error'}.`,
+        timestamp: now(),
+      });
+    } finally {
+      setAgentThinking(false);
+      const finishedJob = job;
+      setTimeout(() => {
+        if (useStudioStore.getState().storyboardJob === finishedJob) setStoryboardJob(null);
+      }, 4000);
+    }
+  };
 
   const handleSendPrompt = async (textToUse?: string) => {
     const query = (textToUse ?? promptInput).trim();
     if (!query || isAgentThinking) return;
     if (!textToUse) setPromptInput('');
 
-    const userMsgId = `msg-u-${Date.now()}`;
+    const isAutoFix = query.startsWith('Auto-Fix Execution Issue');
+    // Auto-fix repairs always patch the live scene, whatever intent the bar is set to.
+    const mode: AgentIntentMode = isAutoFix ? 'patch' : intent;
+
     addChatMessage({
-      id: userMsgId,
+      id: `msg-u-${Date.now()}`,
       role: 'user',
-      content: query,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      content: mode === 'patch' ? query : `[${INTENT_HELP[mode].label}] ${query}`,
+      timestamp: now(),
     });
 
-    // Multi-step storyboard: "phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...
-    // Auto-Fix repair prompts must never be mistaken for a storyboard request.
-    const storyboardIntent = query.startsWith('Auto-Fix Execution Issue')
-      ? null
-      : detectStoryboardIntent(query);
+    // Multi-step storyboard: forced by Storyboard mode, or detected from the wording in Patch mode
+    // ("phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...).
+    const detected = isAutoFix || mode === 'replace' ? null : detectStoryboardIntent(query);
+    const storyboardIntent: StoryboardIntent | null =
+      mode === 'storyboard'
+        ? detected ?? {
+            sceneCount: 3,
+            kind: sceneSpec.mode === 'game' ? 'game-levels' : 'film',
+            engineType: sceneSpec.engineType || '3d',
+          }
+        : detected;
     if (storyboardIntent) {
       await runStoryboardGeneration(query, storyboardIntent);
       return;
@@ -90,12 +182,23 @@ export const RightAgentChat: React.FC = () => {
     setAgentThinking(true);
     try {
       const prevSnapshot = JSON.parse(JSON.stringify(sceneSpec));
-      const result = await mutateSceneWithAgent(query, sceneSpec);
+      // Replace hands the agent a blank stage that keeps this scene's identity and format.
+      const baseSpec =
+        mode === 'replace'
+          ? {
+              ...createBlankSceneSpec(sceneSpec.engineType || '3d', sceneSpec.title),
+              id: sceneSpec.id,
+              mode: sceneSpec.mode,
+              aspectRatio: sceneSpec.aspectRatio,
+              sequence: sceneSpec.sequence,
+            }
+          : sceneSpec;
+      const result = await mutateSceneWithAgent(query, baseSpec);
 
       // If this was an Auto-Fix request from the Execution Console / Node Graph,
-      // also repair any faulted LogicNode states in the updated SceneSpec!
+      // also repair any faulted LogicNode states in the updated SceneSpec.
       const nextSpec = JSON.parse(JSON.stringify(result.updatedSceneSpec));
-      if (query.startsWith('Auto-Fix Execution Issue') && nextSpec.logicGraph) {
+      if (isAutoFix && nextSpec.logicGraph) {
         nextSpec.logicGraph.nodes = nextSpec.logicGraph.nodes.map((n: any) => ({
           ...n,
           status: 'success',
@@ -121,7 +224,7 @@ export const RightAgentChat: React.FC = () => {
         id: `msg-a-${Date.now()}`,
         role: 'assistant',
         content: result.assistantMessage,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: now(),
         diffSummary: result.diffSummary,
         previousSpecSnapshot: prevSnapshot,
         updatedSpecSnapshot: nextSpec,
@@ -136,81 +239,23 @@ export const RightAgentChat: React.FC = () => {
     if (!pendingAgentFixPrompt) return;
     const promptToRun = pendingAgentFixPrompt;
     clearPendingAgentFixPrompt();
-    setActiveTab('chat');
+    setDrawerTab('chat');
     handleSendPrompt(promptToRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAgentFixPrompt]);
-
-  const runStoryboardGeneration = async (query: string, intent: StoryboardIntent) => {
-    setAgentThinking(true);
-    let job: StoryboardJobState = {
-      storyboardId: 'pending',
-      title: 'Planning storyboard',
-      status: 'planning',
-      total: intent.sceneCount,
-      completed: 0,
-      currentLabel: 'Planning storyboard beats',
-      source: 'local',
-    };
-    setStoryboardJob(job);
-    const patchJob = (patch: Partial<StoryboardJobState>) => {
-      job = { ...job, ...patch };
-      setStoryboardJob(job);
-    };
-
-    try {
-      const result = await generateStoryboardWithAgent(query, intent, settings, {
-        onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
-        onProgress: (p) =>
-          patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
-        onScene: (scene, index) => {
-          if (job.storyboardId === 'pending' && scene.sequence) {
-            patchJob({ storyboardId: scene.sequence.storyboardId });
-          }
-          // Show each scene on stage as soon as it is authored
-          appendStoryboardScene(scene, true);
-          patchJob({ completed: index + 1 });
-        },
-      });
-      linkStoryboardScenes(result.storyboardId, true);
-      patchJob({ status: 'done', completed: result.scenes.length, currentLabel: 'Storyboard ready' });
-      addChatMessage({
-        id: `msg-a-${Date.now()}`,
-        role: 'assistant',
-        content: result.assistantMessage,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        diffSummary: result.diffSummary,
-      });
-    } catch (e: any) {
-      patchJob({ status: 'error', error: e?.message || 'Storyboard generation failed' });
-      addChatMessage({
-        id: `msg-a-${Date.now()}`,
-        role: 'assistant',
-        content: `Storyboard generation stopped: ${e?.message || 'unknown error'}.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      });
-    } finally {
-      setAgentThinking(false);
-      const finishedJob = job;
-      setTimeout(() => {
-        if (useStudioStore.getState().storyboardJob === finishedJob) setStoryboardJob(null);
-      }, 4000);
-    }
-  };
 
   const handleTriggerVisionCheck = async () => {
     if (isVisionRunning) return;
     setVisionRunning(true);
     try {
       const activeCanvas =
-        canvasElement && canvasElement.isConnected
-          ? canvasElement
-          : document.querySelector('canvas');
+        canvasElement && canvasElement.isConnected ? canvasElement : document.querySelector('canvas');
       const report = await runVisionQAInspection(activeCanvas, sceneSpec);
       setLatestVisionReport(report);
       addChatMessage({
         id: `msg-vqa-${Date.now()}`,
         role: 'assistant',
-        content: `Vision QA Spatial Audit complete (${report.overallScore}/100). Analyzed WebGL render + ${report.actorCoordinates?.length || sceneSpec.actors.length} actor coordinates. Click "Apply Recommended Fixes" below to auto-correct the stage.`,
+        content: `Vision QA Spatial Audit complete (${report.overallScore}/100). Analyzed the rendered canvas + ${report.actorCoordinates?.length || sceneSpec.actors.length} actor coordinates. Click "Apply Recommended Fixes" to auto-correct the stage.`,
         timestamp: report.timestamp,
         visionReport: report,
       });
@@ -219,477 +264,291 @@ export const RightAgentChat: React.FC = () => {
     }
   };
 
-  return (
-    <aside className="w-96 bg-[#0F172A] border-l border-slate-800/90 flex flex-col h-full shrink-0">
-      {/* Top Panel Navigation */}
-      <div className="p-3.5 border-b border-slate-800/90">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-cyan-400" />
-            <h2 className="font-display font-semibold text-xs uppercase tracking-wider text-slate-200">
-              AI Director & Inspector
-            </h2>
-          </div>
-          <button
-            onClick={handleTriggerVisionCheck}
-            disabled={isVisionRunning}
-            className="flex items-center gap-1 px-2.5 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-[11px] font-medium text-cyan-300 transition-colors"
-          >
-            <Eye className="w-3 h-3" />
-            <span>{isVisionRunning ? 'Scanning...' : 'Vision QA'}</span>
-          </button>
-        </div>
+  // Keep the newest message in view while the drawer chat is open.
+  useEffect(() => {
+    if (aiMode === 'drawer' && drawerTab === 'chat' && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [chatMessages.length, isAgentThinking, storyboardJob, aiMode, drawerTab]);
 
-        <div className="grid grid-cols-3 gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800/80">
-          {[
-            { id: 'chat', label: 'AI Agent', icon: <MessageSquareCode className="w-3.5 h-3.5" /> },
-            { id: 'inspector', label: 'Inspector', icon: <Sliders className="w-3.5 h-3.5" /> },
-            { id: 'json', label: 'SceneSpec', icon: <Code2 className="w-3.5 h-3.5" /> },
-          ].map((t) => {
-            const active = activeTab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id as RightTab)}
-                className={`flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                  active
-                    ? 'bg-slate-800 text-cyan-300 border border-cyan-500/30'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {t.icon}
-                <span>{t.label}</span>
-              </button>
-            );
-          })}
-        </div>
+  if (hidden) return null;
+
+  const intentSeg = (
+    <Segmented<AgentIntentMode>
+      label="Director intent"
+      small
+      value={intent}
+      onChange={setIntent}
+      options={(Object.keys(INTENT_HELP) as AgentIntentMode[]).map((id) => ({
+        value: id,
+        label: INTENT_HELP[id].label,
+        title: INTENT_HELP[id].title,
+      }))}
+    />
+  );
+
+  const storyboardProgress = storyboardJob && (
+    <div className="msg space-y-2" style={{ borderColor: 'rgb(var(--media) / 0.4)' }}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate font-semibold text-media">{storyboardJob.title}</span>
+        <span className="shrink-0 font-mono text-[10px] text-mute">
+          {storyboardJob.completed}/{storyboardJob.total} · {storyboardJob.source}
+        </span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-line2">
+        <div
+          className="h-full bg-media transition-all"
+          style={{
+            width: `${Math.round(
+              ((storyboardJob.status === 'planning' ? 0.15 : storyboardJob.completed) /
+                Math.max(1, storyboardJob.total)) *
+                100
+            )}%`,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[11px] text-mute">
+        {storyboardJob.status === 'planning' && 'Step 1 · Planning storyboard beats…'}
+        {storyboardJob.status === 'generating' &&
+          `Step 2 · Authoring scene ${Math.min(storyboardJob.completed + 1, storyboardJob.total)}: ${storyboardJob.currentLabel}`}
+        {storyboardJob.status === 'done' && 'All scenes linked into the storyboard.'}
+        {storyboardJob.status === 'error' && <span className="text-err">{storyboardJob.error}</span>}
+      </div>
+    </div>
+  );
+
+  // ---------------------------------------------------------------------------
+  // Shell A · floating bottom command bar
+  // ---------------------------------------------------------------------------
+  if (aiMode === 'bar') {
+    const lastAssistant = [...chatMessages].reverse().find((m) => m.role === 'assistant');
+    const showReply = lastAssistant && lastAssistant.id !== dismissedReplyId && chatMessages.length > 1;
+
+    return (
+      <div className="pointer-events-none absolute bottom-3 left-1/2 z-40 flex w-[min(760px,calc(100%-24px))] -translate-x-1/2 flex-col gap-2">
+        {storyboardProgress && <div className="pointer-events-auto glass rounded-[14px]">{storyboardProgress}</div>}
+
+        {isAgentThinking && !storyboardJob && (
+          <div className="reply glass pointer-events-auto items-center">
+            <Sparkles size={14} className="shrink-0 text-accent" />
+            <span className="text-[12px] text-mute">Computing SceneSpec &amp; logic graph mutations</span>
+            <span className="dots"><i /><i /><i /></span>
+          </div>
+        )}
+
+        {showReply && !isAgentThinking && !storyboardJob && (
+          <div className="reply glass pointer-events-auto">
+            <Sparkles size={14} className="mt-0.5 shrink-0 text-accent" />
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-3 text-[12px] leading-relaxed text-fg">{lastAssistant.content}</p>
+              {lastAssistant.diffSummary && lastAssistant.diffSummary.length > 0 && (
+                <p className="mt-1 truncate font-mono text-[10px] text-mute">
+                  {lastAssistant.diffSummary.length} change{lastAssistant.diffSummary.length === 1 ? '' : 's'} ·{' '}
+                  {lastAssistant.diffSummary[0]}
+                </p>
+              )}
+              {lastAssistant.visionReport && (
+                <button type="button" className="btn warn sm mt-1.5" onClick={() => setAiMode('drawer')}>
+                  Review Vision QA report ({lastAssistant.visionReport.overallScore}/100)
+                </button>
+              )}
+            </div>
+            <IconBtn small label="Dismiss reply" onClick={() => setDismissedReplyId(lastAssistant.id)}>
+              <X size={13} />
+            </IconBtn>
+          </div>
+        )}
+
+        <form
+          className="aibar glass pointer-events-auto"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendPrompt();
+          }}
+        >
+          <Sparkles size={16} className="shrink-0 text-accent" />
+          <input
+            className="aibar-in"
+            aria-label="AI Director prompt"
+            value={promptInput}
+            onChange={(e) => setPromptInput(e.target.value)}
+            placeholder={INTENT_HELP[intent].placeholder}
+          />
+          <div className="hidden sm:block">{intentSeg}</div>
+          <Dropdown
+            up
+            align="right"
+            panelClass="w-80"
+            trigger={({ toggle }) => (
+              <IconBtn label="Quick prompts" onClick={toggle}>
+                <MessageSquare size={15} />
+              </IconBtn>
+            )}
+          >
+            {({ close }) => (
+              <>
+                <div className="menu-h">Quick director prompts</div>
+                {QUICK_PROMPTS.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className="menu-i"
+                    onClick={() => {
+                      close();
+                      handleSendPrompt(q);
+                    }}
+                  >
+                    <span className="line-clamp-2">{q}</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </Dropdown>
+          <span className="aibar-sep" />
+          <IconBtn
+            label={isVisionRunning ? 'Vision QA scanning…' : 'Vision QA: scan the rendered canvas'}
+            active={isVisionRunning}
+            disabled={isVisionRunning}
+            onClick={handleTriggerVisionCheck}
+          >
+            <ScanEye size={16} />
+          </IconBtn>
+          <IconBtn label="Open chat drawer (history, inspector, SceneSpec)" onClick={() => setAiMode('drawer')}>
+            <PanelRightOpen size={16} />
+          </IconBtn>
+          <button type="submit" className="send" disabled={!promptInput.trim() || isAgentThinking} aria-label="Send instruction">
+            <ArrowUp size={16} />
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shell B · slide-over right chat drawer
+  // ---------------------------------------------------------------------------
+  return (
+    <aside className="drawer glass" aria-label="AI Director">
+      <div className="flyout-head">
+        <Sparkles size={14} className="mr-1.5 shrink-0 text-accent" />
+        <h2 className="min-w-0 flex-1 truncate text-[12px] font-semibold">AI Director</h2>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={isVisionRunning}
+          onClick={handleTriggerVisionCheck}
+          title="Scan the rendered canvas and audit actor placement"
+        >
+          <ScanEye size={13} /> {isVisionRunning ? 'Scanning…' : 'Vision QA'}
+        </button>
+        <IconBtn small label="Collapse to floating command bar" onClick={() => setAiMode('bar')}>
+          <PanelBottom size={14} />
+        </IconBtn>
       </div>
 
-      {/* TAB 1: CONVERSATIONAL CODING AGENT + VISION QA DIAGNOSTICS */}
-      {activeTab === 'chat' && (
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* Messages List */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+      <div className="flex items-center gap-2 border-b border-line px-2 py-1.5">
+        <Segmented<DrawerTab>
+          label="Drawer section"
+          small
+          value={drawerTab}
+          onChange={setDrawerTab}
+          options={[
+            { value: 'chat', label: 'Chat', icon: <MessageSquare size={12} /> },
+            { value: 'inspector', label: 'Inspector', icon: <Sliders size={12} /> },
+            { value: 'json', label: 'SceneSpec', icon: <Code2 size={12} /> },
+          ]}
+        />
+      </div>
+
+      {drawerTab === 'chat' && (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div ref={listRef} className="flex-1 space-y-2.5 overflow-y-auto p-3">
             {chatMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`p-3 rounded-lg border text-xs leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-cyan-950/40 border-cyan-500/30 text-slate-100 ml-6'
-                    : 'bg-slate-900/90 border-slate-800 text-slate-200 mr-2'
-                }`}
-              >
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
-                  <span>{msg.role === 'user' ? 'YOU' : 'OMNISTAGE DIRECTOR'}</span>
+              <div key={msg.id} className={`msg ${msg.role === 'user' ? 'user' : ''}`}>
+                <div className="mb-1 flex items-center justify-between font-mono text-[10px] text-dim">
+                  <span>{msg.role === 'user' ? 'YOU' : 'DIRECTOR'}</span>
                   <span>{msg.timestamp}</span>
                 </div>
-                <p>{msg.content}</p>
-
-                {/* Structured Mutation Summary */}
+                <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                 {msg.diffSummary && msg.diffSummary.length > 0 && (
-                  <div className="mt-2.5 pt-2 border-t border-slate-800/80 space-y-1">
-                    <div className="text-[10px] font-mono uppercase text-cyan-400">
-                      SceneSpec Mutations:
-                    </div>
+                  <div className="mt-2 space-y-1 border-t border-line pt-2">
+                    <div className="font-mono text-[10px] uppercase text-accent">SceneSpec mutations</div>
                     {msg.diffSummary.map((line, i) => (
-                      <div key={i} className="text-[11px] font-mono text-slate-300 flex gap-1.5">
-                        <span className="text-cyan-400">•</span>
+                      <div key={i} className="flex gap-1.5 font-mono text-[11px] text-mute">
+                        <span className="text-accent">•</span>
                         <span>{line}</span>
                       </div>
                     ))}
                   </div>
                 )}
-
-                {/* Vision QA Diagnostic Report Card */}
-                {msg.visionReport && (
-                  <div className="mt-3 p-3 rounded-lg bg-slate-950/90 border border-cyan-500/40 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-display font-bold uppercase text-cyan-300">
-                        Vision QA Spatial Report
-                      </span>
-                      <span className="text-xs font-mono font-semibold text-amber-400 tabular-nums">
-                        Score: {msg.visionReport.overallScore}/100
-                      </span>
-                    </div>
-
-                    {msg.visionReport.screenshotDataUrl && (
-                      <div className="rounded overflow-hidden border border-slate-800 bg-black max-h-28 flex items-center justify-center">
-                        <img
-                          src={msg.visionReport.screenshotDataUrl}
-                          alt="Captured Stage Snapshot"
-                          referrerPolicy="no-referrer"
-                          className="h-28 object-contain"
-                        />
-                      </div>
-                    )}
-
-                    {msg.visionReport.actorCoordinates &&
-                      msg.visionReport.actorCoordinates.length > 0 && (
-                        <div className="p-2 rounded bg-slate-900/90 border border-slate-800/90 space-y-1">
-                          <div className="text-[10px] font-mono uppercase text-slate-400">
-                            Inspected World Coordinates & BBoxes:
-                          </div>
-                          {msg.visionReport.actorCoordinates.map((ac) => (
-                            <div
-                              key={ac.id}
-                              className="flex items-center justify-between text-[10px] font-mono text-slate-300 tabular-nums"
-                            >
-                              <span className="truncate max-w-[140px]">{ac.name}</span>
-                              <span className="text-cyan-300">
-                                [{ac.worldPosition.map((v) => v.toFixed(1)).join(', ')}] ·{' '}
-                                {ac.boundingBox.width}×{ac.boundingBox.depth}m
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                    <div className="space-y-1.5">
-                      {msg.visionReport.issues.map((issue) => (
-                        <div
-                          key={issue.id}
-                          className="p-2 rounded bg-slate-900 border border-slate-800 text-[11px]"
-                        >
-                          <div className="flex items-center justify-between font-semibold text-slate-200">
-                            <span>{issue.title}</span>
-                            <span className="text-[10px] font-mono uppercase text-amber-400">
-                              {issue.category}
-                            </span>
-                          </div>
-                          <p className="text-slate-400 mt-0.5">{issue.description}</p>
-                          <div className="text-cyan-300 font-mono text-[10px] mt-1">
-                            Fix: {issue.suggestedFixSummary}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {latestVisionReport?.applied || msg.visionReport.applied ? (
-                      <div className="w-full py-1.5 px-3 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-medium flex items-center justify-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Spatial Fixes Applied to SceneSpec</span>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => applyVisionFixes(msg.visionReport!)}
-                        className="w-full py-2 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
-                      >
-                        <Wand2 className="w-3.5 h-3.5" />
-                        <span>Apply Recommended Fixes</span>
-                      </button>
-                    )}
-                  </div>
-                )}
+                {msg.visionReport && <VisionReportCard report={msg.visionReport} />}
               </div>
             ))}
-
-            {storyboardJob && (
-              <div className="p-3 rounded-lg bg-slate-900/90 border border-fuchsia-500/40 text-xs space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-fuchsia-200 truncate">{storyboardJob.title}</span>
-                  <span className="font-mono text-[10px] text-slate-400 shrink-0">
-                    {storyboardJob.completed}/{storyboardJob.total} · {storyboardJob.source}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                  <div
-                    className="h-full bg-fuchsia-400 transition-all"
-                    style={{
-                      width: `${Math.round(
-                        ((storyboardJob.status === 'planning' ? 0.15 : storyboardJob.completed) /
-                          Math.max(1, storyboardJob.total)) *
-                          100
-                      )}%`,
-                    }}
-                  />
-                </div>
-                <div className="font-mono text-[11px] text-slate-300">
-                  {storyboardJob.status === 'planning' && 'Step 1 · Planning storyboard beats…'}
-                  {storyboardJob.status === 'generating' &&
-                    `Step 2 · Authoring scene ${Math.min(storyboardJob.completed + 1, storyboardJob.total)}: ${storyboardJob.currentLabel}`}
-                  {storyboardJob.status === 'done' && 'All scenes linked into the storyboard.'}
-                  {storyboardJob.status === 'error' && (
-                    <span className="text-rose-300">{storyboardJob.error}</span>
-                  )}
-                </div>
-              </div>
-            )}
-
+            {storyboardProgress}
             {isAgentThinking && !storyboardJob && (
-              <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs font-mono text-cyan-300">
-                Computing declarative SceneSpec & LogicGraph mutations...
+              <div className="msg flex items-center gap-2 font-mono text-[11px] text-accent">
+                Computing SceneSpec &amp; logic graph mutations <span className="dots"><i /><i /><i /></span>
               </div>
             )}
           </div>
 
-          {/* Quick Prompt Suggestions */}
-          <div className="px-3.5 py-2 border-t border-slate-800/80 bg-slate-950/50">
-            <div className="text-[10px] font-mono uppercase text-slate-400 mb-1.5">
-              Quick Director Prompts
-            </div>
-            <div className="flex flex-wrap gap-1.5">
+          <div className="border-t border-line px-3 py-2">
+            <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
               {QUICK_PROMPTS.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => handleSendPrompt(q)}
-                  className="text-left px-2 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-300 hover:text-cyan-300 transition-colors truncate max-w-full"
-                >
-                  {q}
+                <button key={q} type="button" className="chip max-w-[220px]" title={q} onClick={() => handleSendPrompt(q)}>
+                  <span className="truncate">{q}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Chat Input Form */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSendPrompt();
             }}
-            className="p-3 border-t border-slate-800 flex items-center gap-2 bg-slate-950"
+            className="space-y-2 border-t border-line p-3"
           >
-            <input
-              type="text"
-              value={promptInput}
-              onChange={(e) => setPromptInput(e.target.value)}
-              placeholder="Ask AI to spawn actors, wire nodes, or fix logic..."
-              className="flex-1 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500"
-            />
-            <button
-              type="submit"
-              disabled={!promptInput.trim() || isAgentThinking}
-              className="p-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 transition-colors shrink-0"
-              title="Send Instruction"
-            >
-              <Send className="w-4 h-4" />
-            </button>
+            <div className="flex items-center justify-between gap-2">
+              {intentSeg}
+              <span className="truncate text-[10px] text-dim">{INTENT_HELP[intent].title.split(': ')[1]}</span>
+            </div>
+            <div className="flex items-end gap-2">
+              <textarea
+                className="field min-w-0 flex-1"
+                rows={2}
+                aria-label="AI Director prompt"
+                value={promptInput}
+                onChange={(e) => setPromptInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendPrompt();
+                  }
+                }}
+                placeholder={INTENT_HELP[intent].placeholder}
+              />
+              <button type="submit" className="send" disabled={!promptInput.trim() || isAgentThinking} aria-label="Send instruction">
+                <ArrowUp size={16} />
+              </button>
+            </div>
           </form>
         </div>
       )}
 
-      {/* TAB 2: LIVE ACTOR & TIMELINE WINDOW INSPECTOR */}
-      {activeTab === 'inspector' && (
-        <div className="flex-1 overflow-y-auto p-3.5 space-y-4 text-xs">
-          <div className="space-y-1.5">
-            <label className="text-[11px] font-mono uppercase text-slate-400">
-              Selected Stage Actor ({sceneSpec.actors.length})
-            </label>
-            <select
-              value={selectedActor?.id || ''}
-              onChange={(e) => selectActor(e.target.value)}
-              className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              {sceneSpec.actors.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({a.assetId})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {selectedActor ? (
-            <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                <span className="font-semibold text-slate-100">{selectedActor.name}</span>
-                <button
-                  onClick={() => removeActor(selectedActor.id)}
-                  className="text-rose-400 hover:text-rose-300 flex items-center gap-1 text-[11px]"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete</span>
-                </button>
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-[11px] font-mono text-slate-400">Position [X, Y, Z] (m)</span>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(['X', 'Y', 'Z'] as const).map((axis, idx) => (
-                    <div
-                      key={axis}
-                      className="flex items-center bg-slate-950 rounded border border-slate-800 px-2 py-1"
-                    >
-                      <span className="text-[10px] font-mono text-slate-400 mr-1.5">{axis}</span>
-                      <input
-                        type="number"
-                        step={0.2}
-                        value={selectedActor.position[idx]}
-                        onChange={(e) => {
-                          const nextPos = [...selectedActor.position] as [number, number, number];
-                          nextPos[idx] = parseFloat(e.target.value) || 0;
-                          updateActorProperty(selectedActor.id, { position: nextPos });
-                        }}
-                        className="w-full bg-transparent text-xs font-mono text-slate-100 focus:outline-none tabular-nums"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-1.5 pt-1">
-                <div>
-                  <span className="text-[10px] font-mono text-slate-400 block mb-1">Start (s)</span>
-                  <input
-                    type="number"
-                    step={0.5}
-                    min={0}
-                    max={sceneSpec.durationSeconds}
-                    value={selectedActor.startTime ?? 0}
-                    onChange={(e) =>
-                      updateActorProperty(selectedActor.id, {
-                        startTime: parseFloat(e.target.value) || 0,
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 tabular-nums"
-                  />
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-slate-400 block mb-1">End (s)</span>
-                  <input
-                    type="number"
-                    step={0.5}
-                    min={0.5}
-                    max={sceneSpec.durationSeconds}
-                    value={selectedActor.endTime ?? sceneSpec.durationSeconds}
-                    onChange={(e) =>
-                      updateActorProperty(selectedActor.id, {
-                        endTime: parseFloat(e.target.value) || sceneSpec.durationSeconds,
-                      })
-                    }
-                    className="w-full px-2 py-1 rounded bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 tabular-nums"
-                  />
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-slate-400 block mb-1">Enter FX</span>
-                  <select
-                    value={selectedActor.enterEffect ?? 'pop-in'}
-                    onChange={(e) =>
-                      updateActorProperty(selectedActor.id, {
-                        enterEffect: e.target.value as EnterEffect,
-                      })
-                    }
-                    className="w-full px-1.5 py-1 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-                  >
-                    <option value="pop-in">pop-in</option>
-                    <option value="slide-up">slide-up</option>
-                    <option value="fade">fade</option>
-                    <option value="none">none</option>
-                  </select>
-                </div>
-              </div>
-
-              {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
-                <div className="space-y-1">
-                  <span className="text-[11px] font-mono text-emerald-400">
-                    GLTF Skeletal Animation Clip ({selectedActor.availableClips.length})
-                  </span>
-                  <select
-                    value={selectedActor.activeClip || selectedActor.availableClips[0]}
-                    onChange={(e) =>
-                      updateActorProperty(selectedActor.id, { activeClip: e.target.value })
-                    }
-                    className="w-full px-2.5 py-1.5 rounded bg-emerald-950/40 border border-emerald-500/40 text-xs font-mono text-emerald-200"
-                  >
-                    {selectedActor.availableClips.map((clip) => (
-                      <option key={clip} value={clip}>
-                        {clip}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="space-y-1">
-                <span className="text-[11px] font-mono text-slate-400">
-                  Procedural Motion Offset
-                </span>
-                <select
-                  value={selectedActor.activeAnimation}
-                  onChange={(e) =>
-                    updateActorProperty(selectedActor.id, {
-                      activeAnimation: e.target.value as AnimationType,
-                    })
-                  }
-                  className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-                >
-                  {(['idle', 'float', 'spin', 'bounce', 'walk', 'attack'] as AnimationType[]).map(
-                    (anim) => (
-                      <option key={anim} value={anim}>
-                        {anim.toUpperCase()}
-                      </option>
-                    )
-                  )}
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-[11px] font-mono text-slate-400">
-                  Playable Tap / Click Behavior
-                </span>
-                <select
-                  value={selectedActor.onClickAction}
-                  onChange={(e) =>
-                    updateActorProperty(selectedActor.id, {
-                      onClickAction: e.target.value as ActorClickAction,
-                    })
-                  }
-                  className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-                >
-                  <option value="collect">collect (+PTS & Respawn)</option>
-                  <option value="unbox-tap">unbox-tap (3x Tap Product Reveal)</option>
-                  <option value="destroy">destroy (Remove Obstacle)</option>
-                  <option value="bounce">bounce (Jump Impulse)</option>
-                  <option value="trigger-vfx">trigger-vfx</option>
-                  <option value="trigger-cta">trigger-cta (Open End-Card)</option>
-                  <option value="none">none</option>
-                </select>
-              </div>
-            </div>
-          ) : (
-            <div className="p-4 rounded-lg bg-slate-900/60 border border-slate-800 text-slate-400 text-center">
-              No actor selected. Click any actor in the 3D stage or spawn one from the Left Drawer.
-            </div>
-          )}
-
-          <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 space-y-2.5">
-            <span className="text-[11px] font-mono uppercase text-amber-400 block">
-              End-Card & Marketing CTA Overlay
-            </span>
-            <input
-              type="text"
-              value={sceneSpec.marketingOverlay.headline}
-              onChange={(e) => {
-                const next = JSON.parse(JSON.stringify(sceneSpec));
-                next.marketingOverlay.headline = e.target.value;
-                setSceneSpec(next);
-              }}
-              placeholder="Headline"
-              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-            />
-            <input
-              type="text"
-              value={sceneSpec.marketingOverlay.ctaText}
-              onChange={(e) => {
-                const next = JSON.parse(JSON.stringify(sceneSpec));
-                next.marketingOverlay.ctaText = e.target.value;
-                setSceneSpec(next);
-              }}
-              placeholder="CTA Button Label"
-              className="w-full px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-xs text-slate-100"
-            />
-          </div>
+      {drawerTab === 'inspector' && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ActorInspectorPanel />
         </div>
       )}
 
-      {/* TAB 3: LIVE DECLARATIVE SCENESPEC JSON CONTRACT VIEWER */}
-      {activeTab === 'json' && (
-        <div className="flex-1 flex flex-col min-h-0 p-3.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono text-slate-400">
-              src/types/scene.schema.ts (Live State + logicGraph)
-            </span>
-            <span className="text-[10px] font-mono text-cyan-400">100% Data-Driven</span>
+      {drawerTab === 'json' && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+          <div className="flex items-center justify-between font-mono text-[10px] text-dim">
+            <span>Live SceneSpec + logicGraph</span>
+            <span className="text-accent">read-only</span>
           </div>
-          <pre className="flex-1 overflow-auto p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] font-mono text-cyan-200/90 leading-relaxed">
+          <pre className="flex-1 overflow-auto rounded-lg border border-line bg-bg p-3 font-mono text-[11px] leading-relaxed text-mute">
             {JSON.stringify(sceneSpec, null, 2)}
           </pre>
         </div>

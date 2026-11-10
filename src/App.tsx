@@ -5,23 +5,35 @@
 
 import React from 'react';
 import { TopNavBar } from './components/TopNavBar';
-import { LeftAssetDrawer } from './components/LeftAssetDrawer';
+import { IconRail, PanelFlyout } from './components/LeftAssetDrawer';
 import { CenterViewport } from './components/CenterViewport';
-import { RightAgentChat } from './components/RightAgentChat';
 import { PublishModal } from './components/PublishModal';
 import { SettingsModal } from './components/SettingsModal';
+import { useShellStore } from './state/useShellStore';
 
+/**
+ * Adaptive Docking Studio shell:
+ *   top bar · 48px icon rail · pinned-or-floating panel flyout · workspace (stage / node graph)
+ *   with the AI Director floating over it · unified bottom dock.
+ */
 export default function App() {
-  return (
-    <div className="w-screen h-screen overflow-hidden bg-[#090D16] text-slate-100 flex flex-col select-none">
-      {/* Top Studio Bar */}
-      <TopNavBar />
+  const focusMode = useShellStore((s) => s.focusMode);
+  const railPanel = useShellStore((s) => s.railPanel);
+  const flyoutPinned = useShellStore((s) => s.flyoutPinned);
+  const showFlyout = !focusMode && railPanel !== null;
 
-      {/* Main 3-Column Docked 3D/2D Workstation */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        <LeftAssetDrawer />
-        <CenterViewport />
-        <RightAgentChat />
+  return (
+    <div className="flex h-screen w-screen select-none flex-col overflow-hidden bg-bg text-fg">
+      {!focusMode && <TopNavBar />}
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        {!focusMode && <IconRail />}
+        {showFlyout && flyoutPinned && <PanelFlyout />}
+
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <CenterViewport />
+          {showFlyout && !flyoutPinned && <PanelFlyout />}
+        </div>
       </div>
 
       {/* Distribution & Export Modal */}
