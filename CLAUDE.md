@@ -29,6 +29,7 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 | Contract | `src/types/scene.schema.ts` | `.claude/rules/scene-contract.md` |
 | Shared runtime (rules, logic graph, 2D frame) | `src/runtime/*` | `.claude/rules/renderers.md` |
 | OmniStage Player (exports, Play Test, phones) | `src/player/*`, `scripts/build-player.mjs`, `src/exporter/playerHtml.ts` | `.claude/rules/exporter.md` |
+| Shared 3D builders (studio + Player) | `src/render3d/*` | `.claude/rules/renderers.md` |
 | Renderers 3D/2D | `src/renderer/*` | `.claude/rules/renderers.md` |
 | AI director, skills, verifier | `src/agent/*`, `src/verification/*`, `server.ts` | `.claude/rules/agent-and-verification.md` |
 | Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*`, `src/vfx/*`, `src/media/*` | `.claude/rules/exporter.md` |

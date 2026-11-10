@@ -4,6 +4,7 @@
  * world, VFX, touch / gamepad input, captions, audio and level progression.
  */
 import type { SceneSpec } from '../types/scene.schema';
+import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { formatBytes, PLAYABLE_SIZE_LIMITS } from './playableBundle';
 import type { StandaloneAdNetwork } from './mediaExporter';
 
@@ -87,9 +88,12 @@ export function collectAssetUrls(scenes: SceneSpec[]): string[] {
   const urls = new Set<string>();
   for (const s of scenes) {
     for (const a of s.actors || []) {
-      const url = a.customGlbUrl || a.modelUrl;
+      // Same resolution as the studio ActorRenderer / Player: explicit model, else the registry asset model.
+      const url = a.customGlbUrl || a.modelUrl || ASSET_REGISTRY[a.assetId]?.modelUrl;
       if (url && !url.startsWith('data:')) urls.add(url);
     }
+    const hdri = s.world?.hdri?.url;
+    if (hdri && !hdri.startsWith('data:')) urls.add(hdri);
     for (const n of s.nodes2D || []) if (n.imageUrl && !n.imageUrl.startsWith('data:')) urls.add(n.imageUrl);
   }
   return [...urls];
@@ -104,6 +108,7 @@ const EXT_MIME: Record<string, string> = {
   webp: 'image/webp',
   svg: 'image/svg+xml',
   gif: 'image/gif',
+  hdr: 'image/vnd.radiance',
 };
 
 function mimeFor(url: string, contentType?: string | null) {

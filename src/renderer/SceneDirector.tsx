@@ -2,12 +2,13 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useStudioStore } from '../state/useStudioStore';
 import { easedSplineProgress } from '../animation/easing';
 import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 import { WorldRenderer } from './WorldRenderer';
+import { Built } from './Built';
+import { applyBackgroundAndFog, applyStudioEnvironment, createLightingRig, createPedestal } from '../render3d/stage3d';
 import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
 
 const _targetVec = new THREE.Vector3();
@@ -31,17 +32,8 @@ export const SceneDirector: React.FC = () => {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const burstEffects = useStudioStore((s) => s.burstEffects);
 
-  // Initialize procedural studio PMREM environment reflection once
-  useEffect(() => {
-    const pmremGenerator = new THREE.PMREMGenerator(gl);
-    const envScene = new RoomEnvironment();
-    const envTexture = pmremGenerator.fromScene(envScene, 0.04).texture;
-    scene.environment = envTexture;
-    pmremGenerator.dispose();
-    return () => {
-      envTexture.dispose();
-    };
-  }, [gl, scene]);
+  // Procedural studio reflections (shared with the OmniStage Player)
+  useEffect(() => applyStudioEnvironment(gl, scene), [gl, scene]);
 
   // Keyboard Listeners: WASD / Arrows for Playable Game Player + W/E/R for 3D Gizmo Modes
   useEffect(() => {
@@ -76,14 +68,9 @@ export const SceneDirector: React.FC = () => {
     };
   }, [setTransformMode, logicRuntime]);
 
-  // Sync background color & horizon fog with SceneSpec
+  // Background colour & horizon fog (shared with the OmniStage Player)
   useEffect(() => {
-    scene.background = new THREE.Color(sceneSpec.environment.backgroundColor || '#0B101B');
-    scene.fog = new THREE.Fog(
-      sceneSpec.environment.fogColor || sceneSpec.environment.backgroundColor || '#0B101B',
-      sceneSpec.environment.fogNear || 14,
-      sceneSpec.environment.fogFar || 45
-    );
+    applyBackgroundAndFog(scene, sceneSpec.environment);
   }, [
     scene,
     sceneSpec.environment.backgroundColor,
@@ -245,41 +232,9 @@ export const SceneDirector: React.FC = () => {
 
   return (
     <group onPointerMissed={() => selectActor(null)}>
-      {/* 3-Point Calibrated Studio Lighting Rig */}
-      <hemisphereLight
-        color={env.keyLightColor || '#FFFBEB'}
-        groundColor={env.groundColor || '#0F172A'}
-        intensity={env.ambientIntensity ?? 0.75}
-      />
-
-      {/* Warm Key Light with Shadow Mapping */}
-      <directionalLight
-        position={[5.5, 8.5, 6.0]}
-        color={env.keyLightColor || '#FFFBEB'}
-        intensity={env.keyLightIntensity ?? 2.2}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-        shadow-camera-near={0.5}
-        shadow-camera-far={25}
-        shadow-camera-left={-7}
-        shadow-camera-right={7}
-        shadow-camera-top={7}
-        shadow-camera-bottom={-7}
-        shadow-bias={-0.0005}
-      />
-
-      {/* Cool Fill Light */}
-      <directionalLight position={[-5.0, 4.0, 3.5]} color="#93C5FD" intensity={0.9} />
-
-      {/* High-Contrast Rim / Backlight */}
-      <spotLight
-        position={[0, 6.5, -6.5]}
-        color={env.rimLightColor || '#38BDF8'}
-        intensity={3.4}
-        angle={0.65}
-        penumbra={0.8}
-      />
+      {/* 3-point studio lighting rig (src/render3d/stage3d — identical in the OmniStage Player) */}
+      <Built factory={() => createLightingRig(env, gl.shadowMap.enabled)}
+        deps={[env.keyLightColor, env.groundColor, env.ambientIntensity, env.keyLightIntensity, env.rimLightColor, gl.shadowMap.enabled]} />
 
       {/* Subtle Ambient Studio Sparkle Dust */}
       <Sparkles
@@ -316,29 +271,7 @@ export const SceneDirector: React.FC = () => {
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* Optional Commercial Reflective Studio Pedestal Disc */}
-      {env.reflectivePedestal && (
-        <group position={[0, 0.005, 0]}>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <circleGeometry args={[3.2, 64]} />
-            <meshPhysicalMaterial
-              color={env.groundColor || '#0F172A'}
-              metalness={0.85}
-              roughness={0.12}
-              clearcoat={1}
-              reflectivity={0.9}
-            />
-          </mesh>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
-            <ringGeometry args={[3.14, 3.22, 64]} />
-            <meshBasicMaterial
-              color={env.rimLightColor || '#38BDF8'}
-              transparent
-              opacity={0.65}
-            />
-          </mesh>
-        </group>
-      )}
+      {env.reflectivePedestal && <Built factory={() => createPedestal(env)} deps={[env.groundColor, env.rimLightColor]} />}
 
       {env.groundGrid && (
         <Grid

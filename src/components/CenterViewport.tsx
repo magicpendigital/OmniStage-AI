@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
+import { ViewportOverlay } from './ViewportOverlay';
 import { activeCaptions } from '../media/captions';
 import { NodeGraphView } from './NodeGraphView';
 import { ExecutionConsole } from './ExecutionConsole';
@@ -217,6 +218,7 @@ export const CenterViewport: React.FC = () => {
               ) : (
                 <StageCanvas />
               )}
+              {!fullPreviewActive && <ViewportOverlay />}
               {/* Phase 5: 3D caption overlay (2D draws captions into its canvas). */}
               {!is2D &&
                 activeCaptions(sceneSpec.captions, currentTime).map((cue, i) => (

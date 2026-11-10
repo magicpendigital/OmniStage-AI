@@ -119,7 +119,7 @@ so that moves to the front.
 - [x] **Guide**: Help center (13 topics, VI/EN, search, "Try it" buttons), first-run tour (6 highlighted steps), and "how do I…?" questions
   in the chat answered from the Guide in the user's language without an AI call.
 
-### Phase 7 — One OmniStage Player runtime (7A completed 2026-11-10; 7B next)
+### Phase 7 — One OmniStage Player runtime (7A + 7B completed 2026-11-10; 7C next)
 **7A — shared runtime + Player (done)**
 - [x] **Shared runtime** (`src/runtime/*`, framework-free): game rules / timeline / logs / level progression extracted from the studio store
   into `gameSlice.ts`; logic-graph interpreter + contacts (`logicGraph.ts`), 2D frame step / physics / drawing / hit test (`stage2d.ts`),
@@ -139,11 +139,26 @@ so that moves to the front.
 - [x] `step(dt)` / `setKey()` hooks for deterministic testing; verified in the browser: 2D movement + level win → Next level → 3D level with
   GLB robot, WASD collect (+25), bursts, CTA.
 
-**7B — next**
-- [ ] Studio 3D viewport on the Player renderer (R3F kept only for gizmos/inspector), so 3D editor preview = Play Test pixel for pixel.
-- [ ] Bring studio-only 3D visuals into the Player: planar-reflection water, volumetric clouds, GPU particles, HDRI, procedural composite assets.
-- [ ] Studio-viewport touch input; FPS/perf overlay and quality selector in the studio; optional WebGPU renderer.
+**7B — one set of 3D builders for studio and Player (done)**
+- [x] **Shared scene builders** (`src/render3d/*`, plain Three.js, no React): lighting rig, background/fog, studio reflection environment,
+  pedestal, shader sky, stars, height-field terrain, planar-reflection water (cheap plane on low quality), clouds, GPU particles (weather,
+  sparkles, confetti, bursts), scatter props, VFX nodes, badges, all 11 procedural composite actors and the procedural actor motion.
+  Readable JSX is kept: files with `/** @jsx h */` compile to Three.js objects through the tiny `h()` factory, not React.
+- [x] **Studio viewport renders through the same builders**: R3F components became thin hosts (`<Built>` → `<primitive>` + per-frame
+  `update`), so editing tools (gizmos, selection, orbit, drei Grid/ContactShadows/HDRI) stay in React while every visual object is
+  identical in the editor, Play Test, phone preview and exports. Decision: the R3F tree is kept as the editor host instead of mounting the
+  Player inside the studio — parity comes from shared builders, without re-implementing gizmos.
+- [x] **Player gains the studio look**: reflective water, clouds, scatter props with full geometry, GPU weather / VFX / bursts, the real
+  composite assets (gift box with tap-reactive lid and glow, mecha, knight, car, portal…) instead of category stand-ins, unbox badge,
+  click pulse, media enter effects, HDRI via RGBELoader (embedded when it fits), registry GLB models (now also embedded for offline).
+- [x] **Studio viewport overlay**: FPS / worst-frame meter, render-quality selector (Draft = DPR 1 + no shadows, like weak phones), and
+  on-screen touch controls (same layout as the Player via `src/runtime/touchLayout.ts`; buttons dispatch key events, so 2D/3D input and
+  logic-graph key events work unchanged; auto on touch screens, "📱 Touch" toggle on desktop).
+- [x] Tests: `tests/render3d.test.ts` (factory, all composites, motion rules, world builder, rig, particles). Player bundle ~215 KB gzip.
+
+**7C — next**
 - [ ] AI edits as JSON Patch + tool-use loop; split the rest of `useStudioStore` into slices; Playwright E2E using the Player's `step()` hook.
+- [ ] Contact shadows and the shader grid as shared builders (studio still uses drei's); optional WebGPU renderer; bloom on Ultra.
 
 ### Phase 8 — Mobile native (Android first, then iOS)
 - [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Canvas } from '@react-three/fiber';
-import * as THREE from 'three';
+import { configureRenderer } from '../render3d/stage3d';
 import { useStudioStore } from '../state/useStudioStore';
 import { SceneDirector } from './SceneDirector';
 
@@ -23,12 +23,15 @@ const isSoftwareGl = (() => {
 export const StageCanvas: React.FC = () => {
   const cameraSpec = useStudioStore((s) => s.sceneSpec.camera);
   const setCanvasElement = useStudioStore((s) => s.setCanvasElement);
+  // Phase 7B: the viewport quality selector — draft = DPR 1, no shadows (what weak phones get in the Player).
+  const quality = useStudioStore((s) => s.settings.renderQuality);
+  const draft = isSoftwareGl || quality === 'draft';
 
   return (
     <div className="relative w-full h-full select-none">
       <Canvas
-        shadows={!isSoftwareGl}
-        dpr={isSoftwareGl ? 1 : [1, 2]}
+        shadows={!draft}
+        dpr={draft ? 1 : [1, 2]}
         camera={{
           position: cameraSpec.position,
           fov: cameraSpec.fov || 45,
@@ -41,9 +44,7 @@ export const StageCanvas: React.FC = () => {
           powerPreference: 'high-performance',
         }}
         onCreated={({ gl }) => {
-          gl.outputColorSpace = THREE.SRGBColorSpace;
-          gl.toneMapping = THREE.ACESFilmicToneMapping;
-          gl.toneMappingExposure = 1.12;
+          configureRenderer(gl); // same colour pipeline as the OmniStage Player
           setCanvasElement(gl.domElement);
         }}
       >

@@ -1,17 +1,25 @@
 /**
  * Phase 7 — 3D view of the OmniStage Player: plain Three.js (no React) so exports stay small.
- * Game rules, contacts and the logic graph are the shared runtime (src/runtime); this file only renders:
- * world (sky gradient, terrain height field, water, scatter, weather), actors (GLB with skeletal clips via
- * AnimationMixer, or a procedural stand-in per asset category), camera modes, VFX and burst effects.
+ * Game rules, contacts and the logic graph are the shared runtime (src/runtime). Phase 7B: every visual is built by the
+ * same framework-free builders the studio viewport uses (src/render3d): lighting rig, shader sky, terrain, planar-reflection
+ * water, clouds, GPU weather / VFX / bursts, scatter props, procedural composite actors and their motion. This file only
+ * adds what the studio gets from R3F/drei: GLB loading + skeletal clips, HDRI, camera modes and the frame loop.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { easedSplineProgress } from '../animation/easing';
 import { findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
 import { runtimeStore } from '../runtime/host';
-import { computeTerrainHeight, SKY_PALETTES } from '../runtime/world';
+import { buildCompositeActor } from '../render3d/compositeActors';
+import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/actorMotion';
+import { disposeObject } from '../render3d/h';
+import { createWorld } from '../render3d/world3d';
+import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
+import { createActorBadge, createBurst, createVfx } from '../render3d/vfx3d';
+import type { Built3D, FrameContext } from '../render3d/types';
 import type { ActorNode, SceneSpec, VFXNode } from '../types/scene.schema';
 import type { InputManager } from './input';
 
@@ -24,7 +32,16 @@ interface ActorView {
   actions?: Map<string, THREE.AnimationAction>;
   activeClip?: string;
   modelKey: string;
+  hasRig: boolean;
+  /** Procedural composite currently shown (rebuilt when unbox taps change). */
+  composite?: THREE.Object3D;
+  compositeKey?: string;
+  badge?: Built3D<THREE.Sprite>;
+  badgeText?: string;
+  clickPulse: number;
 }
+
+const compositeKeyFor = (a: ActorNode, taps: number) => [a.assetId, a.primaryColor, a.secondaryColor, a.metalness, a.roughness, taps].join('|');
 
 const gltfCache = new Map<string, Promise<THREE.Group & { animations?: THREE.AnimationClip[] }>>();
 
@@ -39,97 +56,6 @@ function loadGltf(url: string) {
     );
   }
   return gltfCache.get(url)!;
-}
-
-function skyTexture(top: string, bottom: string): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 2;
-  c.height = 256;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createLinearGradient(0, 0, 0, 256);
-  g.addColorStop(0, top);
-  g.addColorStop(1, bottom);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-function textSprite(text: string, color: string): THREE.Sprite {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 128;
-  const ctx = c.getContext('2d')!;
-  ctx.fillStyle = 'rgba(2,6,23,0.8)';
-  ctx.beginPath();
-  ctx.roundRect(8, 16, 496, 96, 40);
-  ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 6;
-  ctx.stroke();
-  ctx.fillStyle = '#F8FAFC';
-  ctx.font = '800 52px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text.slice(0, 22), 256, 66);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  sprite.scale.set(2.4, 0.6, 1);
-  return sprite;
-}
-
-/** Procedural stand-in when an actor has no GLB: shape by registry category, coloured like the studio asset. */
-function proceduralActor(actor: ActorNode): THREE.Object3D {
-  const entry = ASSET_REGISTRY[actor.assetId];
-  const box = entry?.boundingBox || { width: 1, height: 1.6, depth: 1 };
-  const mat = new THREE.MeshStandardMaterial({
-    color: actor.primaryColor || entry?.defaultPrimaryColor || '#22D3EE',
-    metalness: actor.metalness ?? entry?.defaultMetalness ?? 0.3,
-    roughness: actor.roughness ?? entry?.defaultRoughness ?? 0.45,
-  });
-  const accent = new THREE.MeshStandardMaterial({ color: actor.secondaryColor || entry?.defaultSecondaryColor || '#0F172A', metalness: 0.4, roughness: 0.5 });
-  const g = new THREE.Group();
-  const role = actor.physicsRole;
-  const category = entry?.category;
-  if (role === 'collectible' || category === 'collectible') {
-    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(Math.max(0.25, box.width * 0.45), 0), mat);
-    gem.position.y = Math.max(0.5, box.height * 0.6);
-    g.add(gem);
-  } else if (role === 'hazard') {
-    const spike = new THREE.Mesh(new THREE.ConeGeometry(box.width * 0.5, box.height, 6), mat);
-    spike.position.y = box.height / 2;
-    g.add(spike);
-  } else if (category === 'character' || category === 'gltf-rigged' || role === 'player') {
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(box.width * 0.32, box.height * 0.45, 6, 12), mat);
-    body.position.y = box.height * 0.42;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(box.width * 0.27, 20, 16), mat);
-    head.position.y = box.height * 0.88;
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(box.width * 0.36, box.width * 0.12, box.width * 0.1), accent);
-    visor.position.set(0, box.height * 0.9, box.width * 0.24);
-    g.add(body, head, visor);
-  } else if (category === 'vehicle') {
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(box.width, box.height * 0.5, box.depth), mat);
-    hull.position.y = box.height * 0.45;
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(box.width * 0.6, box.height * 0.4, box.depth * 0.5), accent);
-    cabin.position.y = box.height * 0.85;
-    g.add(hull, cabin);
-  } else if (category === 'environment-prop') {
-    const prop = new THREE.Mesh(new THREE.DodecahedronGeometry(Math.max(box.width, box.depth) * 0.5, 0), mat);
-    prop.position.y = box.height * 0.5;
-    g.add(prop);
-  } else {
-    const product = new THREE.Mesh(new THREE.BoxGeometry(box.width, box.height, box.depth), mat);
-    product.position.y = box.height / 2;
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(box.width * 0.7, box.width * 0.75, 0.12, 32), accent);
-    base.position.y = 0.06;
-    g.add(base, product);
-  }
-  g.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
-  });
-  return g;
 }
 
 function matchClip(wanted: string | undefined, names: string[]): string | undefined {
@@ -148,9 +74,12 @@ export class View3D {
   private actorsGroup = new THREE.Group();
   private fxGroup = new THREE.Group();
   private actors = new Map<string, ActorView>();
-  private vfx = new Map<string, THREE.Object3D>();
-  private bursts = new Map<string, { obj: THREE.Points; born: number }>();
-  private weather?: THREE.Points;
+  private vfx = new Map<string, { built: ReturnType<typeof createVfx>; key: VFXNode }>();
+  private bursts = new Map<string, ReturnType<typeof createBurst>>();
+  private worldParts: Built3D[] = [];
+  private disposeEnv?: () => void;
+  private hdriTexture?: THREE.Texture;
+  private quality: QualityLevel;
   private sceneId = '';
   private worldKey = '';
   private lastHit: Record<string, number> = {};
@@ -163,8 +92,9 @@ export class View3D {
     this.renderer = new THREE.WebGLRenderer({ antialias: quality === 'high', alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality === 'high' ? 2 : 1));
     this.renderer.shadowMap.enabled = quality === 'high';
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    configureRenderer(this.renderer);
+    this.quality = quality;
+    this.disposeEnv = applyStudioEnvironment(this.renderer, this.scene);
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'omni-stage omni-stage-3d';
     parent.appendChild(this.canvas);
@@ -187,116 +117,65 @@ export class View3D {
 
   // ---------------------------------------------------------------- world
   private buildWorld(spec: SceneSpec) {
+    for (const part of this.worldParts) part.dispose();
+    this.worldParts = [];
     this.world.clear();
     const env = spec.environment;
+    applyBackgroundAndFog(this.scene, env);
+    const parts: Built3D[] = [createLightingRig(env, this.renderer.shadowMap.enabled)];
+    if (env.reflectivePedestal) parts.push(createPedestal(env));
+    if (env.groundGrid) parts.push(createGroundGrid(env));
     const w = spec.world;
-    const palette = w ? SKY_PALETTES[w.skybox] : undefined;
-    this.scene.background = palette ? skyTexture(palette[0], palette[1]) : new THREE.Color(env.backgroundColor || '#0B101B');
-    this.scene.fog = env.fogFar > env.fogNear ? new THREE.Fog(env.fogColor || env.backgroundColor, env.fogNear, env.fogFar) : null;
-
-    const hemi = new THREE.HemisphereLight(env.keyLightColor || '#FFFBEB', env.groundColor || '#0F172A', env.ambientIntensity ?? 0.75);
-    const key = new THREE.DirectionalLight(env.keyLightColor || '#FFFBEB', env.keyLightIntensity ?? 2.2);
-    key.position.set(...((w?.sunPosition as [number, number, number]) || [5.5, 8.5, 6]));
-    key.castShadow = this.renderer.shadowMap.enabled;
-    key.shadow.mapSize.set(1024, 1024);
-    const rim = new THREE.DirectionalLight(env.rimLightColor || '#38BDF8', 1.1);
-    rim.position.set(-6, 4, -6);
-    this.world.add(hemi, key, rim);
-
-    const terrain = w?.terrain;
-    if (!terrain || terrain.type === 'none') {
-      if (env.groundGrid) this.world.add(new THREE.GridHelper(40, 40, env.rimLightColor || '#06B6D4', '#1E293B'));
-    } else {
-      const geo = new THREE.PlaneGeometry(80, 80, 120, 120);
-      geo.rotateX(-Math.PI / 2);
-      const pos = geo.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) pos.setY(i, computeTerrainHeight(terrain.type, pos.getX(i), pos.getZ(i), terrain.elevationScale ?? 1));
-      geo.computeVertexNormals();
-      const ground = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: terrain.color || env.groundColor || '#1E293B', roughness: 0.92, metalness: 0.02, flatShading: (terrain.roughness ?? 0.5) > 0.6 }));
-      ground.receiveShadow = true;
-      this.world.add(ground);
-      if ((terrain.waterLevel ?? 0) > 0 || terrain.type === 'ocean-island') {
-        const water = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: '#0EA5E9', transparent: true, opacity: 0.72, roughness: 0.15, metalness: 0.3 }));
-        water.rotation.x = -Math.PI / 2;
-        water.position.y = terrain.waterLevel ?? 0.05;
-        water.name = 'water';
-        this.world.add(water);
-      }
-    }
-
-    for (const layer of w?.scatterObjects || []) this.world.add(this.scatter(layer.type, layer.count, layer.spreadRadius, layer.scaleRange, layer.color, terrain?.type, terrain?.elevationScale ?? 1));
-
-    this.weather = undefined;
-    const weather = w?.weather;
-    if (weather && weather.type !== 'clear' && weather.type !== 'foggy-mist') {
-      const count = Math.round(600 + 2400 * Math.min(1, weather.intensity ?? 0.5));
-      const positions = new Float32Array(count * 3);
-      for (let i = 0; i < count; i++) {
-        positions[i * 3] = (Math.random() - 0.5) * 40;
-        positions[i * 3 + 1] = Math.random() * 18;
-        positions[i * 3 + 2] = (Math.random() - 0.5) * 40;
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      const color = weather.type === 'rain' ? '#93C5FD' : weather.type === 'snow' ? '#FFFFFF' : '#F97316';
-      this.weather = new THREE.Points(g, new THREE.PointsMaterial({ color, size: weather.type === 'rain' ? 0.06 : 0.12, transparent: true, opacity: 0.85, depthWrite: false }));
-      this.weather.userData.kind = weather.type;
-      this.world.add(this.weather);
-    }
+    const hdri = w?.hdri?.url ? w.hdri : undefined;
+    if (w) parts.push(createWorld(w, { quality: this.quality, reflectionSize: this.quality === 'high' ? 512 : 256, hdriBackground: Boolean(hdri?.showBackground) }));
+    for (const part of parts) this.world.add(part.object);
+    this.worldParts = parts;
+    this.loadHdri(hdri);
   }
 
-  private scatter(type: string, count: number, radius: number, scaleRange: [number, number], color: string | undefined, terrainType: any, elevation: number) {
-    const geometry =
-      type === 'pine-trees' ? new THREE.ConeGeometry(0.6, 2.4, 7) :
-      type === 'cyber-buildings' ? new THREE.BoxGeometry(1.2, 4, 1.2) :
-      type === 'rocks-boulders' ? new THREE.DodecahedronGeometry(0.6, 0) :
-      type === 'street-lights' ? new THREE.CylinderGeometry(0.06, 0.08, 2.6, 6) :
-      type === 'ancient-pillars' ? new THREE.CylinderGeometry(0.35, 0.4, 3, 10) :
-      new THREE.OctahedronGeometry(0.5, 0);
-    geometry.translate(0, type === 'rocks-boulders' ? 0.3 : (geometry as any).parameters?.height / 2 || 0.5, 0);
-    const defaultColor = type === 'pine-trees' ? '#166534' : type === 'cyber-buildings' ? '#1E293B' : type === 'crystal-clusters' ? '#A78BFA' : '#64748B';
-    const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial({ color: color || defaultColor, roughness: 0.8 }), Math.max(1, Math.min(600, count)));
-    const m = new THREE.Matrix4();
-    let seed = 1337;
-    const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
-    for (let i = 0; i < mesh.count; i++) {
-      const a = rand() * Math.PI * 2;
-      const r = 7 + rand() * Math.max(2, radius - 7); // keep the play area clear
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
-      const s = scaleRange[0] + rand() * (scaleRange[1] - scaleRange[0]);
-      m.compose(new THREE.Vector3(x, computeTerrainHeight(terrainType, x, z, elevation), z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rand() * 6.28, 0)), new THREE.Vector3(s, s, s));
-      mesh.setMatrixAt(i, m);
-    }
-    mesh.castShadow = true;
-    return mesh;
+  /** HDRI image lighting (studio uses drei <Environment>); embedded as a data URI when it fits the budget. */
+  private loadHdri(hdri: { url: string; intensity?: number; showBackground?: boolean } | undefined) {
+    this.hdriTexture?.dispose();
+    this.hdriTexture = undefined;
+    if (!hdri) return;
+    const sceneId = this.sceneId;
+    new RGBELoader().loadAsync(this.resolveUrl(hdri.url)).then((tex) => {
+      if (this.sceneId !== sceneId) return tex.dispose();
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      this.hdriTexture = tex;
+      this.scene.environment = tex;
+      this.scene.environmentIntensity = hdri.intensity ?? 1;
+      if (hdri.showBackground) {
+        this.scene.background = tex;
+        this.scene.backgroundIntensity = hdri.intensity ?? 1;
+      }
+    }).catch(() => undefined); // offline without the HDRI: keep the studio room environment
   }
 
   // ---------------------------------------------------------------- actors
-  private syncActors(spec: SceneSpec, time: number) {
+  private syncActors(spec: SceneSpec, time: number, dt: number) {
     const live = new Set<string>();
+    const taps = runtimeStore.getState().unboxTapCounts || {};
     for (const actor of spec.actors) {
       live.add(actor.id);
-      const url = actor.customGlbUrl || actor.modelUrl;
-      const modelKey = url || `proc:${actor.assetId}:${actor.primaryColor}:${actor.physicsRole}`;
+      const url = actor.customGlbUrl || actor.modelUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
+      const modelKey = url || 'composite';
       let view = this.actors.get(actor.id);
       if (view && view.modelKey !== modelKey) {
-        this.actorsGroup.remove(view.root);
-        this.actors.delete(actor.id);
+        this.removeActor(actor.id);
         view = undefined;
       }
+      const tapCount = taps[actor.id] || 0;
       if (!view) {
         const root = new THREE.Group();
         const anim = new THREE.Group();
         root.add(anim);
         root.userData.actorId = actor.id;
-        view = { root, anim, modelKey };
+        view = { root, anim, modelKey, hasRig: false, clickPulse: 0 };
         this.actors.set(actor.id, view);
         this.actorsGroup.add(root);
         if (url) {
           const target = view;
-          const placeholder = proceduralActor(actor);
-          anim.add(placeholder);
           loadGltf(this.resolveUrl(url))
             .then((source) => {
               if (this.actors.get(actor.id) !== target) return;
@@ -304,24 +183,40 @@ export class View3D {
               model.traverse((o) => {
                 if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
               });
-              anim.remove(placeholder);
+              this.setComposite(target, undefined);
               const entry = ASSET_REGISTRY[actor.assetId];
               model.scale.setScalar(entry?.defaultScale ?? 1);
               anim.add(model);
+              target.hasRig = true;
               const clips: THREE.AnimationClip[] = (source as any).animations || [];
               if (clips.length) {
                 target.mixer = new THREE.AnimationMixer(model);
                 target.actions = new Map(clips.map((c) => [c.name, target.mixer!.clipAction(c)]));
               }
             })
-            .catch(() => undefined); // keep the procedural stand-in when a model can't load offline
-        } else {
-          anim.add(proceduralActor(actor));
+            .catch(() => undefined); // keep the procedural composite when a model can't load offline
         }
       }
-      // Transform + visibility (game: always; media: within the actor's time window).
-      const visible = actor.visible !== false && (spec.mode === 'game' || ((actor.startTime ?? 0) <= time && (actor.endTime ?? Infinity) >= time));
-      view.root.visible = visible;
+      // Procedural composite (studio fallback mesh) until / unless a GLB is shown; rebuilt when unbox taps change.
+      if (!view.hasRig) {
+        const key = compositeKeyFor(actor, tapCount);
+        if (key !== view.compositeKey) {
+          this.setComposite(view, buildCompositeActor(actor, tapCount));
+          view.compositeKey = key;
+        }
+      }
+      // Badge above the gift box ("TAP TO UNBOX (n/3)") — same sprite as the studio.
+      const badgeText = actor.assetId === 'mystery-gift-box' ? actorBadgeText(actor, tapCount) : undefined;
+      if (badgeText !== view.badgeText) {
+        if (view.badge) { view.root.remove(view.badge.object); view.badge.dispose(); view.badge = undefined; }
+        if (badgeText) {
+          view.badge = createActorBadge(badgeText);
+          view.badge.object.position.set(0, 2.75, 0);
+          view.root.add(view.badge.object);
+        }
+        view.badgeText = badgeText;
+      }
+      view.root.visible = actorInTimeline(actor, spec.mode, time);
       view.root.position.set(...actor.position);
       view.root.rotation.set(...actor.rotation);
       view.root.scale.set(...actor.scale);
@@ -336,114 +231,87 @@ export class View3D {
           view.activeClip = name;
         }
         view.mixer.timeScale = actor.animationSpeed ?? 1;
-      } else {
-        // Procedural animation types (same intent as the studio ActorRenderer).
-        const t = this.clock * (actor.animationSpeed ?? 1);
-        const a = view.anim;
-        a.position.y = 0;
-        a.rotation.y = 0;
-        if (actor.activeAnimation === 'bounce') a.position.y = Math.abs(Math.sin(t * 3)) * 0.35;
-        else if (actor.activeAnimation === 'spin') a.rotation.y = t * 1.6;
-        else if (actor.activeAnimation === 'float') a.position.y = Math.sin(t * 1.6) * 0.18 + 0.15;
-        else if (actor.activeAnimation === 'walk') a.position.y = Math.abs(Math.sin(t * 6)) * 0.08;
-        if (actor.physicsRole === 'collectible') a.rotation.y = t * 1.8;
       }
+      // Procedural motion + click pulse: the studio ActorRenderer's exact maths (src/render3d/actorMotion).
+      const motion = actorMotion(actor, spec.mode, time, view.hasRig, view.clickPulse, this.clock);
+      view.clickPulse = Math.max(0, view.clickPulse - dt * 3);
+      const a = view.anim;
+      a.position.set(damp(a.position.x, motion.offset[0], 10, dt), damp(a.position.y, motion.offset[1], 10, dt), damp(a.position.z, motion.offset[2], 10, dt));
+      a.rotation.set(damp(a.rotation.x, motion.rotation[0], 10, dt), damp(a.rotation.y, motion.rotation[1], 10, dt), damp(a.rotation.z, motion.rotation[2], 10, dt));
+      a.scale.setScalar(damp(a.scale.x, motion.scale, 10, dt));
     }
-    for (const [id, view] of this.actors) {
-      if (!live.has(id)) {
-        this.actorsGroup.remove(view.root);
-        this.actors.delete(id);
-      }
+    for (const id of [...this.actors.keys()]) if (!live.has(id)) this.removeActor(id);
+  }
+
+  private setComposite(view: ActorView, next: THREE.Object3D | undefined) {
+    if (view.composite) {
+      view.anim.remove(view.composite);
+      disposeObject(view.composite);
     }
+    view.composite = next;
+    if (next) {
+      next.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = true;
+      });
+      view.anim.add(next);
+    }
+  }
+
+  private removeActor(id: string) {
+    const view = this.actors.get(id);
+    if (!view) return;
+    this.actorsGroup.remove(view.root);
+    this.setComposite(view, undefined);
+    view.badge?.dispose();
+    view.mixer?.stopAllAction();
+    this.actors.delete(id);
   }
 
   // ---------------------------------------------------------------- vfx
-  private syncVfx(nodes: VFXNode[], time: number) {
+  private syncVfx(nodes: VFXNode[], spec: SceneSpec, ctx: FrameContext, playing: boolean) {
     const live = new Set<string>();
     for (const v of nodes) {
       live.add(v.id);
-      let obj = this.vfx.get(v.id);
-      if (!obj) {
-        obj = this.makeVfx(v);
-        this.vfx.set(v.id, obj);
-        this.fxGroup.add(obj);
+      let entry = this.vfx.get(v.id);
+      if (entry && entry.key !== v) {
+        this.fxGroup.remove(entry.built.object);
+        entry.built.dispose();
+        entry = undefined;
       }
-      obj.position.set(...v.position);
-      obj.visible = v.visible !== false && (v.startTime ?? 0) <= time && (v.endTime ?? Infinity) >= time;
-      if (obj.userData.kind === 'shockwave') obj.scale.setScalar(1 + ((this.clock * 1.4) % 2.5));
-      else if (obj.userData.kind === 'sparkles' || obj.userData.kind === 'confetti') obj.rotation.y = this.clock * 0.6;
+      if (!entry) {
+        entry = { built: createVfx(v), key: v };
+        this.vfx.set(v.id, entry);
+        this.fxGroup.add(entry.built.object);
+      }
+      const inWindow = spec.mode === 'game' || ((v.startTime === undefined || ctx.time >= v.startTime) && (v.endTime === undefined || ctx.time <= v.endTime));
+      entry.built.object.visible = v.visible !== false && inWindow;
+      entry.built.setPlaying(playing);
+      entry.built.update?.(ctx);
     }
-    for (const [id, obj] of this.vfx) if (!live.has(id)) { this.fxGroup.remove(obj); this.vfx.delete(id); }
+    for (const [id, entry] of this.vfx) {
+      if (live.has(id)) continue;
+      this.fxGroup.remove(entry.built.object);
+      entry.built.dispose();
+      this.vfx.delete(id);
+    }
   }
 
-  private makeVfx(v: VFXNode): THREE.Object3D {
-    const color = v.color || '#FBBF24';
-    if (v.type === 'floating-3d-badge') {
-      const s = textSprite(v.labelText || v.name, color);
-      s.userData.kind = v.type;
-      return s;
-    }
-    if (v.type === 'laser-beam') {
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 6, 8), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 }));
-      m.rotation.z = Math.PI / 2;
-      m.userData.kind = v.type;
-      return m;
-    }
-    if (v.type === 'shockwave') {
-      const m = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.7, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
-      m.rotation.x = -Math.PI / 2;
-      m.userData.kind = v.type;
-      return m;
-    }
-    const n = Math.round(80 * Math.max(0.3, Math.min(3, v.intensity || 1)));
-    const p = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      p[i * 3] = (Math.random() - 0.5) * 2 * (v.scale || 1);
-      p[i * 3 + 1] = Math.random() * 2 * (v.scale || 1);
-      p[i * 3 + 2] = (Math.random() - 0.5) * 2 * (v.scale || 1);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: v.type === 'confetti' ? 0.12 : 0.08, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-    pts.userData.kind = v.type;
-    return pts;
-  }
-
-  private syncBursts(bursts: Array<{ id: string; position: [number, number, number]; color: string }>) {
-    const now = this.clock;
+  private syncBursts(bursts: Array<{ id: string; position: [number, number, number]; color: string; createdAt: number }>, ctx: FrameContext) {
+    const live = new Set(bursts.map((b) => b.id));
     for (const b of bursts) {
       if (this.bursts.has(b.id)) continue;
-      const n = 48;
-      const p = new Float32Array(n * 3);
-      const vel: number[] = [];
-      for (let i = 0; i < n; i++) {
-        p[i * 3] = b.position[0];
-        p[i * 3 + 1] = b.position[1] + 0.8;
-        p[i * 3 + 2] = b.position[2];
-        vel.push((Math.random() - 0.5) * 4, Math.random() * 4 + 1, (Math.random() - 0.5) * 4);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-      const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: b.color, size: 0.12, transparent: true, depthWrite: false }));
-      pts.userData.vel = vel;
-      this.fxGroup.add(pts);
-      this.bursts.set(b.id, { obj: pts, born: now });
+      const built = createBurst(b);
+      this.bursts.set(b.id, built);
+      this.fxGroup.add(built.object);
     }
-    for (const [id, burst] of this.bursts) {
-      const age = now - burst.born;
-      if (age > 1.1) {
-        this.fxGroup.remove(burst.obj);
+    for (const [id, built] of this.bursts) {
+      if (!live.has(id) || built.done(ctx.nowMs)) {
+        this.fxGroup.remove(built.object);
+        built.dispose();
         this.bursts.delete(id);
         continue;
       }
-      const pos = burst.obj.geometry.attributes.position as THREE.BufferAttribute;
-      const vel = burst.obj.userData.vel as number[];
-      for (let i = 0; i < pos.count; i++) {
-        vel[i * 3 + 1] -= 9.8 * 0.016;
-        pos.setXYZ(i, pos.getX(i) + vel[i * 3] * 0.016, pos.getY(i) + vel[i * 3 + 1] * 0.016, pos.getZ(i) + vel[i * 3 + 2] * 0.016);
-      }
-      pos.needsUpdate = true;
-      (burst.obj.material as THREE.PointsMaterial).opacity = 1 - age / 1.1;
+      built.update?.(ctx);
     }
   }
 
@@ -459,7 +327,10 @@ export class View3D {
       if (!o?.visible) continue;
       const state = runtimeStore.getState();
       const actor = state.sceneSpec.actors.find((a) => a.id === o!.userData.actorId);
-      if (!actor || !state.isPlaying) return;
+      if (!actor) return;
+      const view = this.actors.get(actor.id);
+      if (view) view.clickPulse = 1;
+      if (!state.isPlaying) return;
       if (this.runtime.emit('actor-click', { actorId: actor.id })) return;
       if (state.sceneSpec.mode === 'game' || actor.onClickAction !== 'none') state.triggerActorInteraction(actor);
       return;
@@ -531,9 +402,8 @@ export class View3D {
       this.sceneId = spec.id;
       this.curves = null;
       this.lastHit = {};
-      for (const view of this.actors.values()) this.actorsGroup.remove(view.root);
-      this.actors.clear();
-      for (const o of this.vfx.values()) this.fxGroup.remove(o);
+      for (const id of [...this.actors.keys()]) this.removeActor(id);
+      for (const entry of this.vfx.values()) { this.fxGroup.remove(entry.built.object); entry.built.dispose(); }
       this.vfx.clear();
     }
     const worldKey = JSON.stringify([spec.id, spec.world, spec.environment]);
@@ -570,30 +440,29 @@ export class View3D {
     }
 
     state = runtimeStore.getState();
-    this.syncActors(state.sceneSpec, state.currentTime);
-    this.syncVfx(state.sceneSpec.vfx || [], state.currentTime);
-    this.syncBursts(state.burstEffects as any);
+    const ctx: FrameContext = {
+      time: state.currentTime,
+      duration: Math.max(2, state.sceneSpec.durationSeconds || 8),
+      nowMs: Date.now(),
+      clock: this.clock,
+      viewportHeight: this.renderer.domElement.height,
+    };
+    this.syncActors(state.sceneSpec, state.currentTime, dt);
+    this.syncVfx(state.sceneSpec.vfx || [], state.sceneSpec, ctx, state.isPlaying);
+    this.syncBursts(state.burstEffects as any, ctx);
     for (const view of this.actors.values()) view.mixer?.update(dt);
-    if (this.weather) {
-      const pos = this.weather.geometry.attributes.position as THREE.BufferAttribute;
-      const kind = this.weather.userData.kind;
-      const fall = kind === 'rain' ? 14 : kind === 'snow' ? 1.2 : -1.5;
-      for (let i = 0; i < pos.count; i++) {
-        let y = pos.getY(i) - fall * dt;
-        if (y < 0) y += 18;
-        if (y > 18) y -= 18;
-        pos.setY(i, y);
-        if (kind !== 'rain') pos.setX(i, pos.getX(i) + Math.sin(this.clock + i) * 0.004);
-      }
-      pos.needsUpdate = true;
-    }
-    const water = this.world.getObjectByName('water');
-    if (water) water.position.y = (state.sceneSpec.world?.terrain.waterLevel ?? 0.05) + Math.sin(this.clock * 0.8) * 0.03;
+    for (const part of this.worldParts) part.update?.(ctx);
     this.updateCamera(state.sceneSpec, state.currentTime, sceneChanged);
     this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
+    for (const part of this.worldParts) part.dispose();
+    for (const id of [...this.actors.keys()]) this.removeActor(id);
+    for (const entry of this.vfx.values()) entry.built.dispose();
+    for (const b of this.bursts.values()) b.dispose();
+    this.hdriTexture?.dispose();
+    this.disposeEnv?.();
     this.ro.disconnect();
     this.canvas.removeEventListener('pointerdown', this.onPointer);
     this.renderer.dispose();

@@ -6,6 +6,7 @@ import { activeCaptions } from '../media/captions';
 import { isSfxMuted, setSfxMuted } from '../audio/audioBus';
 import type { PlayerState } from './playerStore';
 import type { InputManager } from './input';
+import { touchButtons, touchLayoutFor, TouchLayout } from '../runtime/touchLayout';
 
 export const PLAYER_CSS = `
 .omni-root{position:fixed;inset:0;background:#05070d;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f8fafc;touch-action:none;user-select:none;-webkit-user-select:none}
@@ -100,17 +101,10 @@ export class Hud {
       this.input.bindTouchButton(b, key);
       pad.appendChild(b);
     };
-    if (layout === 'platformer') {
-      cell('◀', 'arrowleft', 1, 2);
-      cell('▶', 'arrowright', 3, 2);
-    } else {
-      cell('▲', 'arrowup', 2, 1);
-      cell('◀', 'arrowleft', 1, 2);
-      cell('▼', 'arrowdown', 2, 2);
-      cell('▶', 'arrowright', 3, 2);
-    }
-    const action = el('div', 'omni-key omni-jump', layout === 'platformer' ? 'JUMP' : 'ACT');
-    this.input.bindTouchButton(action, ' ');
+    const buttons = touchButtons(layout as TouchLayout);
+    for (const [label, key, col, row] of buttons.pad) cell(label, key, col, row);
+    const action = el('div', 'omni-key omni-jump', buttons.action![0]);
+    this.input.bindTouchButton(action, buttons.action![1]);
     this.touch.append(pad, action);
   }
 
@@ -122,9 +116,7 @@ export class Hud {
     if (game) this.score.textContent = `★ ${s.gameScore}/${spec.gameRules?.targetScore ?? 0} · ⏱ ${Math.max(0, Math.ceil(s.gameTimeRemaining))}s`;
 
     // On-screen controls only on touch devices, for game scenes with a player.
-    const hasPlatformer = spec.engineType === '2d' && spec.nodes2D.some((n) => n.physics2D === 'player-platformer');
-    const hasPlayer = hasPlatformer || spec.nodes2D.some((n) => n.physics2D === 'player-topdown') || spec.actors.some((a) => a.physicsRole === 'player');
-    const layout = this.opts.touch && game && hasPlayer && !s.gameEnded ? (hasPlatformer ? 'platformer' : 'dpad') : 'none';
+    const layout = this.opts.touch ? touchLayoutFor(spec, s.gameEnded) : 'none';
     if (layout !== this.touchLayout) this.buildTouch(layout);
 
     // Captions (2D draws them into its canvas).
