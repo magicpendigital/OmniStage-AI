@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { previewOrder } from '../playtest/previewOrder';
 import { formatBytes, PlayableBudgetReport } from '../exporter/playableBundle';
 import {
   detectSupportedVideoMimes,
@@ -42,6 +43,12 @@ export const PublishModal: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const scenes = useStudioStore((s) => s.scenes);
   const activeSceneId = useStudioStore((s) => s.activeSceneId);
+  // The video records the active scene's storyboard (same order as Preview), not every scene in the project.
+  const sequenceScenes = React.useMemo(
+    () => previewOrder(scenes, activeSceneId).map((id) => scenes.find((s) => s.id === id)!).filter(Boolean),
+    [scenes, activeSceneId]
+  );
+  const isStoryboard = !!scenes.find((s) => s.id === activeSceneId)?.sequence?.storyboardId;
   const switchScene = useStudioStore((s) => s.switchScene);
   const canvasElement = useStudioStore((s) => s.canvasElement);
   const isRecordingVideo = useStudioStore((s) => s.isRecordingVideo);
@@ -83,7 +90,7 @@ export const PublishModal: React.FC = () => {
 
   // Calculate total multi-scene sequencer runtime
   const calculateTotalDuration = () => {
-    return scenes.reduce((acc, sc) => {
+    return sequenceScenes.reduce((acc, sc) => {
       const dur = durationMode === 'fixed' ? fixedDurationSeconds : Math.max(2, sc.durationSeconds || 5);
       return acc + dur;
     }, 0);
@@ -118,15 +125,15 @@ export const PublishModal: React.FC = () => {
       overallRatio: 0,
       percentage: 0,
       currentSceneIndex: 0,
-      totalScenes: scenes.length,
-      currentSceneTitle: scenes[0]?.title || 'Starting Sequencer...',
+      totalScenes: sequenceScenes.length,
+      currentSceneTitle: sequenceScenes[0]?.title || 'Starting Sequencer...',
       elapsedSeconds: 0,
       totalDurationSeconds: totalSequencerDuration,
       phase: 'preparing',
     });
 
     const res = await recordMultiSceneSequence({
-      scenes,
+      scenes: sequenceScenes,
       initialActiveSceneId: activeSceneId,
       switchScene,
       getCanvasElement: () => canvasElement,
@@ -292,7 +299,7 @@ export const PublishModal: React.FC = () => {
                     <span>Continuous Storyboard Video Sequencer</span>
                   </h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Automates playback across all <span className="text-slate-200 font-semibold">{scenes.length} scenes</span> (3D & 2D) on the timeline, rendering smooth transitions and exporting a single stitched master video.
+                    Plays {isStoryboard ? 'this storyboard' : 'every scene'} in order — <span className="text-slate-200 font-semibold">{sequenceScenes.length} scene{sequenceScenes.length === 1 ? '' : 's'}</span>, the same as Preview — with smooth transitions, and exports one stitched video.
                   </p>
                 </div>
                 <div className="text-right shrink-0 bg-slate-950/80 px-3 py-2 rounded-lg border border-slate-800">
@@ -304,11 +311,11 @@ export const PublishModal: React.FC = () => {
               {/* Storyboard Scenes Sequence Queue Preview */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-                  <span>Storyboard Recording Sequence ({scenes.length} Scenes)</span>
+                  <span>Storyboard Recording Sequence ({sequenceScenes.length} Scenes)</span>
                   <span className="font-mono text-[11px] text-cyan-400">FPS: 60 · 12 Mbps High-Bitrate</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                  {scenes.map((sc, idx) => {
+                  {sequenceScenes.map((sc, idx) => {
                     const dur = durationMode === 'fixed' ? fixedDurationSeconds : Math.max(2, sc.durationSeconds || 5);
                     const isCur = sc.id === activeSceneId;
                     return (
@@ -504,7 +511,7 @@ export const PublishModal: React.FC = () => {
                   <span>
                     {isRecordingVideo
                       ? 'Sequencing Storyboard in Progress...'
-                      : `Start Multi-Scene Video Recording (${totalSequencerDuration.toFixed(1)}s · ${scenes.length} Scenes)`}
+                      : `Start Multi-Scene Video Recording (${totalSequencerDuration.toFixed(1)}s · ${sequenceScenes.length} Scenes)`}
                   </span>
                 </button>
 

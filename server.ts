@@ -234,7 +234,9 @@ Detect any overlapping objects, off-frame cameras, ungrounded actors, or low-con
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  // `npm start` passes --prod (cross-platform; no NODE_ENV syntax needed on Windows) and serves the built dist/.
+  const production = process.env.NODE_ENV === 'production' || process.argv.includes('--prod');
+  if (!production) {
     let viteInstance: any = null;
     const viteInitPromise = (async () => {
       const { createServer: createViteServer } = await import('vite');
