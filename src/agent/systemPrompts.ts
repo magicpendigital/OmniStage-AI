@@ -186,6 +186,16 @@ AUTHORING & SPATIAL DESIGN RULES:
 9. Captions: sceneSpec.captions = [{ start, end, text, position: 'bottom'|'top'|'center', style: 'subtitle'|'title' }] inside 0..durationSeconds, ≤ 12 words each.
 10. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
    every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.
+11. ACTING & SHOTS (media mode — this is what makes a film feel alive):
+   - actors[].performance = timed steps applied from the actor's position: { time, clip?, moveTo?: [x,0,z], duration?, arriveClip?,
+     lookAt?: actorId | [x,y,z], faceDeg?, animation?, speed?, label? }. While moving without a clip the actor walks (or runs when fast)
+     and faces where it walks; afterwards it plays arriveClip (default Idle). Use only clips listed in the asset's embeddedClips
+     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump). The hero needs >= 3 different actions per scene.
+   - camera.shots = [{ start, end?, type: 'establishing'|'wide'|'medium'|'close-up'|'over-shoulder'|'low-angle'|'high-angle'|'tracking',
+     subject?: actorId, partner?: actorId (over-shoulder), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',
+     move?: 'static'|'push-in'|'pull-out'|'pan-left'|'pan-right'|'crane-up'|'orbit', fov? }]. Shots are hard cuts framed on the subject
+     wherever it is; change shot every 2-4 s and when the action changes. Shots replace camera.mode in media scenes.
+   - Keep moveTo targets within x/z ±8 and away from other actors; give both characters something to do when two are on screen.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 
@@ -237,6 +247,11 @@ PLANNING RULES:
 5. Film beats must follow a story arc (establish -> rising action -> climax -> resolution) and keep the same hero characters.
 6. Game levels must escalate difficulty (difficulty 1..N): wider gaps, higher platforms, more collectibles, tighter timers.
 7. Titles are short (<= 6 words). description is 1-2 sentences of concrete visual direction (world, characters, camera, palette).
+8. SCREENWRITER (media beats): write "script" = what happens second by second in this shot, as 3-6 short lines
+   "start-end s | SHOT TYPE (wide/medium/close-up/over-shoulder/low-angle/high-angle/tracking/establishing) on WHO | ACTION | optional caption line".
+   Every scene needs a change: the hero starts doing one thing and ends doing another (wakes -> stands -> walks -> waves).
+   Open the film with an establishing shot; use close-ups for emotion; vary shot sizes; 8-12 s per scene.
+   "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic), "crossfade".
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY JSON:
 {
@@ -244,7 +259,8 @@ Return ONLY JSON:
   "kind": "film" | "game-levels" | "ad-sequence",
   "engineType": "3d" | "2d",
   "beats": [
-    { "title": "string", "description": "string", "engineType": "3d" | "2d", "mode": "media" | "game", "beat": "one-line narrative beat or level objective", "difficulty": 1 }
+    { "title": "string", "description": "string", "engineType": "3d" | "2d", "mode": "media" | "game", "beat": "one-line narrative beat or level objective", "difficulty": 1,
+      "script": "media beats only: timed lines (see SCREENWRITER)", "transition": "fade" }
   ]
 }`;
 }
@@ -264,7 +280,10 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
   * Collectibles use physics2D "collectible" (shapeKind "star", ~46x46) placed ~45px above platform tops, scoreValue 25-50.
   * gameRules.winCondition "score-threshold" with targetScore <= the sum of all collectible scoreValues.
   * Higher difficulty => narrower platforms, more pits, more stars, shorter timeLimitSeconds (min 15).
-- Set mode to "game" for levels and "media" for film shots.`;
+- Set mode to "game" for levels and "media" for film shots.
+- MEDIA SHOTS: turn the beat's "script" into actors[].performance and camera.shots (see ACTING & SHOTS) so the scene actually happens on
+  screen; captions carry the script's caption lines at the same times. Fill the frame: world.terrain + at least 2 scatterObjects layers
+  (or an HDRI) matching the place; never leave a bare grid floor (environment.groundGrid false for films).`;
 }
 
 export function buildStoryboardSceneUserPrompt(params: {

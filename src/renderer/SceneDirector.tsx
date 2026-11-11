@@ -11,6 +11,7 @@ import { Built } from './Built';
 import { applyBackgroundAndFog, applyStudioEnvironment, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
 import { createContactShadows } from '../render3d/contactShadows';
 import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
+import { resolveShot } from '../runtime/cinematics';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -24,6 +25,8 @@ export const SceneDirector: React.FC = () => {
 
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
+  // Phase 10A: Preview shows the film, not editor helpers (gizmo, selection ring, coordinate badge).
+  const previewing = useStudioStore((s) => !!s.fullPreview);
   const isDraggingGizmo = useStudioStore((s) => s.isDraggingGizmo);
   const selectActor = useStudioStore((s) => s.selectActor);
   const setTransformMode = useStudioStore((s) => s.setTransformMode);
@@ -149,7 +152,24 @@ export const SceneDirector: React.FC = () => {
     }
 
     // 2. CINEMATIC CAMERA SEQUENCER (Media Mode or Active Camera Tracks)
-    if (isPlaying && !isDraggingGizmo && (sceneSpec.mode === 'media' || logicRuntime.controlsCamera)) {
+    // Phase 10A: a shot list drives the camera in media scenes (cuts, framing on the performers). Deterministic in time,
+    // so the camera is set exactly (no smoothing) — the same frame the Player and video export render.
+    // In Preview the shot also holds while paused / scrubbing (it is the film); in the editor a paused camera is free to orbit.
+    const inPreview = !!useStudioStore.getState().fullPreview;
+    const shotFrame = (isPlaying || inPreview) && !isDraggingGizmo && sceneSpec.mode === 'media' ? resolveShot(sceneSpec, currentTime) : null;
+    const persp = camera as THREE.PerspectiveCamera;
+    const wantFov = shotFrame ? shotFrame.fov : sceneSpec.camera.fov || 45;
+    if (persp.isPerspectiveCamera && Math.abs(persp.fov - wantFov) > 0.01 && (shotFrame || isPlaying)) {
+      persp.fov = wantFov;
+      persp.updateProjectionMatrix();
+    }
+    if (shotFrame) {
+      camera.position.set(...shotFrame.position);
+      if (controlsRef.current) {
+        controlsRef.current.target.set(...shotFrame.target);
+        controlsRef.current.update();
+      } else camera.lookAt(...shotFrame.target);
+    } else if (isPlaying && !isDraggingGizmo && (sceneSpec.mode === 'media' || logicRuntime.controlsCamera)) {
       if (camMode === 'orbit') {
         camera.position.set(...sceneSpec.camera.position);
         if (controlsRef.current) {
@@ -277,7 +297,7 @@ export const SceneDirector: React.FC = () => {
         <ActorRenderer
           key={actor.id}
           actor={actor}
-          isSelected={actor.id === selectedActorId}
+          isSelected={actor.id === selectedActorId && !previewing}
           onRuntimeClick={(actorId) => logicRuntime.emit('actor-click', { actorId })}
         />
       ))}

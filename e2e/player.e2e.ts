@@ -74,3 +74,41 @@ test('2D platformer: the player runs right and the timeline advances determinist
   expect(px.std).toBeGreaterThan(5);
   expect(p.errors).toEqual([]);
 });
+
+test('3D film: performance walks the hero and the shot list cuts the camera (Phase 10A)', async ({ page }) => {
+  const spec = template('blank-3d-authoring');
+  spec.mode = 'media';
+  spec.durationSeconds = 10;
+  const hero = spec.actors[0];
+  hero.id = 'hero';
+  hero.position = [0, 0, 0];
+  hero.performance = [
+    { time: 0, clip: 'Sitting' },
+    { time: 2, moveTo: [3, 0, 0], duration: 3, ease: 'linear' },
+    { time: 6, clip: 'Wave', faceDeg: 0 },
+  ];
+  spec.camera.shots = [
+    { start: 0, type: 'wide', subject: 'hero', angle: 'front' },
+    { start: 5, type: 'close-up', subject: 'hero', angle: 'front' },
+  ];
+  const p = await openExport(page, spec);
+  const at = async (t: number) => {
+    const now = await p.state<number>('s.currentTime');
+    const frames = Math.round((t - now) / 0.05);
+    for (let i = 0; i < frames; i += 20) await p.step(Math.min(20, frames - i), 0.05);
+    return p.view3d();
+  };
+  const t1 = await at(1);
+  expect(t1.actors.hero.position[0]).toBeCloseTo(0, 1);
+  const t35 = await at(3.5);
+  expect(t35.actors.hero.position[0]).toBeGreaterThan(1);
+  expect(t35.actors.hero.position[0]).toBeLessThan(2.2);
+  expect(t35.actors.hero.yaw).toBeCloseTo(Math.PI / 2, 1);
+  const wideDist = Math.hypot(t35.camera.position[0] - t35.actors.hero.position[0], t35.camera.position[2]);
+  const t7 = await at(7);
+  expect(t7.actors.hero.position[0]).toBeCloseTo(3, 1);
+  const closeDist = Math.hypot(t7.camera.position[0] - 3, t7.camera.position[2]);
+  expect(closeDist).toBeLessThan(wideDist / 2);
+  expect(t7.camera.fov).toBeLessThan(t35.camera.fov);
+  expect(p.errors).toEqual([]);
+});

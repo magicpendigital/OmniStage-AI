@@ -202,9 +202,26 @@ so that moves to the front.
 ### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
 Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;
 the verifier only checks playability. Fix in layers: contract → production tools → director skills → quality judge.
-- [ ] **10A** `actor.performance[]` (timed clips, moveTo paths on terrain, lookAt), `camera.shots[]` (wide/medium/close/tracking, declarative),
-  scene `transition`; storyboard "screenwriter" step (script, actions, shot list); cinematography + acting skills; media verifier lints
-  (≥2 actions for the hero, ≥2 shots per scene > 6 s, sound present, non-empty background) fed into the 7C patch loop.
+- [x] **10A (done 2026-11-11)** Acting, shots and transitions, shared by studio, Preview, Player and video export
+  (`src/runtime/cinematics.ts`):
+  - `actor.performance[]`: timed clips, `moveTo` walks with auto Walk/Run on the terrain, `lookAt` / `faceDeg` with eased turns,
+    `arriveClip`; shared fuzzy clip matching (Walk → Walking).
+  - `camera.shots[]`: establishing / wide / medium / close-up / over-shoulder / low / high / tracking, moves push-in / pull-out /
+    crane-up / orbit / pan. Shots are hard cuts framed on wherever the subject is. They avoid occluding actors (move in, then swing ≤ 50°
+    for close-ups). In Preview the shot holds while paused.
+  - `sequence.transition` (cut / fade / fade-white / crossfade / wipe) in Preview, Player and the video sequencer. Preview hides editor
+    gizmos.
+  - Storyboard planner writes a timed **script** per media beat; scene authoring turns it into performance + shots; continuity passes
+    where each character ends.
+  - AI actor ids and performances survive normalisation (shot / lookAt references used to break).
+  - Skills: `character-acting`, `scene-dressing`, shot grammar rewritten for `camera.shots`.
+  - Verifier: performance / clip / lookAt / shot / transition validity with auto-fixes, plus craft hints `media.hero-static`,
+    `media.single-shot`, `media.bare-stage`. The patch loop takes a `qualityPenalty` so AI film shots get up to 2 polish rounds until
+    those are gone.
+  - Offline director: acting arcs, 4-shot lists and a dressed set (no grid floor).
+  - Tests: `tests/cinematics.test.ts` (composition: nobody blocks the subject, close-ups / over-shoulders see the face) and an E2E film
+    test (walk + cut in the exported Player).
+  - Not yet: sound (10B), dialogue (10C). Clouds render as dark blobs under some lighting presets (fix with the 10B biomes).
 - [ ] **10B** Frame-stepped MP4 export with mixed audio (Player `step()` + WebCodecs/Mediabunny; MediaRecorder fallback); procedural
   `soundtrack` (mood music, biome ambience, timed SFX) that also runs in playables; biome presets that fill the frame.
 - [ ] **10C** `dialogue[]` with in-browser Piper TTS (Vietnamese voice), auto captions, talk motion; CC0 Quaternius animation library retargeted.

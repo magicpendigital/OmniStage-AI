@@ -9,6 +9,9 @@
  *
  * Every generated scene is a declarative SceneSpec; nothing here emits imperative renderer code.
  */
+import { resolvePerformance } from '../runtime/cinematics';
+import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
+import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
 import {
   ASSET_REGISTRY,
   createBlankSceneSpec,
@@ -183,9 +186,14 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
       ? raw.activeClip
       : entry.defaultClip;
   return {
-    id: uid(`actor-${index}`),
+    // Phase 10A: keep the model's id so camera.shots / performance lookAt references stay valid (duplicates are
+    // renamed by the verifier's ids.duplicate fix).
+    id: typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.id) ? raw.id : uid(`actor-${index}`),
     name: str(raw.name, entry.name),
     assetId: entry.assetId,
+    performance: Array.isArray(raw.performance)
+      ? raw.performance.filter((st: any) => st && typeof st === 'object' && Number.isFinite(Number(st.time))).map((st: any) => ({ ...st, time: Number(st.time) })).slice(0, 24)
+      : undefined,
     modelUrl: raw.customGlbUrl ? str(raw.modelUrl, raw.customGlbUrl) : entry.modelUrl,
     customGlbUrl: typeof raw.customGlbUrl === 'string' ? raw.customGlbUrl : undefined,
     position: isVec3(raw.position) ? [raw.position[0], 0, raw.position[2]] : [index * 1.8 - 1.8, 0, 0],
@@ -612,7 +620,7 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
   const progress = total <= 1 ? 0 : index / (total - 1); // 0 = opening, 1 = finale
   const isClimax = /climax|showdown|conflict/i.test(beat.beat) || (total >= 3 && index === total - 2);
   const isFinale = index === total - 1;
-  const duration = 8;
+  const duration = 10;
 
   const characters = CHARACTER_KEYWORDS.filter((c) => c.kw.test(t));
   if (characters.length === 0) characters.push(CHARACTER_KEYWORDS[0], CHARACTER_KEYWORDS[2]);
@@ -659,6 +667,11 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
     if (hazard) actors.push(hazard);
   }
   spec.actors = actors;
+  // Phase 10A: offline acting + shot list so even keyless films have movement and cuts.
+  const performers = actors.filter((a) => a.availableClips?.length);
+  directOfflineShot(spec, performers, characters, { index, isClimax, isFinale, duration });
+  spec.environment.groundGrid = false;
+  spec.environment.reflectivePedestal = false;
 
   spec.vfx = [];
   if (isClimax) {
@@ -683,6 +696,56 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
     { id: uid('track'), label: 'Character Action', type: 'actor-anim', startTime: 0, endTime: duration, color: '#F59E0B' },
   ];
   return spec;
+}
+
+/** Phase 10A: a small acting arc + shot list for an offline film shot. */
+function directOfflineShot(
+  spec: SceneSpec,
+  performers: ActorNode[],
+  characters: Array<{ walk: string; run: string; hero: string }>,
+  o: { index: number; isClimax: boolean; isFinale: boolean; duration: number }
+) {
+  const [hero, partner] = performers;
+  let heroDest: [number, number, number] | undefined;
+  let heroAway = 1;
+  const has = (a: ActorNode, clip: string) => !!a.availableClips?.includes(clip);
+  const pick = (a: ActorNode, ...clips: string[]) => clips.find((c) => has(a, c));
+  const d = o.duration;
+  if (hero) {
+    const c = characters[0];
+    const startClip = o.index === 0 ? pick(hero, 'Sitting', 'Survey', 'Idle') : pick(hero, 'Idle', 'Survey');
+    const react = o.isFinale ? pick(hero, 'Dance', c.hero) : o.isClimax ? pick(hero, 'Jump', 'Punch', c.hero) : pick(hero, 'Wave', 'Yes', c.hero);
+    const [hx, , hz] = hero.position;
+    // Walk away from the partner (never through it), towards the camera side.
+    const away = partner ? Math.sign(hx - partner.position[0]) || -1 : o.index % 2 ? -1 : 1;
+    const dest: [number, number, number] = [Number((hx + away * 2.2).toFixed(2)), 0, Number((hz + 1.6).toFixed(2))];
+    heroDest = dest;
+    heroAway = away;
+    hero.activeClip = startClip || hero.activeClip;
+    hero.performance = [
+      { time: 0, clip: startClip, label: 'opening pose' },
+      ...(o.index === 0 && has(hero, 'Standing') ? [{ time: d * 0.2, clip: 'Standing', label: 'gets up' }] : []),
+      { time: d * 0.3, moveTo: dest, duration: d * 0.28, clip: o.isClimax ? pick(hero, c.run, 'Running', 'Run') : undefined, label: 'sets off' },
+      // Turn to the partner as the walk ends, before the over-shoulder shot cuts in at 0.66·d.
+      { time: d * 0.6, ...(partner ? { lookAt: partner.id } : { faceDeg: 0 }), clip: react, label: 'reacts' },
+      { time: d * 0.88, clip: o.isFinale ? react : pick(hero, 'ThumbsUp', 'Yes', 'Idle', 'Survey'), label: 'beat ends' },
+    ];
+  }
+  if (partner && hero) {
+    partner.performance = [
+      { time: 0, lookAt: hero.id, label: 'watches' },
+      // Follow the hero and stop 2.4 m beside where it arrives (on the side the partner came from).
+      ...(heroDest ? [{ time: d * 0.45, moveTo: [Number((heroDest[0] - heroAway * 2.4).toFixed(2)), 0, Number((heroDest[2] - 0.4).toFixed(2))] as [number, number, number], duration: d * 0.25, label: 'follows' }] : []),
+      { time: d * 0.75, lookAt: hero.id, clip: pick(partner, 'Survey', 'Idle', 'Wave'), label: 'answers' },
+    ];
+  }
+  const subject = hero?.id;
+  spec.camera.shots = [
+    { start: 0, type: o.index === 0 ? 'establishing' : 'wide', subject, move: o.index === 0 ? 'crane-up' : 'pull-out', label: 'open' },
+    { start: d * 0.3, type: 'tracking', subject, move: 'static', label: 'journey' },
+    { start: d * 0.66, type: partner ? 'over-shoulder' : 'medium', subject, partner: partner?.id, angle: 'three-quarter-left', label: 'meeting' },
+    { start: d * 0.8, type: o.isClimax ? 'low-angle' : 'close-up', subject, move: o.isFinale ? 'pull-out' : 'push-in', label: 'reaction' },
+  ];
 }
 
 function buildLocal3DGameLevel(beat: StoryboardBeat, index: number, total: number): SceneSpec {
@@ -784,10 +847,16 @@ function summarizeSceneForContinuity(spec: SceneSpec) {
     title: spec.title,
     engineType: spec.engineType,
     mode: spec.mode,
-    camera: spec.camera.mode,
+    camera: spec.camera.shots?.length ? spec.camera.shots.map((sh) => sh.type).join(' → ') : spec.camera.mode,
     world: spec.engineType === '3d' ? { skybox: spec.world.skybox, terrain: spec.world.terrain.type, weather: spec.world.weather.type } : undefined,
     lighting: spec.environment.presetId,
-    actors: spec.actors.map((a) => ({ name: a.name, assetId: a.assetId, primaryColor: a.primaryColor, activeClip: a.activeClip })),
+    // Phase 10A: where each character ends up and what it last did, so the next scene continues the action.
+    actors: spec.actors.map((a) => {
+      const last = a.performance?.length ? resolvePerformance(a, spec.durationSeconds || 8, spec.actors) : undefined;
+      return { id: a.id, name: a.name, assetId: a.assetId, primaryColor: a.primaryColor, activeClip: a.activeClip,
+        endsAt: last?.position.map((v) => Number(v.toFixed(1))), endsDoing: last?.clip };
+    }),
+    script: spec.sequence?.script,
     nodes2D: spec.engineType === '2d' ? { count: spec.nodes2D.length, palette: Array.from(new Set(spec.nodes2D.map((n) => n.stroke))).slice(0, 4) } : undefined,
     gameRules: spec.mode === 'game' ? { targetScore: spec.gameRules.targetScore, timeLimitSeconds: spec.gameRules.timeLimitSeconds } : undefined,
   };
@@ -814,6 +883,8 @@ function sanitizePlan(raw: StoryboardPlan, intent: StoryboardIntent, fallback: S
       mode: b.mode === 'game' || b.mode === 'media' ? b.mode : intent.kind === 'game-levels' ? 'game' : 'media',
       beat: str(b.beat, fallback.beats[i].beat),
       difficulty: num(b.difficulty, i + 1),
+      script: typeof b.script === 'string' && b.script.trim() ? b.script.trim().slice(0, 1200) : fallback.beats[i].script,
+      transition: ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'].includes(b.transition) ? b.transition : i === 0 ? undefined : 'fade',
     });
   }
   return {
@@ -833,6 +904,49 @@ async function postJSON(url: string, body: unknown, signal?: AbortSignal, header
   });
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
   return response.json();
+}
+
+/**
+ * Phase 10A: one or two JSON Patch rounds that add acting, shots and a place when the verifier's craft hints fire.
+ * Never makes the scene worse (the loop discards rounds that raise errors or craft issues).
+ */
+async function polishFilmShot(
+  spec: SceneSpec,
+  prompt: string,
+  beat: StoryboardBeat,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
+  signal?: AbortSignal
+): Promise<SceneSpec> {
+  const check = (s: SceneSpec) => autoFixSceneSpec(s);
+  const first = check(spec);
+  if (mediaQualityPenalty(first.report) === 0 && first.report.ok) return spec;
+  const ask = `Polish this film shot so it plays like a real scene (do not change the story).
+Shot: "${beat.title}" — ${beat.beat}${beat.script ? `\nScript:\n${beat.script}` : ''}
+Original request: "${prompt.slice(0, 400)}"
+${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`;
+  const loop = await runPatchLoop({
+    prompt: ask,
+    spec: first.spec,
+    maxRounds: 2,
+    check,
+    qualityPenalty: mediaQualityPenalty,
+    qualityCodes: MEDIA_CRAFT_CODES,
+    propose: async (turn) => {
+      try {
+        return (await postJSON(
+          '/api/agent/patch',
+          { prompt: turn.prompt, sceneSpec: turn.spec, round: turn.round, toolResults: turn.toolResults, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+          signal,
+          aiHeaders(settings)
+        )) as PatchProposal;
+      } catch {
+        return null;
+      }
+    },
+  });
+  if (!loop?.changed) return first.spec;
+  // Keep the storyboard identity the loop must not change.
+  return { ...loop.spec, id: spec.id, title: spec.title, sequence: spec.sequence, mode: spec.mode, engineType: spec.engineType };
 }
 
 export async function generateStoryboardWithAgent(
@@ -918,7 +1032,14 @@ export async function generateStoryboardWithAgent(
       index: i,
       total: plan.beats.length,
       beat: beat.beat,
+      ...(beat.transition && i > 0 ? { transition: beat.transition } : {}),
+      ...(beat.script ? { script: beat.script } : {}),
     };
+    // Phase 10A: AI film shots that still look static / empty get up to 2 polish rounds through the patch loop.
+    if (source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && !signal?.aborted) {
+      callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Polishing ${beat.title}` });
+      spec = await polishFilmShot(spec, prompt, beat, settings, signal);
+    }
     scenes.push(spec);
     sources.add(source);
     callbacks.onScene?.(spec, i, source);

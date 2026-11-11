@@ -17,6 +17,14 @@ import type {
 import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { heroActor, performanceActionCount } from '../runtime/cinematics';
+
+// --- Phase 10A: film craft (media 3D) ---
+export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
+export const SCENE_TRANSITIONS = ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'];
+const STAGE_3D = 12; // performances stay within ±12 m
+/** Media craft hints: warnings the AI patch loop also tries to resolve (see `mediaQualityPenalty`). */
+export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage'];
 
 // --- 2D physics envelope (mirrors StageCanvas2D: jump vy = -520 px/s, gravity = 9.8 * 90 px/s², run 320 px/s) ---
 export const PLATFORMER_PHYSICS = {
@@ -207,6 +215,75 @@ function verify3D(spec: SceneSpec, issues: VerificationIssue[]) {
   verifyScoreGoal(spec, scoring.map((a) => a.scoreValue ?? DEFAULT_SCORE), issues);
 }
 
+function isClip(actor: ActorNode, clip: string): boolean {
+  const names = actor.availableClips || [];
+  if (!names.length) return true; // clips unknown until the model loads
+  const w = clip.toLowerCase();
+  const alias: Record<string, string[]> = { walk: ['walk'], run: ['run', 'gallop'], idle: ['idle', 'survey'] };
+  return names.some((n) => n.toLowerCase().includes(w) || w.includes(n.toLowerCase().replace(/[_\s]+$/, ''))) ||
+    (alias[w] || []).some((a) => names.some((n) => n.toLowerCase().includes(a)));
+}
+
+/** Phase 10A: performance / shot validity and film craft hints for 3D media scenes. */
+function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
+  if (spec.engineType !== '3d' || spec.mode !== 'media') return;
+  const duration = Math.max(1, spec.durationSeconds || 8);
+  const ids = new Set(spec.actors.map((a) => a.id));
+  for (const a of spec.actors) {
+    for (const st of a.performance || []) {
+      const badMove = st.moveTo !== undefined && (!Array.isArray(st.moveTo) || st.moveTo.length !== 3 || st.moveTo.some((v) => !Number.isFinite(v) || Math.abs(v) > STAGE_3D));
+      if (!Number.isFinite(st.time) || st.time < 0 || st.time > duration || badMove || (st.ease !== undefined && !isEaseId(st.ease))) {
+        issues.push(issue('media.performance-invalid', 'warning', `"${a.name}" has a performance step outside the scene (time ${st.time}s of ${duration}s) or an invalid moveTo / ease.`, true, a.id));
+        break;
+      }
+    }
+    let clipFlagged = false;
+    let lookFlagged = false;
+    for (const st of a.performance || []) {
+      for (const clip of [st.clip, st.arriveClip]) {
+        if (clip && !clipFlagged && !isClip(a, clip)) {
+          clipFlagged = true;
+          issues.push(issue('media.performance-clip', 'warning', `"${a.name}" has no clip "${clip}" (clips: ${(a.availableClips || []).join(', ')}).`, true, a.id));
+        }
+      }
+      if (typeof st.lookAt === 'string' && !ids.has(st.lookAt) && !lookFlagged) {
+        lookFlagged = true;
+        issues.push(issue('media.lookat-missing', 'warning', `"${a.name}" looks at "${st.lookAt}", which is not an actor.`, true, a.id));
+      }
+    }
+  }
+  for (const sh of spec.camera?.shots || []) {
+    if (!SHOT_TYPES.includes(sh.type) || !Number.isFinite(sh.start) || sh.start < 0 || sh.start >= duration ||
+        (sh.subject && !ids.has(sh.subject)) || (sh.partner && !ids.has(sh.partner))) {
+      issues.push(issue('media.shot-invalid', 'warning', `Camera shot at ${sh.start}s is invalid (type "${sh.type}", subject "${sh.subject ?? '-'}", partner "${sh.partner ?? '-'}").`, true));
+      break;
+    }
+  }
+  const t = spec.sequence?.transition;
+  if (t !== undefined && !SCENE_TRANSITIONS.includes(t)) {
+    issues.push(issue('media.transition-invalid', 'warning', `Unknown scene transition "${t}".`, true));
+  }
+
+  // Craft hints (not fixable mechanically: the director has to make a creative choice).
+  const hero = heroActor(spec);
+  if (hero && duration > 5 && hero.availableClips?.length && performanceActionCount(hero) < 2) {
+    issues.push(issue('media.hero-static', 'warning', `"${hero.name}" does one thing for the whole ${duration}s scene. Add actors[].performance steps (clip changes, moveTo, lookAt) — at least 3 actions.`, false, hero.id));
+  }
+  if (spec.actors.length && duration > 6 && (spec.camera?.shots?.length || 0) < 2) {
+    issues.push(issue('media.single-shot', 'warning', `One camera framing for ${duration}s. Add camera.shots (wide → medium → close-up, a cut every 2-4 s).`, false));
+  }
+  const w = spec.world;
+  const bare = (!w || ['flat-grid', 'none'].includes(w.terrain?.type)) && !(w?.scatterObjects?.length) && !w?.hdri?.url;
+  if (spec.actors.length && bare) {
+    issues.push(issue('media.bare-stage', 'warning', 'The scene has no place: set world.terrain, 1-2 scatterObjects layers and sky / weather (or an HDRI), and turn off environment.groundGrid.', false));
+  }
+}
+
+/** Phase 10A: how much film craft is missing (0 = none). The AI patch loop keeps going while this is > 0. */
+export function mediaQualityPenalty(report: VerificationReport): number {
+  return report.issues.filter((i) => MEDIA_CRAFT_CODES.includes(i.code)).length;
+}
+
 function verifyScoreGoal(spec: SceneSpec, values: number[], issues: VerificationIssue[]) {
   const rules = spec.gameRules;
   if (!rules) {
@@ -268,6 +345,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifyCommon(spec, issues, opts);
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
+  verifyMedia(spec, issues);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
 }
@@ -321,6 +399,49 @@ function makePlayer2D(): Node2D {
 
 function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): string | null {
   switch (i.code) {
+    case 'media.performance-invalid': {
+      const a = spec.actors.find((x) => x.id === i.targetId);
+      if (!a?.performance) return null;
+      const duration = Math.max(1, spec.durationSeconds || 8);
+      a.performance = a.performance
+        .filter((st) => Number.isFinite(st.time))
+        .map((st) => {
+          const next = { ...st, time: clamp(st.time, 0, duration) };
+          if (next.ease !== undefined && !isEaseId(next.ease)) delete next.ease;
+          if (next.moveTo !== undefined) {
+            if (!Array.isArray(next.moveTo) || next.moveTo.length !== 3 || next.moveTo.some((v) => !Number.isFinite(v))) delete next.moveTo;
+            else next.moveTo = [clamp(next.moveTo[0], -STAGE_3D, STAGE_3D), next.moveTo[1], clamp(next.moveTo[2], -STAGE_3D, STAGE_3D)];
+          }
+          return next;
+        });
+      return `Clamped "${a.name}" performance to the scene`;
+    }
+    case 'media.performance-clip': {
+      const a = spec.actors.find((x) => x.id === i.targetId);
+      if (!a?.performance) return null;
+      for (const st of a.performance) {
+        if (st.clip && !isClip(a, st.clip)) delete st.clip;
+        if (st.arriveClip && !isClip(a, st.arriveClip)) delete st.arriveClip;
+      }
+      return `Removed clips "${a.name}" does not have`;
+    }
+    case 'media.lookat-missing': {
+      const a = spec.actors.find((x) => x.id === i.targetId);
+      const ids = new Set(spec.actors.map((x) => x.id));
+      for (const st of a?.performance || []) if (typeof st.lookAt === 'string' && !ids.has(st.lookAt)) delete st.lookAt;
+      return a ? `Dropped lookAt targets that are not actors ("${a.name}")` : null;
+    }
+    case 'media.shot-invalid': {
+      const duration = Math.max(1, spec.durationSeconds || 8);
+      const ids = new Set(spec.actors.map((x) => x.id));
+      spec.camera.shots = (spec.camera.shots || [])
+        .filter((sh) => SHOT_TYPES.includes(sh.type) && Number.isFinite(sh.start) && sh.start < duration)
+        .map((sh) => ({ ...sh, start: Math.max(0, sh.start), subject: sh.subject && ids.has(sh.subject) ? sh.subject : undefined, partner: sh.partner && ids.has(sh.partner) ? sh.partner : undefined }));
+      return 'Removed / repaired invalid camera shots';
+    }
+    case 'media.transition-invalid':
+      if (spec.sequence) spec.sequence.transition = 'fade';
+      return 'Scene transition set to fade';
     case 'ids.duplicate': {
       for (const list of [spec.actors, spec.nodes2D, spec.vfx] as Array<Array<{ id: string }>>) {
         const seen = new Set<string>();

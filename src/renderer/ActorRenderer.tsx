@@ -15,6 +15,7 @@ import { disposeObject } from '../render3d/h';
 import { createActorBadge } from '../render3d/vfx3d';
 import { Built } from './Built';
 import { actorBadgeText, actorMotion } from '../render3d/actorMotion';
+import { matchClipName, performedActor } from '../runtime/cinematics';
 
 interface ActorRendererProps {
   actor: ActorNode;
@@ -81,13 +82,9 @@ function RiggedGltfModel({
   useEffect(() => {
     if (!actions || names.length === 0) return;
 
-    const requestedClip =
-      actor.activeClip && actions[actor.activeClip]
-        ? actor.activeClip
-        : names.find((n) => n.toLowerCase().includes(actor.activeAnimation.toLowerCase())) ||
-          names[0];
-
-    const target = actions[requestedClip];
+    // Phase 10A: shared fuzzy matching (Walk → Walking, Sit → Sitting…), same as the Player.
+    const requestedClip = matchClipName(actor.activeClip || (actor.activeAnimation !== 'idle' ? actor.activeAnimation : undefined), names);
+    const target = requestedClip ? actions[requestedClip] : undefined;
     if (target) crossFade.select(target);
   }, [actions, names, actor.activeClip, actor.activeAnimation, crossFade]);
 
@@ -161,6 +158,13 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
   const mode = useStudioStore((s) => s.sceneSpec.mode);
   const unboxTapCount = useStudioStore((s) => s.unboxTapCounts[actor.id] || 0);
   const gltfUrl = actor.modelUrl || actor.customGlbUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
+  // Phase 10A: in media mode the actor's performance (walk paths, clip changes, facing) drives what is drawn.
+  const sceneActors = useStudioStore((s) => s.sceneSpec.actors);
+  const sceneWorld = useStudioStore((s) => s.sceneSpec.world);
+  const performed = useMemo(
+    () => performedActor(actor, { mode, actors: sceneActors, world: sceneWorld }, currentTime),
+    [actor, mode, sceneActors, sceneWorld, currentTime]
+  );
 
   // Check timeline window visibility in Media mode
   const isWithinTimelineWindow =
@@ -173,13 +177,13 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
 
     // Sync outer group to SceneSpec when user is NOT actively dragging the TransformControls gizmo
     if (!isDraggingGizmo) {
-      outerGroupRef.current.position.set(actor.position[0], actor.position[1], actor.position[2]);
-      outerGroupRef.current.rotation.set(actor.rotation[0], actor.rotation[1], actor.rotation[2]);
+      outerGroupRef.current.position.set(performed.position[0], performed.position[1], performed.position[2]);
+      outerGroupRef.current.rotation.set(performed.rotation[0], performed.rotation[1], performed.rotation[2]);
       outerGroupRef.current.scale.set(actor.scale[0], actor.scale[1], actor.scale[2]);
     }
 
     const anim = animGroupRef.current;
-    const motion = actorMotion(actor, mode, currentTime, !!gltfUrl, clickPulse, state.clock.getElapsedTime(), hovered);
+    const motion = actorMotion(performed, mode, currentTime, !!gltfUrl, clickPulse, state.clock.getElapsedTime(), hovered);
     const [offsetX, offsetY, offsetZ] = motion.offset;
     const [rotX, rotY, rotZ] = motion.rotation;
     if (clickPulse > 0.01) setClickPulse((prev) => Math.max(0, prev - delta * 3.0));
@@ -213,8 +217,8 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
   const actorContent = (
     <group
       ref={outerGroupRef}
-      position={actor.position}
-      rotation={actor.rotation}
+      position={performed.position}
+      rotation={performed.rotation}
       scale={actor.scale}
       onClick={handleClick}
       onPointerOver={(e) => {
@@ -227,7 +231,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
         {gltfUrl ? (
           <GlbErrorBoundary resetKey={gltfUrl} fallback={fallbackMesh}>
             <Suspense fallback={fallbackMesh}>
-              <RiggedGltfModel key={gltfUrl} url={gltfUrl} actor={actor} />
+              <RiggedGltfModel key={gltfUrl} url={gltfUrl} actor={performed} />
             </Suspense>
           </GlbErrorBoundary>
         ) : (

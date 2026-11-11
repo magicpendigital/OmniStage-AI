@@ -50,6 +50,11 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
       page.evaluate((src) => new Function('s', `return (${src})`)((window as any).__omniPlayer.store.getState()), expr) as Promise<T>,
     /** Live 2D physics body of a node (the store keeps authored positions). */
     body2D: (nodeId: string) => page.evaluate((id) => (window as any).__omniPlayer.inspect().bodies2D[id], nodeId) as Promise<{ x: number; y: number; collected: boolean }>,
+    /** Live 3D actor poses and camera from the Player view. */
+    view3d: () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d) as Promise<{
+      actors: Record<string, { position: number[]; yaw: number; clip?: string }>;
+      camera: { position: number[]; fov: number };
+    }>,
     /** Renders one frame and measures the canvas (mean luminance + spread) in the same task, before the buffer swap. */
     pixelStats: () =>
       page.evaluate(() => {

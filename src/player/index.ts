@@ -13,6 +13,7 @@ import { createPlayerStore, nextSceneIdFor, PlayerStore } from './playerStore';
 import { InputManager, isTouchDevice } from './input';
 import { View2D } from './view2d';
 import { QualityLevel, View3D } from './view3d';
+import { transitionInto, transitionOverlay } from '../runtime/cinematics';
 import { Hud, PLAYER_CSS } from './hud';
 
 export interface OmniPlayerData {
@@ -39,7 +40,11 @@ export interface OmniPlayerHandle {
   /** Phase 7C: stop (true) or restart (false) the requestAnimationFrame loop so only step() advances time (E2E tests). */
   manual: (on: boolean) => void;
   /** Phase 7C: runtime-only state for tests (2D physics bodies live outside the store). */
-  inspect: () => { engine: string; bodies2D: Record<string, { x: number; y: number; collected: boolean }> };
+  inspect: () => {
+    engine: string;
+    bodies2D: Record<string, { x: number; y: number; collected: boolean }>;
+    view3d?: ReturnType<View3D['inspect']>;
+  };
   /** Hold or release a logical key ('arrowright', ' ', …) as if pressed (tests / accessibility tools). */
   setKey: (key: string, down: boolean) => void;
 }
@@ -96,9 +101,22 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     store.getState().resetGameSession();
     store.setState({ isPlaying: true, currentTime: 0 });
   };
+  // Phase 10A: fade in from the target scene's transition colour (cut = none).
+  const fade = document.createElement('div');
+  fade.style.cssText = 'position:absolute;inset:0;pointer-events:none;opacity:0;z-index:5;transition-property:opacity';
+  frame.appendChild(fade);
   const gotoScene = (id: string) => {
     store.getState().switchScene(id);
     store.setState({ isPlaying: true });
+    const overlay = transitionOverlay(transitionInto(store.getState().scenes.find((s) => s.id === id)));
+    if (overlay) {
+      fade.style.transitionDuration = '0ms';
+      fade.style.background = overlay.color;
+      fade.style.opacity = '1';
+      void fade.offsetWidth; // restart the transition
+      fade.style.transitionDuration = `${overlay.ms}ms`;
+      fade.style.opacity = '0';
+    }
   };
 
   const hud = new Hud(frame, input, {
@@ -179,7 +197,11 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     store,
     restart: restartScene,
     step: (dt) => tick(Math.min(Math.max(dt, 0), 0.05)),
-    inspect: () => ({ engine: viewEngine, bodies2D: view instanceof View2D ? view.bodyPositions() : {} }),
+    inspect: () => ({
+      engine: viewEngine,
+      bodies2D: view instanceof View2D ? view.bodyPositions() : {},
+      view3d: view instanceof View3D ? view.inspect() : undefined,
+    }),
     manual: (on) => {
       cancelAnimationFrame(raf);
       if (!on) {

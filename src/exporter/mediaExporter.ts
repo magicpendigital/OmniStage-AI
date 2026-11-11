@@ -320,16 +320,32 @@ export async function recordMultiSceneSequence(
 
           // 3. Handle inter-scene transitions
           let phase: MultiSceneRecordingProgress['phase'] = 'recording';
-          if (sceneIdx > 0 && sceneElapsed < transitionMs && previousSceneSnapshot) {
+          // Phase 10A: a scene's own transition (sequence.transition) overrides the dialog default.
+          const own = currentScene.sequence?.transition;
+          const sceneTransition: string = own === 'cut' ? 'none' : own === 'fade' ? 'fade-to-black' : own || transition;
+          if (sceneIdx > 0 && sceneTransition !== 'none' && sceneElapsed < transitionMs && previousSceneSnapshot) {
             phase = 'transitioning';
             const progress = sceneElapsed / transitionMs;
 
-            if (transition === 'crossfade') {
+            if (sceneTransition === 'fade-white') {
+              const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
+              if (alpha > 0) {
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
+                ctx.restore();
+              }
+              ctx.fillStyle = `rgba(255, 255, 255, ${progress < 0.5 ? progress * 2 : (1 - progress) * 2})`;
+              ctx.fillRect(0, 0, targetWidth, targetHeight);
+            } else if (sceneTransition === 'wipe') {
+              const edge = Math.round(targetWidth * progress);
+              ctx.drawImage(previousSceneSnapshot, edge, 0, targetWidth - edge, targetHeight, edge, 0, targetWidth - edge, targetHeight);
+            } else if (sceneTransition === 'crossfade') {
               ctx.save();
               ctx.globalAlpha = 1 - progress;
               ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
               ctx.restore();
-            } else if (transition === 'fade-to-black') {
+            } else if (sceneTransition === 'fade-to-black') {
               const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
               if (alpha > 0) {
                 ctx.save();
@@ -397,7 +413,7 @@ export async function recordMultiSceneSequence(
       });
 
       // Save a snapshot of the current frame for smooth transition into next scene
-      if (sceneIdx < scenes.length - 1 && transition !== 'none') {
+      if (sceneIdx < scenes.length - 1) {
         const snap = document.createElement('canvas');
         snap.width = targetWidth;
         snap.height = targetHeight;

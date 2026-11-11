@@ -18,6 +18,7 @@ import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/
 import { disposeObject } from '../render3d/h';
 import { createWorld } from '../render3d/world3d';
 import { clickRunsBuiltIn } from '../runtime/gameSlice';
+import { matchClipName, performedActor, resolveShot } from '../runtime/cinematics';
 import { createContactShadows } from '../render3d/contactShadows';
 import { createBloom, PostFx } from '../render3d/postfx';
 import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
@@ -62,11 +63,6 @@ function loadGltf(url: string) {
   return gltfCache.get(url)!;
 }
 
-function matchClip(wanted: string | undefined, names: string[]): string | undefined {
-  if (!names.length) return undefined;
-  if (!wanted) return names.find((n) => /idle/i.test(n)) || names[0];
-  return names.find((n) => n === wanted) || names.find((n) => n.toLowerCase() === wanted.toLowerCase()) || names.find((n) => n.toLowerCase().includes(wanted.toLowerCase())) || names[0];
-}
 
 export class View3D {
   readonly canvas: HTMLCanvasElement;
@@ -109,6 +105,13 @@ export class View3D {
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(parent);
     this.resize();
+  }
+
+  /** Phase 10A: live actor poses + camera (E2E tests / debugging). */
+  inspect() {
+    const actors: Record<string, { position: number[]; yaw: number; clip?: string }> = {};
+    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip };
+    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov } };
   }
 
   private resize() {
@@ -165,7 +168,9 @@ export class View3D {
   private syncActors(spec: SceneSpec, time: number, dt: number) {
     const live = new Set<string>();
     const taps = runtimeStore.getState().unboxTapCounts || {};
-    for (const actor of spec.actors) {
+    for (const baseActor of spec.actors) {
+      // Phase 10A: performance (walk paths, clip changes, facing) — same maths as the studio.
+      const actor = performedActor(baseActor, spec, time);
       live.add(actor.id);
       const url = actor.customGlbUrl || actor.modelUrl || ASSET_REGISTRY[actor.assetId]?.modelUrl;
       const modelKey = url || 'composite';
@@ -231,7 +236,7 @@ export class View3D {
       view.root.scale.set(...actor.scale);
       // Skeletal clip
       if (view.mixer && view.actions) {
-        const name = matchClip(actor.activeClip, [...view.actions.keys()]);
+        const name = matchClipName(actor.activeClip || (actor.activeAnimation !== 'idle' ? actor.activeAnimation : undefined), [...view.actions.keys()]);
         if (name && name !== view.activeClip) {
           const next = view.actions.get(name)!;
           const prev = view.activeClip ? view.actions.get(view.activeClip) : undefined;
@@ -349,6 +354,18 @@ export class View3D {
   // ---------------------------------------------------------------- camera (mirrors SceneDirector)
   private updateCamera(spec: SceneSpec, time: number, initial: boolean) {
     const cam = spec.camera;
+    // Phase 10A: shot list (same maths as the studio) — exact, so cuts are hard cuts.
+    const shot = spec.mode === 'media' ? resolveShot(spec, time) : null;
+    if (shot) {
+      if (Math.abs(this.camera.fov - shot.fov) > 0.01) {
+        this.camera.fov = shot.fov;
+        this.camera.updateProjectionMatrix();
+      }
+      this.camera.position.set(...shot.position);
+      this.camTarget.set(...shot.target);
+      this.camera.lookAt(this.camTarget);
+      return;
+    }
     if (Math.abs(this.camera.fov - (cam.fov || 45)) > 0.01) {
       this.camera.fov = cam.fov || 45;
       this.camera.updateProjectionMatrix();

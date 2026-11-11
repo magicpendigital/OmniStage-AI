@@ -13,6 +13,9 @@ paths:
   Builders must not import React, drei or the studio store; time comes from `FrameContext`. JSX in builders uses
   `/** @jsxRuntime classic */ /** @jsx h */` (src/render3d/h.ts); add new tags to `h()`. Off-screen passes go in `Built3D.prerender`
   (contact shadows); post-processing lives in `src/render3d/postfx.ts` (bloom on Ultra). Do not add drei visual helpers to the viewport.
+- Acting and shots (`actor.performance`, `camera.shots`, scene transitions) are resolved ONLY by `src/runtime/cinematics.ts`
+  (`performedActor`, `resolveShot`, `matchClipName`). Renderers draw the performed actor and set the camera exactly from the shot (no
+  smoothing, so cuts are cuts and frame-stepped exports match). Never re-implement this maths in a component.
 - 3D host: React Three Fiber (editor tools: gizmos, selection, orbit). Badges stay WebGL sprites (`THREE.CanvasTexture`), never DOM `<Html>` portals (React 19 unmount races).
 - Multi-instance rigs use `SkeletonUtils.clone`; dispose bone textures/mixers when an actor is removed.
 - 2D: `StageCanvas2D.tsx` works in a 1000×600 design space. Platformer physics constants (jump vy −520, gravity 9.8×90, run 320)

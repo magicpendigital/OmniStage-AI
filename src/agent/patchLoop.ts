@@ -69,6 +69,13 @@ export interface PatchLoopOptions {
   maxRounds?: number;
   /** Optional progress callback (e.g. "Round 2: fixing 1 verifier error"). */
   onRound?: (log: PatchRoundLog) => void;
+  /**
+   * Phase 10A: craft problems that are warnings, not errors (e.g. a film hero that never moves). The loop keeps going while
+   * errors or this penalty remain, and never accepts a round that raises (errors, penalty).
+   */
+  qualityPenalty?: (report: VerificationReport) => number;
+  /** Warning codes shown to the model as craft issues (with qualityPenalty). */
+  qualityCodes?: string[];
 }
 
 export const DEFAULT_PATCH_ROUNDS = 3;
@@ -98,15 +105,24 @@ function hasEdits(p: PatchProposal): boolean {
 }
 
 /** Short verifier summary the model can act on. */
-export function describeReportForModel(report: VerificationReport, limit = 8): string {
+export function describeReportForModel(report: VerificationReport, limit = 8, qualityCodes: string[] = []): string {
   const errors = report.issues.filter((i) => i.severity === 'error');
-  if (!errors.length) return `Verifier passed${report.warnings ? ` (${report.warnings} warning(s))` : ''}.`;
-  const lines = errors.slice(0, limit).map((i) => `- [${i.code}]${i.targetId ? ` (${i.targetId})` : ''} ${i.message}`);
-  return `Verifier found ${errors.length} error(s):\n${lines.join('\n')}${errors.length > limit ? `\n- …${errors.length - limit} more` : ''}`;
+  const craft = report.issues.filter((i) => i.severity !== 'error' && qualityCodes.includes(i.code));
+  const line = (i: VerificationReport['issues'][number]) => `- [${i.code}]${i.targetId ? ` (${i.targetId})` : ''} ${i.message}`;
+  const parts: string[] = [];
+  if (errors.length) {
+    parts.push(`Verifier found ${errors.length} error(s):\n${errors.slice(0, limit).map(line).join('\n')}${errors.length > limit ? `\n- …${errors.length - limit} more` : ''}`);
+  }
+  if (craft.length) parts.push(`Craft issues to improve (the film looks static / empty without these):\n${craft.slice(0, limit).map(line).join('\n')}`);
+  if (!parts.length) return `Verifier passed${report.warnings ? ` (${report.warnings} warning(s))` : ''}.`;
+  return parts.join('\n');
 }
 
 export async function runPatchLoop(opts: PatchLoopOptions): Promise<PatchLoopResult | null> {
   const maxRounds = Math.max(1, opts.maxRounds ?? DEFAULT_PATCH_ROUNDS);
+  const codes = opts.qualityCodes || [];
+  const score = (r: VerificationReport) => r.errors * 1000 + (opts.qualityPenalty?.(r) ?? 0);
+  const describe = (r: VerificationReport) => describeReportForModel(r, 8, codes);
   const toolResults: string[] = [];
   const rounds: PatchRoundLog[] = [];
   const diffSummary: string[] = [];
@@ -154,8 +170,8 @@ export async function runPatchLoop(opts: PatchLoopOptions): Promise<PatchLoopRes
     rounds.push(log);
     opts.onRound?.(log);
     // Keep the best result: never let a later round make verification worse.
-    if (best && checked.report.errors > best.report.errors) {
-      toolResults.push(`Round ${round + 1}: patch applied but it made verification WORSE (${best.report.errors} → ${checked.report.errors} errors), so it was discarded.\n${describeReportForModel(checked.report)}`);
+    if (best && score(checked.report) > score(best.report)) {
+      toolResults.push(`Round ${round + 1}: patch applied but it made verification WORSE (${best.report.errors} → ${checked.report.errors} errors), so it was discarded.\n${describe(checked.report)}`);
       continue;
     }
     changed = true;
@@ -165,9 +181,9 @@ export async function runPatchLoop(opts: PatchLoopOptions): Promise<PatchLoopRes
     for (const d of proposal.diffSummary || []) if (typeof d === 'string' && !diffSummary.includes(d)) diffSummary.push(d);
     if (proposal.updatedSceneSpec) diffSummary.push('Model returned a full SceneSpec instead of a patch (accepted)');
 
-    if (checked.report.ok) break;
+    if (score(checked.report) === 0) break;
     toolResults.push(
-      `Round ${round + 1}: patch applied (${log.ops} op(s)${log.merged ? ' + mergePatch' : ''}). OmniStage auto-fixed ${checked.fixes.length} issue(s).\n${describeReportForModel(checked.report)}\nFix ONLY these problems with another small patch against the CURRENT SCENESPEC.`
+      `Round ${round + 1}: patch applied (${log.ops} op(s)${log.merged ? ' + mergePatch' : ''}). OmniStage auto-fixed ${checked.fixes.length} issue(s).\n${describe(checked.report)}\nFix ONLY these problems with another small patch against the CURRENT SCENESPEC.`
     );
   }
 

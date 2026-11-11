@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { transitionInto, transitionOverlay } from '../runtime/cinematics';
 import { useStudioStore } from '../state/useStudioStore';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
@@ -23,6 +24,7 @@ export const FullPreviewOverlay: React.FC = () => {
   const stop = useStudioStore((s) => s.stopFullPreview);
   const setIsPlaying = useStudioStore((s) => s.setIsPlaying);
   const [fading, setFading] = useState(false);
+  const [fadeStyle, setFadeStyle] = useState({ color: '#000000', ms: FADE_MS });
   // The pending scene change lives in a ref: later currentTime updates must not cancel it (that left the
   // preview stuck at the end of a scene).
   const advanceTimer = useRef<number | null>(null);
@@ -41,13 +43,17 @@ export const FullPreviewOverlay: React.FC = () => {
     if (currentTime < duration - 0.05) return;
     const index = fp.index;
     const count = fp.order.length;
-    setFading(true);
+    // Phase 10A: the next scene's own transition (cut / fade / fade-white …).
+    const nextScene = index + 1 < count ? scenes.find((s) => s.id === fp.order[index + 1]) : undefined;
+    const overlay = nextScene ? transitionOverlay(transitionInto(nextScene)) : { color: '#000000', ms: FADE_MS };
+    setFadeStyle(overlay || { color: '#000000', ms: 0 });
+    setFading(!!overlay);
     advanceTimer.current = window.setTimeout(() => {
       advanceTimer.current = null;
       if (index + 1 < count) goto(index + 1);
       else end();
       window.setTimeout(() => setFading(false), 60);
-    }, FADE_MS);
+    }, overlay ? overlay.ms : 0);
   }, [currentTime, duration, fp?.index, fp?.ended]);
 
   // Manual navigation or closing the preview cancels a pending transition.
@@ -102,7 +108,7 @@ export const FullPreviewOverlay: React.FC = () => {
                 <span className={cue.style === 'title' ? 'text-3xl font-extrabold text-white text-center [text-shadow:0_2px_8px_rgba(0,0,0,0.85)]' : 'px-3 py-1.5 rounded bg-slate-950/75 text-sm font-semibold text-slate-50 text-center'}>{cue.text}</span>
               </div>
             ))}
-          <div className="pointer-events-none absolute inset-0 bg-black transition-opacity" style={{ opacity: fading ? 1 : 0, transitionDuration: `${FADE_MS}ms` }} />
+          <div className="pointer-events-none absolute inset-0 transition-opacity" style={{ background: fadeStyle.color, opacity: fading ? 1 : 0, transitionDuration: `${fadeStyle.ms}ms` }} />
           {fp.ended && (
             <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-3">
               <div className="text-2xl font-bold text-white">The end</div>

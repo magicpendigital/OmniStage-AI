@@ -14,6 +14,40 @@ import { MAX_GAP, MAX_STEP_UP } from '../verification/sceneVerifier';
 
 export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
   {
+    id: 'character-acting',
+    title: 'Character Acting',
+    description: 'Every character performs a small arc in each scene (performance steps), not a single looping clip.',
+    triggers: ['phim', 'film', 'movie', 'nhân vật', 'character', 'story', 'câu chuyện', 'phiêu lưu', 'adventure', 'acting', 'diễn xuất', 'hoạt hình', 'cartoon'],
+    engine: '3d',
+    mode: 'media',
+    source: 'builtin',
+    guidance: `CHARACTER ACTING (actors[].performance):
+- Each scene is a mini arc for the hero: a starting state, a change, a reaction. At least 3 different actions per scene,
+  e.g. Sitting (0 s) → Standing (2 s) → walk with moveTo (3 s) → lookAt partner + Wave (6.5 s) → Yes / ThumbsUp (8.5 s).
+- Motivate movement: walk TO something (a tree, the river, another character), then react there. Distances 2-5 m; ~1.2 m/s walking.
+- Partners react: when the hero waves or speaks, the other actor lookAt the hero and answers (nod, run over, jump).
+- Use only the asset's own clips (robot: Idle, Walking, Running, Sitting, Standing, Wave, Dance, Jump, Yes, No, ThumbsUp, Punch, Death;
+  fox: Survey, Walk, Run). Non-rigged props use animation: 'bounce' | 'spin' | 'float'.
+- Time the camera.shots to the actions: cut to a close-up right as the reaction happens.
+- Put the key line of each action into captions (≤ 12 words, same start time) so the story reads even without sound.`,
+  },
+  {
+    id: 'scene-dressing',
+    title: 'Scene Dressing',
+    description: 'Fill the frame with a believable place: terrain, layered props, sky, weather and light that match the story.',
+    triggers: ['rừng', 'forest', 'bối cảnh', 'background', 'outdoor', 'núi', 'mountain', 'suối', 'river', 'biển', 'beach', 'thành phố', 'city', 'làng', 'village', 'đồi', 'hill', 'sa mạc', 'desert', 'tuyết', 'snow'],
+    engine: '3d',
+    mode: 'any',
+    source: 'builtin',
+    guidance: `SCENE DRESSING (sceneSpec.world + environment):
+- Never leave a bare floor in a film: environment.groundGrid = false, reflectivePedestal = false; set world.terrain to the place
+  (forest/hills → 'grassy-hills', snow → 'snow-mountains', coast → 'ocean-island', city → 'city-asphalt', desert → 'desert-dunes').
+- Layer props: one dense layer (count 30-60, spreadRadius 18-26) + one accent layer (count 8-16), e.g. pine-trees + rocks-boulders.
+- Sky, light and weather tell the time: morning 'daylight-sky' + clear; evening 'sunset-atmosphere' + 'floating-embers' (fireflies);
+  night 'night-stars' + sparkles VFX near the characters. Progress the time of day across scenes.
+- Add 1-2 vfx accents where the action is (sparkles on magic, shockwave on a landing), with startTime at that moment.`,
+  },
+  {
     id: 'cinematic-shot-grammar',
     title: 'Cinematic Shot Grammar',
     description: 'Script beat → shot list → camera keyframes with motivated easing.',
@@ -21,12 +55,14 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
     engine: '3d',
     mode: 'media',
     source: 'builtin',
-    guidance: `CINEMATIC SHOT GRAMMAR:
-- Structure the duration as establishing (0-20%) → subject/action (20-75%) → payoff/hero (75-100%).
-- Map shots to camera: establishing = 'crane-reveal' or wide keyframe (fov 50-60); action = 'dolly-zoom-in' / 'follow-target'; hero = slow orbit, fov 30-38.
-- When using camera.keyframes, give each keyframe a label (e.g. "EST", "MCU", "HERO") and an ease: 'sine.inOut' for drifts, 'power3.out' for pushes, 'expo.out' for snap reveals. Avoid 'linear' for cameras.
-- Keep at least 1.5s per shot; never cut faster than 0.8s.
-- Stagger actor enterEffect / startTime so motion leads the eye along the camera path.`,
+    guidance: `CINEMATIC SHOT GRAMMAR (media scenes — use camera.shots, not camera.mode):
+- Open the film with an 'establishing' shot (2-3 s, often move 'crane-up' or 'pull-out'), then cut closer: wide → medium → close-up.
+- Change shot every 2-4 s and whenever the action changes; a 10 s scene has 3-4 shots. Never hold one framing for a whole scene.
+- Emotion = 'close-up' (move 'push-in'); dialogue between two actors = alternating 'over-shoulder' shots (subject + partner);
+  walking = 'tracking' or 'wide'; power / awe = 'low-angle'; loneliness / overview = 'high-angle'.
+- Keep the 180° rule: when two actors face each other, keep angle on the same side ('three-quarter-left' for both, or right for both).
+- Vary scene to scene: do not open every scene with the same shot type; end the film on a 'pull-out' or 'crane-up'.
+- Transition into the next scene: 'cut' for continuous action, 'fade' for a time / place jump, 'fade-white' for dreams or magic.`,
   },
   {
     id: 'platformer-level-design',

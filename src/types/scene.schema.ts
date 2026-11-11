@@ -428,6 +428,8 @@ export interface CameraRig {
   fov: number;
   followActorId?: string;
   keyframes: CameraKeyframe[];
+  /** Phase 10A: shot list for media scenes. When present it drives the camera instead of `mode`. */
+  shots?: CameraShot[];
 }
 
 export interface EnvironmentConfig {
@@ -472,7 +474,61 @@ export interface ActorNode {
   enterEffect?: EnterEffect;
   unboxTapsRequired?: number;
   revealAssetId?: string;
+  /**
+   * Phase 10A: acting over time (media mode). Steps are applied in time order from the actor's base position:
+   * walk to points, switch clips, face another actor. Shared by the studio and the Player (src/runtime/cinematics.ts).
+   */
+  performance?: PerformanceStep[];
 }
+
+/** Phase 10A — one beat of an actor's performance. */
+export interface PerformanceStep {
+  /** Seconds from scene start when this step begins. */
+  time: number;
+  /** Skeletal clip to play from this step (rigged GLB), e.g. 'Walk', 'Wave', 'Sitting'. Matched case-insensitively. */
+  clip?: string;
+  /** Procedural motion for non-rigged actors (and as a hint for rigs without that clip). */
+  animation?: AnimationType;
+  /** Walk / run to this point. Arrives after `duration` s (default: when the next step starts, else 2 s). */
+  moveTo?: Vector3Tuple;
+  duration?: number;
+  /** Clip once `moveTo` has arrived (default 'Idle'). While moving without `clip`, Walk/Run is chosen from the speed. */
+  arriveClip?: string;
+  /** Face another actor (id) or a point; ignored while walking (actors face where they walk). */
+  lookAt?: string | Vector3Tuple;
+  /** Explicit facing in degrees (0 = towards +z / the default camera). */
+  faceDeg?: number;
+  /** Clip playback speed. */
+  speed?: number;
+  /** Easing of the walk (default 'sine.inOut'). */
+  ease?: EaseId;
+  /** Short note for the editor ("wakes up", "waves at fox"). */
+  label?: string;
+}
+
+/** Phase 10A — framing presets the director composes shots from (positions are computed from the subject). */
+export type ShotType = 'establishing' | 'wide' | 'medium' | 'close-up' | 'over-shoulder' | 'low-angle' | 'high-angle' | 'tracking';
+export type ShotMove = 'static' | 'push-in' | 'pull-out' | 'pan-left' | 'pan-right' | 'crane-up' | 'orbit';
+
+/** Phase 10A — one camera shot. Consecutive shots are hard cuts. */
+export interface CameraShot {
+  start: number;
+  /** Default: next shot's start, else the scene end. */
+  end?: number;
+  type: ShotType;
+  /** Actor the shot frames (default: the hero = player or first actor). */
+  subject?: string;
+  /** over-shoulder: the actor whose shoulder we look over. */
+  partner?: string;
+  /** Where the camera stands relative to where the subject faces. */
+  angle?: 'front' | 'three-quarter-left' | 'three-quarter-right' | 'left' | 'right' | 'back';
+  move?: ShotMove;
+  fov?: number;
+  label?: string;
+}
+
+/** Phase 10A — how this scene starts when it follows another scene (Preview, Player, video export). */
+export type SceneTransition = 'cut' | 'fade' | 'crossfade' | 'fade-white' | 'wipe';
 
 export interface VFXNode {
   id: string;
@@ -533,6 +589,10 @@ export interface SceneSequenceMeta {
   nextSceneId?: string;
   /** Narrative beat or level objective that this scene fulfils. */
   beat?: string;
+  /** Phase 10A: transition INTO this scene from the previous one (default 'fade'). */
+  transition?: SceneTransition;
+  /** Phase 10A: short script of this shot (screenwriter step), kept for continuity and editing. */
+  script?: string;
 }
 
 export interface StoryboardBeat {
@@ -542,6 +602,10 @@ export interface StoryboardBeat {
   mode: StudioMode;
   beat: string;
   difficulty?: number; // 1..N, used for game level escalation
+  /** Phase 10A screenwriter: timed actions + shot list in plain words (media beats). */
+  script?: string;
+  /** Phase 10A: transition into this beat. */
+  transition?: SceneTransition;
 }
 
 export interface StoryboardPlan {

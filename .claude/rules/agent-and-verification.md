@@ -15,6 +15,9 @@ paths:
   that makes verification worse is discarded). Full-rewrite mode keeps at most one AI repair round. Keep this order; the offline heuristic
   path must stay usable without keys (a 503 from the provider skips straight to it).
 - Patch paths may address array items by id (`/actors/@id`), see `src/utils/jsonPatch.ts`; keep `tests/patchLoop.test.ts` green.
+- Media craft (Phase 10A): film quality hints are verifier *warnings* listed in `MEDIA_CRAFT_CODES`; the patch loop treats them as work
+  through `qualityPenalty` (storyboard polish rounds), never as errors. Generated actors keep their ids (shots / lookAt reference them).
+  Keep `tests/cinematics.test.ts` green, including its composition checks.
 - Skills are prompt text only (`DirectorSkill.guidance`). Never let a skill carry executable code or URLs to fetch.
 - Built-in skills live in `BUILTIN_DIRECTOR_SKILLS`; learned skills are user data in localStorage (`omnistage-learned-director-skills`).
 - Verifier rules must be deterministic, pure and covered in `tests/sceneVerifier.test.ts`. Mark an issue `fixable` only when
