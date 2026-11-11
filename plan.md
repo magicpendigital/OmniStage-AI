@@ -199,6 +199,18 @@ so that moves to the front.
 - [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server
   for non-humanoid creatures. Quadruped / bird templates.
 
+### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
+Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;
+the verifier only checks playability. Fix in layers: contract → production tools → director skills → quality judge.
+- [ ] **10A** `actor.performance[]` (timed clips, moveTo paths on terrain, lookAt), `camera.shots[]` (wide/medium/close/tracking, declarative),
+  scene `transition`; storyboard "screenwriter" step (script, actions, shot list); cinematography + acting skills; media verifier lints
+  (≥2 actions for the hero, ≥2 shots per scene > 6 s, sound present, non-empty background) fed into the 7C patch loop.
+- [ ] **10B** Frame-stepped MP4 export with mixed audio (Player `step()` + WebCodecs/Mediabunny; MediaRecorder fallback); procedural
+  `soundtrack` (mood music, biome ambience, timed SFX) that also runs in playables; biome presets that fill the frame.
+- [ ] **10C** `dialogue[]` with in-browser Piper TTS (Vietnamese voice), auto captions, talk motion; CC0 Quaternius animation library retargeted.
+- [ ] **10D** Paid Production Tools via Settings/Extensions (ElevenLabs voice/music/SFX, Blockade skybox, Meshy animation), licences recorded
+  in the project library; vision-model "director QA" scoring rendered keyframes → extra patch round.
+
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [ ] Asset-generation providers as Extensions (BYO key, server proxy, results saved to the library with license/source):
   3D (Meshy, Tripo, Rodin), 2D sprites (image models via fal.ai / Replicate / OpenRouter), audio (ElevenLabs SFX / music / TTS).
