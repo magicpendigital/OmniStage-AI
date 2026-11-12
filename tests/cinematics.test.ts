@@ -10,7 +10,8 @@ import {
 } from '../src/runtime/cinematics';
 import { createBlankSceneSpec, ASSET_REGISTRY } from '../src/registry/assetRegistry';
 import { autoFixSceneSpec, mediaQualityPenalty, MEDIA_CRAFT_CODES, verifySceneSpec } from '../src/verification/sceneVerifier';
-import { buildLocalSceneForBeat, buildLocalStoryboardPlan, detectStoryboardIntent, normalizeGeneratedSceneSpec } from '../src/agent/storyboardAgent';
+import { buildLocalSceneForBeat, buildLocalStoryboardPlan, detectStoryboardIntent, normalizeGeneratedSceneSpec, TERRAIN_COLORS } from '../src/agent/storyboardAgent';
+import { sceneFogColor, SKY_PALETTES } from '../src/runtime/world';
 import { buildAgentSystemPrompt, buildStoryboardPlannerSystemPrompt } from '../src/agent/systemPrompts';
 import { runPatchLoop } from '../src/agent/patchLoop';
 import type { ActorNode, SceneSpec } from '../src/types/scene.schema';
@@ -105,8 +106,52 @@ test('shots: hard cuts, framing sizes, tracking a walking subject, over-shoulder
   const t2 = resolveShot(spec, 7.8)!;
   assert.ok(t2.target[0] > t1.target[0], 'tracking follows the walking subject');
   const os = resolveShot(spec, 9)!;
-  assert.ok(Math.hypot(os.position[0] - 0, os.position[2] - 4) < 1.5, 'camera stands at the partner\'s shoulder');
+  assert.ok(Math.hypot(os.position[0] - 0, os.position[2] - 4) < 2, 'camera stands at the partner\'s shoulder');
   assert.ok(near(os.target[0], resolvePerformance(hero, 9).position[0], 1e-6), 'looking at the subject');
+});
+
+test('shot fov is a lens: a narrow close-up keeps close-up framing; seated performers are framed lower', () => {
+  const hero = robot('hero', { performance: [{ time: 0, clip: 'Sitting' }, { time: 5, clip: 'Standing' }] });
+  const spec = film([hero], { camera: { ...createBlankSceneSpec('3d', 'x').camera, shots: [{ start: 0, type: 'close-up', subject: 'hero', angle: 'front' }] } });
+  const halfHeight = (f: NonNullable<ReturnType<typeof resolveShot>>) =>
+    Math.hypot(f.position[0] - f.target[0], f.position[2] - f.target[2]) * Math.tan((f.fov * Math.PI) / 360);
+  const base = resolveShot(spec, 6)!;
+  spec.camera.shots![0].fov = 30;
+  const narrow = resolveShot(spec, 6)!;
+  assert.equal(narrow.fov, 30);
+  assert.ok(Math.abs(halfHeight(narrow) - halfHeight(base)) < 0.01, 'same visible height of the subject at any lens');
+  const seated = resolveShot(spec, 2)!;
+  assert.ok(seated.target[1] < narrow.target[1] - 0.3, 'aims at the seated face, not where the standing head would be');
+  spec.camera.shots![0].fov = 5;
+  assert.equal(resolveShot(spec, 6)!.fov, 20, 'lens clamps to a sane range');
+  assert.match(buildAgentSystemPrompt(), /over the robot's shoulder at the fox" = \{ subject: fox, partner: robot \}/);
+});
+
+test('over-shoulder clears a big foreground actor even when the subject is small', () => {
+  const fox = ASSET_REGISTRY['gltf-fox'];
+  const robo = robot('robo', { position: [0, 0, 0] });
+  const small: ActorNode = { ...robot('fox', { position: [0, 0, 4] }), assetId: fox.assetId, modelUrl: fox.modelUrl };
+  const spec = film([robo, small], { camera: { ...createBlankSceneSpec('3d', 'x').camera, shots: [{ start: 0, type: 'over-shoulder', subject: 'fox', partner: 'robo' }] } });
+  const f = resolveShot(spec, 1)!;
+  const box = ASSET_REGISTRY['gltf-robot-expressive'].boundingBox!;
+  const flat = Math.hypot(f.position[0], f.position[2]);
+  assert.ok(flat > box.depth / 2 + 0.5, `camera stands outside the robot (${flat.toFixed(2)} m from its centre)`);
+  assert.ok(f.position[2] < 0, 'behind the robot, looking at the fox');
+  // The sight line to the fox passes beside the robot's head, not through it.
+  const t = -f.position[2] / (f.target[2] - f.position[2]);
+  const xAtRobot = f.position[0] + (f.target[0] - f.position[0]) * t;
+  assert.ok(Math.abs(xAtRobot) > box.width / 2, 'the subject is not hidden behind the partner');
+});
+
+test('AI worlds look outdoors: fog follows the sky horizon, named terrain gets a natural colour', () => {
+  const studioEnv = { fogColor: '#0B101B', backgroundColor: '#0B101B' };
+  assert.equal(sceneFogColor(studioEnv, { skybox: 'sunset-atmosphere' }), SKY_PALETTES['sunset-atmosphere'][1]);
+  assert.equal(sceneFogColor(studioEnv, { skybox: 'studio-hdri' }), '#0B101B', 'studio scenes keep their fog');
+  assert.equal(sceneFogColor(studioEnv), '#0B101B');
+  const spec = normalizeGeneratedSceneSpec({ engineType: '3d', mode: 'media', world: { skybox: 'daylight-sky', terrain: { type: 'grassy-hills' } } }, '3d');
+  assert.equal(spec.world.terrain.color, TERRAIN_COLORS['grassy-hills']);
+  const own = normalizeGeneratedSceneSpec({ engineType: '3d', world: { terrain: { type: 'grassy-hills', color: '#6aa84f' } } }, '3d');
+  assert.equal(own.world.terrain.color, '#6aa84f', 'an authored colour wins');
 });
 
 test('transitions: default fade, cut has no overlay, fade-white is white', () => {

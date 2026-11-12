@@ -19,6 +19,15 @@ export const SKY_PALETTES: Record<WorldSpec['skybox'], [string, string, number]>
   'studio-hdri': ['#0b101b', '#172342', 0],
 };
 
+/**
+ * Fog colour for a scene: under an outdoor sky the distance haze must match the sky's horizon, otherwise far hills and
+ * clouds turn into dark blobs against a bright sky (stage presets carry a dark studio fog). Studio scenes keep theirs.
+ */
+export function sceneFogColor(env: { fogColor?: string; backgroundColor?: string }, world?: Pick<WorldSpec, 'skybox'>): string {
+  if (world?.skybox && world.skybox !== 'studio-hdri' && SKY_PALETTES[world.skybox]) return SKY_PALETTES[world.skybox][1];
+  return env.fogColor || env.backgroundColor || '#0B101B';
+}
+
 export function computeTerrainHeight(type: TerrainType, x: number, z: number, elevationScale: number): number {
   const distFromOrigin = Math.sqrt(x * x + z * z);
   // Keep a smooth playable clearing near the center stage (radius 4m)

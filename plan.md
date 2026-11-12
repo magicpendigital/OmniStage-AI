@@ -221,7 +221,13 @@ the verifier only checks playability. Fix in layers: contract → production too
   - Offline director: acting arcs, 4-shot lists and a dressed set (no grid floor).
   - Tests: `tests/cinematics.test.ts` (composition: nobody blocks the subject, close-ups / over-shoulders see the face) and an E2E film
     test (walk + cut in the exported Player).
-  - Not yet: sound (10B), dialogue (10C). Clouds render as dark blobs under some lighting presets (fix with the 10B biomes).
+  - Real AI run (Claude Code CLI, 2026-11-12): 3-scene robot film in ~8 min, timed scripts, 5-6 performance steps per hero,
+    4-6 shots per scene, continuity of positions, shot / reverse-shot over-shoulders; verifier clean, no polish round needed.
+    Fixes from it: an authored shot `fov` is a lens (distance compensates, so close-ups stay close-ups); seated performers are
+    framed lower; over-shoulder offsets come from the foreground actor's size (camera was inside the robot's head); prompt says
+    which actor is `partner`; outdoor fog follows the sky horizon (dark studio fog made dark clouds / horizon); AI terrain without a
+    colour gets a natural one (was near-black); leaving the page with unsaved work and no open project now asks first.
+  - Not yet: sound (10B), dialogue (10C), a real waterfall / water props (the AI faked one with a laser beam).
 - [ ] **10B** Frame-stepped MP4 export with mixed audio (Player `step()` + WebCodecs/Mediabunny; MediaRecorder fallback); procedural
   `soundtrack` (mood music, biome ambience, timed SFX) that also runs in playables; biome presets that fill the frame.
 - [ ] **10C** `dialogue[]` with in-browser Piper TTS (Vietnamese voice), auto captions, talk motion; CC0 Quaternius animation library retargeted.

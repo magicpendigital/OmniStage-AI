@@ -58,7 +58,8 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
     guidance: `CINEMATIC SHOT GRAMMAR (media scenes — use camera.shots, not camera.mode):
 - Open the film with an 'establishing' shot (2-3 s, often move 'crane-up' or 'pull-out'), then cut closer: wide → medium → close-up.
 - Change shot every 2-4 s and whenever the action changes; a 10 s scene has 3-4 shots. Never hold one framing for a whole scene.
-- Emotion = 'close-up' (move 'push-in'); dialogue between two actors = alternating 'over-shoulder' shots (subject + partner);
+- Emotion = 'close-up' (move 'push-in'); dialogue between two actors = alternating 'over-shoulder' shots (subject = the face we see, partner = the
+  shoulder in the foreground, then swap them);
   walking = 'tracking' or 'wide'; power / awe = 'low-angle'; loneliness / overview = 'high-angle'.
 - Keep the 180° rule: when two actors face each other, keep angle on the same side ('three-quarter-left' for both, or right for both).
 - Vary scene to scene: do not open every scene with the same shot type; end the film on a 'pull-out' or 'crane-up'.

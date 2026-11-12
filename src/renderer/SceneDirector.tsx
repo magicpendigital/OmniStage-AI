@@ -74,9 +74,10 @@ export const SceneDirector: React.FC = () => {
 
   // Background colour & horizon fog (shared with the OmniStage Player)
   useEffect(() => {
-    applyBackgroundAndFog(scene, sceneSpec.environment);
+    applyBackgroundAndFog(scene, sceneSpec.environment, sceneSpec.world);
   }, [
     scene,
+    sceneSpec.world?.skybox,
     sceneSpec.environment.backgroundColor,
     sceneSpec.environment.fogColor,
     sceneSpec.environment.fogNear,

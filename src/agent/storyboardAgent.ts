@@ -240,6 +240,22 @@ function normalizeNode2D(raw: any, index: number): Node2D | null {
   };
 }
 
+/** Natural ground colours per terrain type, used when the AI names a terrain but no colour (the stage default is near-black). */
+export const TERRAIN_COLORS: Partial<Record<TerrainType, string>> = {
+  'grassy-hills': '#5b8a3a',
+  'desert-dunes': '#c8955a',
+  'snow-mountains': '#e2e8f0',
+  'ocean-island': '#b08d57',
+  'city-asphalt': '#374151',
+};
+
+function normalizeTerrain(raw: Partial<WorldSpec['terrain']> | undefined): WorldSpec['terrain'] {
+  const terrain = { ...DEFAULT_WORLD_SPEC.terrain, ...(raw ?? {}) };
+  const hasColor = typeof raw?.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color);
+  if (!hasColor && TERRAIN_COLORS[terrain.type]) terrain.color = TERRAIN_COLORS[terrain.type]!;
+  return terrain;
+}
+
 export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType): SceneSpec {
   const engineType: EngineType = raw?.engineType === '2d' || raw?.engineType === '3d' ? raw.engineType : fallbackEngine;
   const base = createBlankSceneSpec(engineType);
@@ -252,7 +268,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     ...rawWorld,
     sunPosition: isVec3(rawWorld.sunPosition) ? rawWorld.sunPosition : DEFAULT_WORLD_SPEC.sunPosition,
     clouds: { ...DEFAULT_WORLD_SPEC.clouds, ...(rawWorld.clouds ?? {}) },
-    terrain: { ...DEFAULT_WORLD_SPEC.terrain, ...(rawWorld.terrain ?? {}) },
+    terrain: normalizeTerrain(rawWorld.terrain),
     weather: { ...DEFAULT_WORLD_SPEC.weather, ...(rawWorld.weather ?? {}) },
     scatterObjects: Array.isArray(rawWorld.scatterObjects)
       ? rawWorld.scatterObjects.map((l: any, i: number) => ({

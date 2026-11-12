@@ -10,6 +10,7 @@ import type { SceneSpec } from '../types/scene.schema';
 import { disposeObject, h } from './h';
 import type { Built3D } from './types';
 import { createGpuParticles } from './gpuParticles';
+import { sceneFogColor } from '../runtime/world';
 
 type Env = SceneSpec['environment'];
 
@@ -116,10 +117,10 @@ export function createAmbientDust(env: Env): Built3D<THREE.Points> {
   return dust;
 }
 
-/** Background colour + horizon fog exactly as the studio sets them. */
-export function applyBackgroundAndFog(scene: THREE.Scene, env: Env) {
+/** Background colour + horizon fog exactly as the studio sets them (fog follows the sky's horizon outdoors). */
+export function applyBackgroundAndFog(scene: THREE.Scene, env: Env, world?: Pick<SceneSpec['world'], 'skybox'>) {
   scene.background = new THREE.Color(env.backgroundColor || '#0B101B');
-  scene.fog = new THREE.Fog(env.fogColor || env.backgroundColor || '#0B101B', env.fogNear || 14, env.fogFar || 45);
+  scene.fog = new THREE.Fog(sceneFogColor(env, world), env.fogNear || 14, env.fogFar || 45);
 }
 
 /** Procedural studio reflections (RoomEnvironment through PMREM). Returns a disposer. */

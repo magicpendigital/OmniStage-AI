@@ -170,7 +170,7 @@ export function createClouds(world: WorldSpec): Built3D<THREE.Group> | null {
         {puffs.map((p) => (
           <mesh position={[p[0], p[1], p[2]]} castShadow>
             <dodecahedronGeometry args={[p[3], 1]} />
-            <meshStandardMaterial color={color} roughness={0.95} metalness={0.02} transparent opacity={0.86} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.55} roughness={0.95} metalness={0.02} transparent opacity={0.86} />
           </mesh>
         ))}
       </group>,

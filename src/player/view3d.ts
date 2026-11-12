@@ -131,7 +131,7 @@ export class View3D {
     this.worldParts = [];
     this.world.clear();
     const env = spec.environment;
-    applyBackgroundAndFog(this.scene, env);
+    applyBackgroundAndFog(this.scene, env, spec.world);
     const parts: Built3D[] = [createLightingRig(env, this.renderer.shadowMap.enabled)];
     if (env.reflectivePedestal) parts.push(createPedestal(env));
     if (env.groundGrid) parts.push(createGroundGrid(env));

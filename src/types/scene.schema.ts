@@ -518,11 +518,12 @@ export interface CameraShot {
   type: ShotType;
   /** Actor the shot frames (default: the hero = player or first actor). */
   subject?: string;
-  /** over-shoulder: the actor whose shoulder we look over. */
+  /** over-shoulder: the actor whose shoulder we look over (in the foreground); the subject is the face we see. */
   partner?: string;
   /** Where the camera stands relative to where the subject faces. */
   angle?: 'front' | 'three-quarter-left' | 'three-quarter-right' | 'left' | 'right' | 'back';
   move?: ShotMove;
+  /** Lens (degrees). The camera distance compensates, so the shot type still sets the framing. */
   fov?: number;
   label?: string;
 }

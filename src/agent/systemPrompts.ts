@@ -192,8 +192,9 @@ AUTHORING & SPATIAL DESIGN RULES:
      and faces where it walks; afterwards it plays arriveClip (default Idle). Use only clips listed in the asset's embeddedClips
      (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump). The hero needs >= 3 different actions per scene.
    - camera.shots = [{ start, end?, type: 'establishing'|'wide'|'medium'|'close-up'|'over-shoulder'|'low-angle'|'high-angle'|'tracking',
-     subject?: actorId, partner?: actorId (over-shoulder), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',
-     move?: 'static'|'push-in'|'pull-out'|'pan-left'|'pan-right'|'crane-up'|'orbit', fov? }]. Shots are hard cuts framed on the subject
+     subject?: actorId (whose face we see), partner?: actorId (over-shoulder only: the camera looks over THIS actor's shoulder at the
+     subject — "over the robot's shoulder at the fox" = { subject: fox, partner: robot }), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',
+     move?: 'static'|'push-in'|'pull-out'|'pan-left'|'pan-right'|'crane-up'|'orbit', fov? (lens only: framing keeps the shot size) }]. Shots are hard cuts framed on the subject
      wherever it is; change shot every 2-4 s and when the action changes. Shots replace camera.mode in media scenes.
    - Keep moveTo targets within x/z ±8 and away from other actors; give both characters something to do when two are on screen.
 
@@ -248,7 +249,7 @@ PLANNING RULES:
 6. Game levels must escalate difficulty (difficulty 1..N): wider gaps, higher platforms, more collectibles, tighter timers.
 7. Titles are short (<= 6 words). description is 1-2 sentences of concrete visual direction (world, characters, camera, palette).
 8. SCREENWRITER (media beats): write "script" = what happens second by second in this shot, as 3-6 short lines
-   "start-end s | SHOT TYPE (wide/medium/close-up/over-shoulder/low-angle/high-angle/tracking/establishing) on WHO | ACTION | optional caption line".
+   "start-end s | SHOT TYPE (wide/medium/close-up/over-shoulder/low-angle/high-angle/tracking/establishing) on WHO (over-shoulder: "on X over Y's shoulder") | ACTION | optional caption line".
    Every scene needs a change: the hero starts doing one thing and ends doing another (wakes -> stands -> walks -> waves).
    Open the film with an establishing shot; use close-ups for emotion; vary shot sizes; 8-12 s per scene.
    "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic), "crossfade".

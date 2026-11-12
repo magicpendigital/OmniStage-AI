@@ -206,6 +206,17 @@ export function actorHeight(actor: ActorNode): number {
   return Math.max(0.3, (box?.height ?? 1.8) * Math.abs(actor.scale?.[1] ?? 1));
 }
 
+/** Over-shoulder camera offsets behind / beside the foreground actor, from its footprint. */
+export function shoulderOffsets(actor: ActorNode): { back: number; off: number } {
+  const box = ASSET_REGISTRY[actor.assetId]?.boundingBox;
+  const sx = Math.abs(actor.scale?.[0] ?? 1);
+  const sz = Math.abs(actor.scale?.[2] ?? 1);
+  const k = actorHeight(actor) / 1.8;
+  const halfDepth = ((box?.depth ?? 0.6) * sz) / 2;
+  const halfWidth = ((box?.width ?? 0.6) * sx) / 2;
+  return { back: Math.max(0.9 * k, halfDepth + 0.75), off: Math.max(0.45 * k, halfWidth + 0.6) };
+}
+
 export function shotWindows(spec: Pick<SceneSpec, 'durationSeconds' | 'camera'>): Array<{ shot: CameraShot; start: number; end: number }> {
   const shots = [...(spec.camera.shots || [])].filter((s) => s && Number.isFinite(s.start)).sort((a, b) => a.start - b.start);
   const duration = Math.max(1, spec.durationSeconds || 8);
@@ -252,15 +263,21 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
 
   const subject = spec.actors.find((a) => a.id === shot.subject) || heroActor(spec);
   if (!subject) return null;
-  const poseAt = (a: ActorNode, t: number) => (spec.mode === 'media' && hasPerformance(a) ? resolvePerformance(a, t, spec.actors, spec.world) : { position: a.position, yaw: a.rotation?.[1] ?? 0 });
+  const poseAt = (a: ActorNode, t: number): Pick<PerformedPose, 'position' | 'yaw' | 'clip'> =>
+    spec.mode === 'media' && hasPerformance(a) ? resolvePerformance(a, t, spec.actors, spec.world) : { position: a.position, yaw: a.rotation?.[1] ?? 0 };
   const pose = poseAt(subject, time);
   // Frame relative to where the subject faced when the shot started: stable framing, no camera whip on turns.
   const baseYaw = poseAt(subject, start).yaw;
+  // A seated performer's face is lower: aim and camera height follow.
+  const seat = /sit/i.test(pose.clip || '') ? 0.8 : 1;
   const h = actorHeight(subject);
   const k = Math.max(0.55, h / 1.8);
   const b = BASE[shot.type] || BASE.medium;
-  const target: Vector3Tuple = [pose.position[0], pose.position[1] + h * b.aim, pose.position[2]];
-  let fov = shot.fov ?? b.fov;
+  const target: Vector3Tuple = [pose.position[0], pose.position[1] + h * seat * b.aim, pose.position[2]];
+  // An authored fov is a lens choice, not a framing change: the camera backs off (or moves in) so the subject keeps
+  // the size the shot type promises (a 'close-up' at fov 30 is still a close-up, not an extreme close-up).
+  let fov = Math.max(20, Math.min(75, shot.fov ?? b.fov));
+  const lens = Math.tan((b.fov * Math.PI) / 360) / Math.tan((fov * Math.PI) / 360);
 
   if (shot.type === 'over-shoulder') {
     const partner = spec.actors.find((a) => a.id === shot.partner && a.id !== subject.id);
@@ -273,13 +290,16 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
       const ux = dx / len;
       const uz = dz / len;
       const side = shot.angle === 'three-quarter-right' || shot.angle === 'right' ? -1 : 1;
-      const position: Vector3Tuple = [pp[0] - ux * 0.9 * k + -uz * 0.45 * k * side, pp[1] + ph * 0.92, pp[2] - uz * 0.9 * k + ux * 0.45 * k * side];
-      return { position, target, fov, shotIndex: index };
+      // Stand clear of the foreground actor's own bulk (a big-headed robot is ~1.4 m deep): offsets come from the
+      // partner's size, otherwise a small subject puts the camera inside a large partner.
+      const { back, off } = shoulderOffsets(partner);
+      const position: Vector3Tuple = [pp[0] - ux * back + -uz * off * side, pp[1] + ph * 0.95, pp[2] - uz * back + ux * off * side];
+      return { position, target, fov: Math.max(fov, 34), shotIndex: index };
     }
   }
 
-  let dist = b.dist * 1.8 * k;
-  let height = b.height * 1.8 * k;
+  let dist = b.dist * 1.8 * k * lens;
+  let height = b.height * 1.8 * k * (shot.type === 'establishing' || shot.type === 'wide' || shot.type === 'high-angle' ? 1 : seat);
   let angle = baseYaw + ((shot.angle ? ANGLE_DEG[shot.angle] : b.angle) * Math.PI) / 180;
   let dollied = false;
   if (!shot.angle && b.angle !== 0) {
@@ -341,7 +361,6 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
     }
     default: break;
   }
-  if (shot.type === 'close-up' && shot.move === 'push-in') fov = Math.max(25, fov - 6 * pe);
   const position: Vector3Tuple = [
     pose.position[0] + Math.sin(angle) * dist,
     pose.position[1] + height,
