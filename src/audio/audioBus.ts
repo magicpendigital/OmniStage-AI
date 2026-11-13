@@ -5,6 +5,7 @@
  */
 import type { GameAudioEvent, SceneAudioSpec, SceneSpec, SfxPresetId } from '../types/scene.schema';
 import { createOmniSfxPlayer } from './sfxRuntime';
+import { installSoundtrackPlayback } from './soundtrackPlayback';
 
 export const SFX_PRESET_IDS: SfxPresetId[] = [
   'coin',
@@ -17,6 +18,10 @@ export const SFX_PRESET_IDS: SfxPresetId[] = [
   'lose',
   'click',
   'whoosh',
+  'chime',
+  'splash',
+  'footstep',
+  'pop',
 ];
 
 export const GAME_AUDIO_EVENTS: GameAudioEvent[] = ['collect', 'jump', 'hit', 'win', 'lose', 'click', 'scene-start'];
@@ -133,8 +138,11 @@ export function installAudioBus<S extends AudioRelevantState>(store: Subscribabl
   const unsubscribe = store.subscribe((state, prev) => {
     for (const event of detectAudioEvents(prev, state)) playSceneSfx(state.sceneSpec, event);
   });
+  // Phase 10B: the film soundtrack (music, ambience, timed SFX) follows the timeline.
+  const uninstallSoundtrack = installSoundtrackPlayback(store, isSfxMuted);
   return () => {
     unsubscribe();
+    uninstallSoundtrack();
     if (typeof window !== 'undefined') {
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);

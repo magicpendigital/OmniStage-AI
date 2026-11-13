@@ -21,6 +21,8 @@ import {
   Volume2,
 } from 'lucide-react';
 import { AudioCuePanel } from './AudioCuePanel';
+import { SoundtrackPanel } from './SoundtrackPanel';
+import { BIOME_IDS, BIOME_PRESETS } from '../runtime/biomes';
 import { CaptionsPanel } from './CaptionsPanel';
 import { PersonalLibraryPanel } from './PersonalLibraryPanel';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
@@ -86,6 +88,9 @@ export const LeftAssetDrawer: React.FC = () => {
   const updateWeather = useStudioStore((s) => s.updateWeather);
   const addScatterLayer = useStudioStore((s) => s.addScatterLayer);
   const removeScatterLayer = useStudioStore((s) => s.removeScatterLayer);
+  const applyBiomePreset = useStudioStore((s) => s.applyBiomePreset);
+  const addWorldFeature = useStudioStore((s) => s.addWorldFeature);
+  const removeWorldFeature = useStudioStore((s) => s.removeWorldFeature);
   const setLightingPreset = useStudioStore((s) => s.setLightingPreset);
   const setEngineType = useStudioStore((s) => s.setEngineType);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
@@ -495,6 +500,7 @@ export const LeftAssetDrawer: React.FC = () => {
         {activeTab === 'world' && (
           <div className="space-y-4 text-xs">
             {/* Phase 4: Procedural Game Audio (both engines, embedded in playable exports) */}
+            <SoundtrackPanel />
             <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
             {/* Phase 5: captions / subtitles track */}
             <CaptionsPanel />
@@ -638,6 +644,12 @@ export const LeftAssetDrawer: React.FC = () => {
                     { type: 'crystal-clusters', label: '+ Crystals' },
                     { type: 'ancient-pillars', label: '+ Pillars' },
                     { type: 'street-lights', label: '+ Street Lamps' },
+                    { type: 'broadleaf-trees', label: '+ Leafy Trees' },
+                    { type: 'bushes', label: '+ Bushes' },
+                    { type: 'flowers', label: '+ Flowers' },
+                    { type: 'grass-tufts', label: '+ Grass Tufts' },
+                    { type: 'palm-trees', label: '+ Palm Trees' },
+                    { type: 'cacti', label: '+ Cacti' },
                   ] as { type: ScatterObjectType; label: string }[]
                 ).map((sc) => (
                   <button
@@ -670,6 +682,45 @@ export const LeftAssetDrawer: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Phase 10B: biome presets + water landmarks */}
+            <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-100">
+                  <Trees className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Biome & Water</span>
+                </div>
+                {world.biome && <span className="text-[10px] font-mono text-emerald-300">{world.biome}</span>}
+              </div>
+              <select
+                value=""
+                onChange={(e) => e.target.value && applyBiomePreset(e.target.value as (typeof BIOME_IDS)[number])}
+                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 font-mono text-xs text-slate-100"
+                title="Replaces sky, terrain, props, water and outdoor lighting"
+              >
+                <option value="">Dress the world from a biome…</option>
+                {BIOME_IDS.map((b) => <option key={b} value={b}>{BIOME_PRESETS[b].label}</option>)}
+              </select>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['waterfall', 'river', 'pond'] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => addWorldFeature(type)}
+                    className="px-2 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 transition-colors capitalize"
+                  >
+                    + {type}
+                  </button>
+                ))}
+              </div>
+              {(world.features || []).map((f) => (
+                <div key={f.id} className="px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
+                  <span className="font-mono text-slate-300">{f.type} @ [{f.position.map((v) => Math.round(v)).join(', ')}]</span>
+                  <button onClick={() => removeWorldFeature(f.id)} className="text-slate-400 hover:text-rose-400" title="Remove">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
 
             {/* Studio Lighting Presets */}

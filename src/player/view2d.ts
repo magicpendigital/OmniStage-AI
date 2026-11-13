@@ -2,6 +2,7 @@
  * Phase 7 — 2D view of the OmniStage Player. Runs the exact studio frame (`stepStage2D`) on a letterboxed
  * 1000x600 canvas, so physics, logic graph, particles, spritesheets and captions match the editor.
  */
+import { trackImage } from './loading';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, RuntimeLogicGraph } from '../runtime/logicGraph';
 import { hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
 import { runtimeStore } from '../runtime/host';
@@ -44,6 +45,7 @@ export class View2D {
       const img = new Image();
       img.crossOrigin = 'anonymous';
       img.src = this.resolveUrl(n.imageUrl);
+      trackImage(img);
       this.images[n.imageUrl] = img;
     }
   }

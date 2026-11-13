@@ -167,7 +167,38 @@ export type ScatterObjectType =
   | 'rocks-boulders'
   | 'street-lights'
   | 'ancient-pillars'
-  | 'crystal-clusters';
+  | 'crystal-clusters'
+  // Phase 10B: natural dressing that fills the frame
+  | 'broadleaf-trees'
+  | 'bushes'
+  | 'flowers'
+  | 'grass-tufts'
+  | 'palm-trees'
+  | 'cacti';
+
+/** Phase 10B: one-word location presets that dress a whole world (sky, terrain, props, water, ambience). */
+export type BiomeId =
+  | 'forest'
+  | 'meadow'
+  | 'beach'
+  | 'desert'
+  | 'snowy-peaks'
+  | 'waterfall-valley'
+  | 'night-forest'
+  | 'city-night';
+
+/** Phase 10B: animated water landmarks built by the shared world builder. */
+export type WorldFeatureType = 'waterfall' | 'river' | 'pond';
+
+export interface WorldFeatureSpec {
+  id: string;
+  type: WorldFeatureType;
+  /** Base position on the ground (y follows the terrain). A waterfall's cliff faces +z rotated by rotationDeg. */
+  position: Vector3Tuple;
+  rotationDeg?: number;
+  /** Scale, default 1 (waterfall ~6 m wide x 5 m tall; river 3 m wide x 40 m long; pond radius 3 m). */
+  size?: number;
+}
 
 export interface ScatterLayerSpec {
   id: string;
@@ -199,6 +230,10 @@ export interface WorldSpec {
     intensity: number;
   };
   scatterObjects: ScatterLayerSpec[];
+  /** Phase 10B: the biome preset this world was dressed from (also picks the 'auto' ambience). */
+  biome?: BiomeId;
+  /** Phase 10B: waterfalls, rivers and ponds. */
+  features?: WorldFeatureSpec[];
   /** Optional image-based lighting from an external HDRI (e.g. Poly Haven via /api/assets proxy). */
   hdri?: WorldHDRISpec;
 }
@@ -260,7 +295,12 @@ export type SfxPresetId =
   | 'win'
   | 'lose'
   | 'click'
-  | 'whoosh';
+  | 'whoosh'
+  // Phase 10B foley for film cues
+  | 'chime'
+  | 'splash'
+  | 'footstep'
+  | 'pop';
 
 /** Gameplay / media events that can trigger a sound cue. */
 export type GameAudioEvent = 'collect' | 'jump' | 'hit' | 'win' | 'lose' | 'click' | 'scene-start';
@@ -271,6 +311,46 @@ export interface SceneAudioSpec {
   masterVolume: number;
   /** Built-in SfxPresetId, 'none', or an id from SceneSpec.sfxLibrary. */
   cues: Partial<Record<GameAudioEvent, SfxPresetId | 'none' | (string & {})>>;
+}
+
+/** Phase 10B: procedural film score moods (synthesised, no audio files). */
+export type MusicMood = 'none' | 'calm' | 'happy' | 'playful' | 'adventure' | 'epic' | 'tense' | 'sad' | 'mysterious';
+
+/** Phase 10B: procedural background ambience. 'auto' follows the world (biome, water features, weather, sky). */
+export type AmbienceId =
+  | 'none'
+  | 'auto'
+  | 'forest'
+  | 'meadow'
+  | 'beach'
+  | 'river'
+  | 'waterfall'
+  | 'rain'
+  | 'wind'
+  | 'night'
+  | 'city'
+  | 'cave'
+  | 'space';
+
+/** Phase 10B: a timed sound effect on the film timeline (seconds from the scene start). */
+export interface SoundtrackCue {
+  time: number;
+  /** Built-in SfxPresetId or an id from SceneSpec.sfxLibrary. */
+  sfx: SfxPresetId | (string & {});
+  /** 0..1, default 0.8 */
+  volume?: number;
+}
+
+/**
+ * Phase 10B: the scene's sound — mood music, ambience and timed SFX. Rendered deterministically to PCM
+ * (src/audio/soundtrack.ts), so Preview, the Player and the MP4 export all hear the same thing.
+ */
+export interface SoundtrackSpec {
+  music?: { mood: MusicMood; /** 0..1, default 0.55 */ volume?: number; /** BPM override */ tempo?: number };
+  ambience?: { type: AmbienceId; /** 0..1, default 0.5 */ volume?: number };
+  cues?: SoundtrackCue[];
+  /** Overall 0..1, default 0.9 */
+  volume?: number;
 }
 
 /** Reusable director guidance injected into the AI prompt (built-in or learned from a user-approved result). */
@@ -637,6 +717,8 @@ export interface SceneSpec {
   sequence?: SceneSequenceMeta;
   /** Phase 4: procedural sound cues for gameplay events (also embedded in standalone playable exports). */
   audio?: SceneAudioSpec;
+  /** Phase 10B: film soundtrack (music, ambience, timed SFX). Plays in Preview, the Player and MP4 exports. */
+  soundtrack?: SoundtrackSpec;
   /** Phase 5: timed captions / subtitles (drawn on the 2D canvas, overlaid in 3D, exportable as WebVTT). */
   captions?: CaptionCue[];
   /** Phase 6: particle presets from extensions used by this scene (recipes copied in, so the scene is portable). */

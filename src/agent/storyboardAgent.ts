@@ -10,6 +10,8 @@
  * Every generated scene is a declarative SceneSpec; nothing here emits imperative renderer code.
  */
 import { resolvePerformance } from '../runtime/cinematics';
+import { applyBiomeToScene, BIOME_IDS, biomeEnvironmentPatch, expandBiome } from '../runtime/biomes';
+import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
 import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
 import {
@@ -20,6 +22,7 @@ import {
 } from '../registry/assetRegistry';
 import {
   ActorNode,
+  BiomeId,
   CameraMode,
   EngineType,
   LightingPresetId,
@@ -27,6 +30,7 @@ import {
   SceneSpec,
   SettingsConfig,
   SkyboxPreset,
+  SoundtrackSpec,
   StoryboardBeat,
   StoryboardKind,
   StoryboardPlan,
@@ -256,6 +260,23 @@ function normalizeTerrain(raw: Partial<WorldSpec['terrain']> | undefined): World
   return terrain;
 }
 
+/** Phase 10B: keeps a valid AI soundtrack (unknown moods / ambiences fall back, cues need a time and an sfx id). */
+export function normalizeSoundtrack(raw: any): SoundtrackSpec | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: SoundtrackSpec = {};
+  const mood = typeof raw.music === 'string' ? raw.music : raw.music?.mood;
+  if (mood) out.music = { mood: MUSIC_MOODS.includes(mood) ? mood : 'calm', ...(Number.isFinite(raw.music?.volume) ? { volume: raw.music.volume } : {}) };
+  const amb = typeof raw.ambience === 'string' ? raw.ambience : raw.ambience?.type;
+  out.ambience = { type: AMBIENCE_IDS.includes(amb) ? amb : 'auto', ...(Number.isFinite(raw.ambience?.volume) ? { volume: raw.ambience.volume } : {}) };
+  if (Array.isArray(raw.cues)) {
+    out.cues = raw.cues
+      .filter((c: any) => c && Number.isFinite(c.time) && typeof c.sfx === 'string')
+      .map((c: any) => ({ time: Math.max(0, c.time), sfx: c.sfx, ...(Number.isFinite(c.volume) ? { volume: c.volume } : {}) }));
+  }
+  if (Number.isFinite(raw.volume)) out.volume = raw.volume;
+  return out;
+}
+
 export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType): SceneSpec {
   const engineType: EngineType = raw?.engineType === '2d' || raw?.engineType === '3d' ? raw.engineType : fallbackEngine;
   const base = createBlankSceneSpec(engineType);
@@ -280,11 +301,29 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
           color: l.color,
         }))
       : [],
+    // Phase 10B: biome preset + water landmarks
+    biome: BIOME_IDS.includes(rawWorld.biome as BiomeId) ? rawWorld.biome : undefined,
+    features: Array.isArray(rawWorld.features)
+      ? rawWorld.features
+          .filter((f: any) => f && ['waterfall', 'river', 'pond'].includes(f.type))
+          .map((f: any, i: number) => ({
+            id: str(f.id, `feature-${i}`),
+            type: f.type,
+            position: isVec3(f.position) ? f.position : [0, 0, -14],
+            ...(Number.isFinite(f.rotationDeg) ? { rotationDeg: f.rotationDeg } : {}),
+            ...(Number.isFinite(f.size) ? { size: Math.min(3, Math.max(0.4, f.size)) } : {}),
+          }))
+      : undefined,
   };
+  if (!world.biome) delete world.biome;
+  if (!world.features) delete world.features;
+  const dressedWorld = world.biome ? expandBiome(world) : world;
 
   const presetId = (raw.environment?.presetId as LightingPresetId) || base.environment.presetId;
   const environment = {
     ...(LIGHTING_PRESETS[presetId] ?? base.environment),
+    // Phase 10B: a biome is outdoors (no studio grid, distant haze); explicit AI values still win.
+    ...(world.biome ? biomeEnvironmentPatch(world.biome) : {}),
     ...(raw.environment ?? {}),
     presetId: LIGHTING_PRESETS[presetId] ? presetId : base.environment.presetId,
   };
@@ -334,7 +373,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     aspectRatio: ['16:9', '9:16', '1:1'].includes(raw.aspectRatio) ? raw.aspectRatio : base.aspectRatio,
     durationSeconds,
     environment,
-    world,
+    world: dressedWorld,
     camera,
     actors: actors as ActorNode[],
     nodes2D: nodes2D as Node2D[],
@@ -342,6 +381,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     marketingOverlay: { ...base.marketingOverlay, ...(raw.marketingOverlay ?? {}) },
     gameRules: { ...base.gameRules, ...(raw.gameRules ?? {}) },
     timelineTracks: Array.isArray(raw.timelineTracks) ? raw.timelineTracks : base.timelineTracks,
+    ...(normalizeSoundtrack(raw.soundtrack) ? { soundtrack: normalizeSoundtrack(raw.soundtrack) } : {}),
   };
 }
 
@@ -629,6 +669,19 @@ function buildActor(assetId: string, clip: string | undefined, position: [number
 const FILM_CAMERAS: CameraMode[] = ['crane-reveal', 'dolly-zoom-in', 'orbit-360', 'cinematic-flythrough', 'first-person-follow'];
 const FILM_LIGHTING: LightingPresetId[] = ['clean-apple-studio', 'sunset-cinematic', 'cyberpunk-neon', 'arcade-vibrant'];
 
+/** Offline director: a biome that matches the film theme (and a waterfall when the prompt asks for one). */
+function offlineBiome(terrain: TerrainType, foldedPrompt: string, progress: number): BiomeId | null {
+  if (/waterfall|thac nuoc|thac/.test(foldedPrompt)) return 'waterfall-valley';
+  switch (terrain) {
+    case 'grassy-hills': return /night|dem/.test(foldedPrompt) && progress > 0.5 ? 'night-forest' : /meadow|dong co|canh dong/.test(foldedPrompt) ? 'meadow' : 'forest';
+    case 'desert-dunes': return 'desert';
+    case 'snow-mountains': return 'snowy-peaks';
+    case 'ocean-island': return 'beach';
+    case 'city-asphalt': return 'city-night';
+    default: return null;
+  }
+}
+
 function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: number, total: number): SceneSpec {
   const spec = createBlankSceneSpec('3d', beat.title);
   const theme = pickFilmTheme(prompt);
@@ -661,6 +714,20 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
   };
   const lighting = isClimax ? 'cyberpunk-neon' : progress > 0.5 ? 'sunset-cinematic' : FILM_LIGHTING[index % 2];
   spec.environment = { ...LIGHTING_PRESETS[lighting] };
+  // Phase 10B: dress the set from a biome (fills the frame, water landmarks), keep the arc's sky and weather.
+  const biome = offlineBiome(theme.terrain, t, progress);
+  if (biome) {
+    const arcSky = spec.world.skybox;
+    const arcWeather = spec.world.weather;
+    const dressed = applyBiomeToScene(spec, biome);
+    spec.world = { ...dressed.world, skybox: biome === 'night-forest' || biome === 'city-night' ? dressed.world.skybox : arcSky, weather: isClimax ? arcWeather : dressed.world.weather };
+    spec.environment = { ...spec.environment, ...biomeEnvironmentPatch(biome), groundColor: dressed.environment.groundColor } as typeof spec.environment;
+  }
+  spec.soundtrack = {
+    music: { mood: isFinale ? 'happy' : isClimax ? 'tense' : index === 0 ? 'calm' : 'adventure' },
+    ambience: { type: 'auto' },
+    cues: isFinale ? [{ time: 1.2, sfx: 'chime' }] : isClimax ? [{ time: 2, sfx: 'whoosh' }] : [],
+  };
 
   const cameraMode = isFinale ? 'orbit-360' : FILM_CAMERAS[index % FILM_CAMERAS.length];
   spec.camera = {

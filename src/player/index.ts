@@ -15,6 +15,7 @@ import { View2D } from './view2d';
 import { QualityLevel, View3D } from './view3d';
 import { transitionInto, transitionOverlay } from '../runtime/cinematics';
 import { Hud, PLAYER_CSS } from './hud';
+import { pendingLoads } from './loading';
 
 export interface OmniPlayerData {
   scenes: SceneSpec[];
@@ -45,6 +46,10 @@ export interface OmniPlayerHandle {
     bodies2D: Record<string, { x: number; y: number; collected: boolean }>;
     view3d?: ReturnType<View3D['inspect']>;
   };
+  /** Phase 10B: asset loads still in flight (frame-stepped capture waits for 0). */
+  pendingLoads: () => number;
+  /** Phase 10B: the stage canvas currently shown (2D or 3D). */
+  canvas: () => HTMLCanvasElement | null;
   /** Hold or release a logical key ('arrowright', ' ', …) as if pressed (tests / accessibility tools). */
   setKey: (key: string, down: boolean) => void;
 }
@@ -210,6 +215,8 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       }
     },
     setKey: (key, down) => input.setVirtualKey(key.toLowerCase(), down),
+    pendingLoads,
+    canvas: () => (view ? view.canvas : null),
     destroy: () => {
       cancelAnimationFrame(raf);
       ro.disconnect();

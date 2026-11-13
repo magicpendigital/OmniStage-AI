@@ -18,13 +18,18 @@ import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
+import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
+import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
 export const SCENE_TRANSITIONS = ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'];
 const STAGE_3D = 12; // performances stay within ±12 m
 /** Media craft hints: warnings the AI patch loop also tries to resolve (see `mediaQualityPenalty`). */
-export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage'];
+export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage', 'media.silent'];
+export const WORLD_FEATURE_TYPES = ['waterfall', 'river', 'pond'];
+/** Water landmarks must leave the acting area (and the cameras around it) free. */
+export const FEATURE_STAGE_CLEARANCE = 6;
 
 // --- 2D physics envelope (mirrors StageCanvas2D: jump vy = -520 px/s, gravity = 9.8 * 90 px/s², run 320 px/s) ---
 export const PLATFORMER_PHYSICS = {
@@ -273,9 +278,46 @@ function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
     issues.push(issue('media.single-shot', 'warning', `One camera framing for ${duration}s. Add camera.shots (wide → medium → close-up, a cut every 2-4 s).`, false));
   }
   const w = spec.world;
-  const bare = (!w || ['flat-grid', 'none'].includes(w.terrain?.type)) && !(w?.scatterObjects?.length) && !w?.hdri?.url;
+  const bare = (!w || ['flat-grid', 'none'].includes(w.terrain?.type)) && !(w?.scatterObjects?.length) && !w?.hdri?.url && !w?.biome;
   if (spec.actors.length && bare) {
-    issues.push(issue('media.bare-stage', 'warning', 'The scene has no place: set world.terrain, 1-2 scatterObjects layers and sky / weather (or an HDRI), and turn off environment.groundGrid.', false));
+    issues.push(issue('media.bare-stage', 'warning', 'The scene has no place: set world.biome (forest, meadow, beach, desert, snowy-peaks, waterfall-valley, night-forest, city-night) or world.terrain + scatterObjects + sky / weather (or an HDRI), and turn off environment.groundGrid.', false));
+  }
+  // Phase 10B: a film scene needs sound.
+  const st = spec.soundtrack;
+  const silent = !st || ((!st.music || st.music.mood === 'none') && st.ambience?.type === 'none' && !(st.cues?.length));
+  if (spec.actors.length && duration > 3 && silent) {
+    issues.push(issue('media.silent', 'warning', 'The scene is silent. Add soundtrack: { music: { mood }, ambience: { type: "auto" }, cues: [{ time, sfx }] } — pick the mood from the beat (calm, happy, playful, adventure, epic, tense, sad, mysterious).', false));
+  }
+}
+
+/** Phase 10B: soundtrack values the renderer understands (any engine). */
+function verifySoundtrack(spec: SceneSpec, issues: VerificationIssue[]) {
+  const st = spec.soundtrack;
+  if (!st) return;
+  const duration = Math.max(1, spec.durationSeconds || 8);
+  const badMood = st.music !== undefined && !MUSIC_MOODS.includes(st.music?.mood);
+  const badAmb = st.ambience !== undefined && !AMBIENCE_IDS.includes(st.ambience?.type);
+  const badCue = (st.cues || []).some((c) => !c || !Number.isFinite(c.time) || c.time < 0 || c.time >= duration ||
+    (!(SFX_PRESET_IDS as string[]).includes(c.sfx) && !spec.sfxLibrary?.[c.sfx]));
+  if (badMood || badAmb || badCue) {
+    issues.push(issue('soundtrack.invalid', 'warning', `Soundtrack has ${[badMood && `an unknown mood "${st.music?.mood}"`, badAmb && `an unknown ambience "${st.ambience?.type}"`, badCue && 'cues outside the scene or with unknown sfx ids'].filter(Boolean).join(', ')}. Moods: ${MUSIC_MOODS.join(', ')}; ambiences: ${AMBIENCE_IDS.join(', ')}; sfx: ${SFX_PRESET_IDS.join(', ')}.`, true));
+  }
+}
+
+/** Phase 10B: biome id and water landmarks. */
+function verifyWorldFeatures(spec: SceneSpec, issues: VerificationIssue[]) {
+  if (spec.engineType !== '3d' || !spec.world) return;
+  if (spec.world.biome !== undefined && !BIOME_IDS.includes(spec.world.biome)) {
+    issues.push(issue('world.biome-invalid', 'warning', `Unknown biome "${spec.world.biome}" (biomes: ${BIOME_IDS.join(', ')}).`, true));
+  }
+  for (const f of spec.world.features || []) {
+    if (!f || !WORLD_FEATURE_TYPES.includes(f.type) || !Array.isArray(f.position) || f.position.length !== 3 || f.position.some((v) => !Number.isFinite(v))) {
+      issues.push(issue('world.feature-invalid', 'warning', `World feature "${f?.id ?? '?'}" is invalid (types: ${WORLD_FEATURE_TYPES.join(', ')}; position [x, y, z]).`, true, f?.id));
+      continue;
+    }
+    if (featureStageClearance(f) < FEATURE_STAGE_CLEARANCE) {
+      issues.push(issue('world.feature-on-stage', 'warning', `The ${f.type} "${f.id}" covers the acting area; keep water landmarks ${FEATURE_STAGE_CLEARANCE}+ m from the stage centre (e.g. a waterfall at [0, 0, -15] behind the actors).`, true, f.id));
+    }
   }
 }
 
@@ -346,6 +388,8 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
+  verifySoundtrack(spec, issues);
+  verifyWorldFeatures(spec, issues);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
 }
@@ -438,6 +482,34 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
         .filter((sh) => SHOT_TYPES.includes(sh.type) && Number.isFinite(sh.start) && sh.start < duration)
         .map((sh) => ({ ...sh, start: Math.max(0, sh.start), subject: sh.subject && ids.has(sh.subject) ? sh.subject : undefined, partner: sh.partner && ids.has(sh.partner) ? sh.partner : undefined }));
       return 'Removed / repaired invalid camera shots';
+    }
+    case 'soundtrack.invalid': {
+      const st = spec.soundtrack;
+      if (!st) return null;
+      const duration = Math.max(1, spec.durationSeconds || 8);
+      if (st.music && !MUSIC_MOODS.includes(st.music.mood)) st.music = { ...st.music, mood: 'calm' };
+      if (st.ambience && !AMBIENCE_IDS.includes(st.ambience.type)) st.ambience = { ...st.ambience, type: 'auto' };
+      if (st.cues) st.cues = st.cues.filter((c) => c && Number.isFinite(c.time) && c.time >= 0 && c.time < duration &&
+        ((SFX_PRESET_IDS as string[]).includes(c.sfx) || !!spec.sfxLibrary?.[c.sfx]));
+      return 'Repaired the soundtrack (mood / ambience / cues)';
+    }
+    case 'world.biome-invalid':
+      delete spec.world.biome;
+      return 'Removed the unknown biome';
+    case 'world.feature-invalid':
+      spec.world.features = (spec.world.features || []).filter((f) => f && f.id !== i.targetId);
+      return 'Removed an invalid world feature';
+    case 'world.feature-on-stage': {
+      const f = (spec.world.features || []).find((x) => x.id === i.targetId);
+      if (!f) return null;
+      // Push the landmark straight away from the stage centre until it clears the acting area.
+      const len = Math.hypot(f.position[0], f.position[2]);
+      const dir: [number, number] = len > 0.01 ? [f.position[0] / len, f.position[2] / len] : [0, -1];
+      for (let d = Math.max(len, 1); d < 60; d += 1) {
+        f.position = [dir[0] * d, f.position[1], dir[1] * d];
+        if (featureStageClearance(f) >= FEATURE_STAGE_CLEARANCE) break;
+      }
+      return `Moved the ${f.type} off the stage`;
     }
     case 'media.transition-invalid':
       if (spec.sequence) spec.sequence.transition = 'fade';

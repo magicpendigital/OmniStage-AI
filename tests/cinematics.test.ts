@@ -165,7 +165,7 @@ test('verifier: craft hints for a static, single-shot, bare film; fixes broken s
   spec.world = { ...spec.world, terrain: { ...spec.world.terrain, type: 'flat-grid' }, scatterObjects: [] };
   const codes = verifySceneSpec(spec).issues.map((i) => i.code);
   for (const c of MEDIA_CRAFT_CODES) assert.ok(codes.includes(c), c);
-  assert.equal(mediaQualityPenalty(verifySceneSpec(spec)), 3);
+  assert.equal(mediaQualityPenalty(verifySceneSpec(spec)), 4);
   // The same rules are silent in game mode.
   assert.equal(mediaQualityPenalty(verifySceneSpec({ ...spec, mode: 'game' })), 0);
 
@@ -219,7 +219,7 @@ test('patch loop keeps going while craft issues remain, and never accepts a less
   const replies = [
     { ops: steps },
     { ops: [{ op: 'remove', path: '/actors/@hero/performance' }] }, // worse: discarded
-    { mergePatch: { camera: { shots: [{ start: 0, type: 'wide' }, { start: 5, type: 'close-up' }] }, world: { scatterObjects: [{ id: 'p', type: 'pine-trees', count: 20, spreadRadius: 20, scaleRange: [1, 1] }] } } },
+    { mergePatch: { camera: { shots: [{ start: 0, type: 'wide' }, { start: 5, type: 'close-up' }] }, world: { scatterObjects: [{ id: 'p', type: 'pine-trees', count: 20, spreadRadius: 20, scaleRange: [1, 1] }] }, soundtrack: { music: { mood: 'calm' } } } },
   ];
   const seen: string[][] = [];
   const result = await runPatchLoop({

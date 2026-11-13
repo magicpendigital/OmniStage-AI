@@ -1,4 +1,5 @@
 import { SceneSpec } from '../types/scene.schema';
+import { renderFilmSoundtrack } from '../audio/soundtrack';
 import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
 import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML } from './playerHtml';
 
@@ -151,6 +152,74 @@ export interface MultiSceneRecordingProgress {
   phase: 'preparing' | 'recording' | 'transitioning' | 'finalizing' | 'completed';
 }
 
+export type CompositorTransition = 'none' | 'crossfade' | 'fade-to-black' | 'fade-white' | 'wipe';
+
+/** A scene's own transition (Phase 10A `sequence.transition`) mapped to the compositor's names; falls back to `fallback`. */
+export function compositorTransition(scene: SceneSpec, fallback: string): CompositorTransition {
+  const own = scene.sequence?.transition;
+  const t = own === 'cut' ? 'none' : own === 'fade' ? 'fade-to-black' : own || fallback;
+  return (['none', 'crossfade', 'fade-to-black', 'fade-white', 'wipe'].includes(t) ? t : 'fade-to-black') as CompositorTransition;
+}
+
+/** Draws the transition from the previous scene's last frame over the current frame. `progress` 0..1. */
+export function drawSceneTransition(
+  ctx: CanvasRenderingContext2D,
+  previous: CanvasImageSource,
+  kind: CompositorTransition,
+  progress: number,
+  width: number,
+  height: number
+) {
+  if (kind === 'fade-white' || kind === 'fade-to-black') {
+    const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
+    if (alpha > 0) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(previous, 0, 0, width, height);
+      ctx.restore();
+    }
+    const veil = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
+    ctx.fillStyle = kind === 'fade-white' ? `rgba(255, 255, 255, ${veil})` : `rgba(0, 0, 0, ${veil})`;
+    ctx.fillRect(0, 0, width, height);
+  } else if (kind === 'wipe') {
+    const edge = Math.round(width * progress);
+    if (width - edge > 0) ctx.drawImage(previous, edge, 0, width - edge, height, edge, 0, width - edge, height);
+  } else if (kind === 'crossfade') {
+    ctx.save();
+    ctx.globalAlpha = 1 - progress;
+    ctx.drawImage(previous, 0, 0, width, height);
+    ctx.restore();
+  }
+}
+
+/** OmniStage badge in the top-left corner of exported videos (optional). */
+export function drawWatermark(ctx: CanvasRenderingContext2D, scene: SceneSpec, sceneIdx: number, total: number) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
+  ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
+  ctx.lineWidth = 1.5;
+  const padX = 24;
+  const padY = 24;
+  ctx.beginPath();
+  ctx.roundRect(padX, padY, 340, 46, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#06B6D4';
+  ctx.fillText(`OMNISTAGE · SCENE ${sceneIdx + 1}/${total} [${(scene.engineType || '3d').toUpperCase()}]`, padX + 16, padY + 20);
+  ctx.font = '500 12px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillText(scene.title.slice(0, 28), padX + 16, padY + 36);
+  ctx.restore();
+}
+
+/** Downloads a finished blob under `filename`. */
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, filename);
+  setTimeout(() => URL.revokeObjectURL(url), 12000);
+}
+
 /**
  * Options for the Multi-Scene Video Sequencer.
  */
@@ -169,6 +238,8 @@ export interface MultiSceneSequenceOptions {
   watermarkBadge?: boolean;
   onProgress?: (progress: MultiSceneRecordingProgress) => void;
   abortSignal?: AbortSignal;
+  /** Phase 10B: mix the scenes' procedural soundtrack into the recording (default true). */
+  withSound?: boolean;
 }
 
 /**
@@ -242,6 +313,25 @@ export async function recordMultiSceneSequence(
 
   // Master Capture Stream & MediaRecorder
   const stream = compositorCanvas.captureStream(fps);
+  // Phase 10B: the film soundtrack as an audio track (rendered up front, played in real time with the recording).
+  let audio: { ctx: AudioContext; source: AudioBufferSourceNode } | null = null;
+  if (options.withSound !== false && scenes.some((s) => s.soundtrack) && typeof AudioContext !== 'undefined') {
+    try {
+      const pcm = renderFilmSoundtrack(scenes.map((s, i) => ({ ...s, durationSeconds: sceneDurations[i] })), 48000);
+      const actx = new AudioContext({ sampleRate: 48000 });
+      const buffer = actx.createBuffer(2, pcm.left.length, pcm.sampleRate);
+      buffer.copyToChannel(pcm.left as Float32Array<ArrayBuffer>, 0);
+      buffer.copyToChannel(pcm.right as Float32Array<ArrayBuffer>, 1);
+      const dest = actx.createMediaStreamDestination();
+      const source = actx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(dest);
+      for (const track of dest.stream.getAudioTracks()) stream.addTrack(track);
+      audio = { ctx: actx, source };
+    } catch {
+      audio = null; // never block the video on audio
+    }
+  }
   const chunks: BlobPart[] = [];
   const recorder = new MediaRecorder(stream, {
     mimeType: selectedMime,
@@ -253,6 +343,20 @@ export async function recordMultiSceneSequence(
   };
 
   recorder.start(100);
+  if (audio) {
+    await audio.ctx.resume().catch(() => undefined);
+    audio.source.start();
+  }
+  const stopAudio = () => {
+    if (!audio) return;
+    try {
+      audio.source.stop();
+    } catch {
+      /* not started */
+    }
+    void audio.ctx.close().catch(() => undefined);
+    audio = null;
+  };
 
   const startClock = performance.now();
   let previousSceneSnapshot: HTMLCanvasElement | null = null;
@@ -321,74 +425,14 @@ export async function recordMultiSceneSequence(
           // 3. Handle inter-scene transitions
           let phase: MultiSceneRecordingProgress['phase'] = 'recording';
           // Phase 10A: a scene's own transition (sequence.transition) overrides the dialog default.
-          const own = currentScene.sequence?.transition;
-          const sceneTransition: string = own === 'cut' ? 'none' : own === 'fade' ? 'fade-to-black' : own || transition;
+          const sceneTransition = compositorTransition(currentScene, transition);
           if (sceneIdx > 0 && sceneTransition !== 'none' && sceneElapsed < transitionMs && previousSceneSnapshot) {
             phase = 'transitioning';
-            const progress = sceneElapsed / transitionMs;
-
-            if (sceneTransition === 'fade-white') {
-              const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
-              if (alpha > 0) {
-                ctx.save();
-                ctx.globalAlpha = alpha;
-                ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
-                ctx.restore();
-              }
-              ctx.fillStyle = `rgba(255, 255, 255, ${progress < 0.5 ? progress * 2 : (1 - progress) * 2})`;
-              ctx.fillRect(0, 0, targetWidth, targetHeight);
-            } else if (sceneTransition === 'wipe') {
-              const edge = Math.round(targetWidth * progress);
-              ctx.drawImage(previousSceneSnapshot, edge, 0, targetWidth - edge, targetHeight, edge, 0, targetWidth - edge, targetHeight);
-            } else if (sceneTransition === 'crossfade') {
-              ctx.save();
-              ctx.globalAlpha = 1 - progress;
-              ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
-              ctx.restore();
-            } else if (sceneTransition === 'fade-to-black') {
-              const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
-              if (alpha > 0) {
-                ctx.save();
-                ctx.globalAlpha = alpha;
-                ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
-                ctx.restore();
-              }
-              const blackAlpha = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
-              ctx.fillStyle = `rgba(0, 0, 0, ${blackAlpha})`;
-              ctx.fillRect(0, 0, targetWidth, targetHeight);
-            }
+            drawSceneTransition(ctx, previousSceneSnapshot, sceneTransition, sceneElapsed / transitionMs, targetWidth, targetHeight);
           }
 
           // 4. Sleek HUD watermark overlay (optional)
-          if (watermarkBadge) {
-            ctx.save();
-            ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
-            ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
-            ctx.lineWidth = 1.5;
-            const padX = 24;
-            const padY = 24;
-            const badgeW = 340;
-            const badgeH = 46;
-
-            ctx.beginPath();
-            ctx.roundRect(padX, padY, badgeW, badgeH, 10);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = '#06B6D4';
-            ctx.fillText(
-              `OMNISTAGE · SCENE ${sceneIdx + 1}/${scenes.length} [${(currentScene.engineType || '3d').toUpperCase()}]`,
-              padX + 16,
-              padY + 20
-            );
-
-            ctx.font = '500 12px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = '#F8FAFC';
-            const titleSnippet = currentScene.title.slice(0, 28);
-            ctx.fillText(titleSnippet, padX + 16, padY + 36);
-            ctx.restore();
-          }
+          if (watermarkBadge) drawWatermark(ctx, currentScene, sceneIdx, scenes.length);
 
           // Report progress callback
           onProgress?.({
@@ -426,6 +470,7 @@ export async function recordMultiSceneSequence(
     }
 
     if (isAborted) {
+      stopAudio();
       if (recorder.state === 'recording') recorder.stop();
       if (initialActiveSceneId) switchScene(initialActiveSceneId);
       return { ok: false, error: 'Multi-scene sequence recording was aborted by user' };
@@ -445,6 +490,7 @@ export async function recordMultiSceneSequence(
     // Finalize recording
     return await new Promise<{ ok: boolean; filename: string }>((resolve) => {
       recorder.onstop = () => {
+        stopAudio();
         const blob = new Blob(chunks, { type: selectedMime });
         const url = URL.createObjectURL(blob);
         const slug = slugifyTitle(scenes[0]?.title || 'omnistage-storyboard', 'storyboard');
@@ -473,6 +519,7 @@ export async function recordMultiSceneSequence(
       }
     });
   } catch (err: any) {
+    stopAudio();
     if (recorder.state === 'recording') recorder.stop();
     if (initialActiveSceneId) switchScene(initialActiveSceneId);
     return { ok: false, error: err?.message || 'Sequencer recording encountered an error' };

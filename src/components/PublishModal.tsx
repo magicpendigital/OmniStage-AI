@@ -34,6 +34,7 @@ import {
   recordMultiSceneSequence,
   StandaloneAdNetwork,
 } from '../exporter/mediaExporter';
+import { canExportFilmFrames, exportFilmMP4 } from '../exporter/filmExport';
 
 type PublishTab = 'sequencer' | 'bundler' | 'snapshot';
 
@@ -65,6 +66,21 @@ export const PublishModal: React.FC = () => {
   const [resolutionPreset, setResolutionPreset] = useState<'1080p' | '720p' | 'native'>('1080p');
   const [includeWatermark, setIncludeWatermark] = useState<boolean>(true);
   const [sequencerProgress, setSequencerProgress] = useState<MultiSceneRecordingProgress | null>(null);
+  // Phase 10B: frame-perfect MP4 (WebCodecs) and the procedural soundtrack
+  const [frameMp4, setFrameMp4] = useState<boolean>(false);
+  const [withSound, setWithSound] = useState<boolean>(true);
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    void canExportFilmFrames().then((ok) => {
+      if (!alive) return;
+      setFrameMp4(ok);
+      if (ok) setVideoFormat('mp4');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen]);
 
   // Standalone Game Bundler Options
   const [autoProgressLevels, setAutoProgressLevels] = useState<boolean>(true);
@@ -132,7 +148,7 @@ export const PublishModal: React.FC = () => {
       phase: 'preparing',
     });
 
-    const res = await recordMultiSceneSequence({
+    const res = videoFormat === 'mp4' && frameMp4 ? await runFrameExport() : await recordMultiSceneSequence({
       scenes: sequenceScenes,
       initialActiveSceneId: activeSceneId,
       switchScene,
@@ -146,6 +162,7 @@ export const PublishModal: React.FC = () => {
       resolution: getResolutionDimensions(),
       watermarkBadge: includeWatermark,
       abortSignal: abortControllerRef.current.signal,
+      withSound,
       onProgress: (prog) => {
         setSequencerProgress(prog);
         setRecordingState(true, prog.percentage);
@@ -161,6 +178,38 @@ export const PublishModal: React.FC = () => {
     } else if (res.error) {
       triggerToast(`Video Sequencer: ${res.error}`);
     }
+  };
+
+  // Phase 10B: frame-stepped MP4 through the OmniStage Player (exact timing at any machine speed, with sound).
+  const runFrameExport = async () => {
+    const fps = 30;
+    const scenesForExport = durationMode === 'fixed'
+      ? sequenceScenes.map((s) => ({ ...s, durationSeconds: Math.max(1, fixedDurationSeconds) }))
+      : sequenceScenes;
+    return exportFilmMP4({
+      scenes: scenesForExport,
+      ...getResolutionDimensions(),
+      fps,
+      withSound,
+      watermark: includeWatermark,
+      transition: transitionStyle,
+      quality: 'high',
+      abortSignal: abortControllerRef.current?.signal,
+      onProgress: (p) => {
+        const percentage = Math.round(p.ratio * 100);
+        setSequencerProgress({
+          overallRatio: p.ratio,
+          percentage,
+          currentSceneIndex: p.sceneIndex,
+          totalScenes: p.totalScenes,
+          currentSceneTitle: p.sceneTitle,
+          elapsedSeconds: Math.round((p.frame / fps) * 10) / 10,
+          totalDurationSeconds: Math.round((p.totalFrames / fps) * 10) / 10,
+          phase: p.phase === 'loading' || p.phase === 'rendering' ? 'recording' : p.phase,
+        });
+        setRecordingState(true, percentage);
+      },
+    });
   };
 
   // Handler: Abort Multi-Scene Recording
@@ -361,15 +410,15 @@ export const PublishModal: React.FC = () => {
                     <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
                       <button
                         onClick={() => setVideoFormat('mp4')}
-                        disabled={!supportedMimes.mp4}
+                        disabled={!supportedMimes.mp4 && !frameMp4}
                         className={`py-1.5 px-2 rounded font-mono text-[11px] font-semibold transition-colors ${
                           videoFormat === 'mp4'
                             ? 'bg-amber-500 text-slate-950 shadow'
-                            : supportedMimes.mp4
+                            : supportedMimes.mp4 || frameMp4
                             ? 'text-slate-300 hover:text-white'
                             : 'text-slate-600 cursor-not-allowed'
                         }`}
-                        title={supportedMimes.mp4 ? 'Native H.264/AVC MP4' : 'MP4 not supported in current browser'}
+                        title={frameMp4 ? 'Frame-perfect H.264 MP4 rendered through the OmniStage Player (WebCodecs)' : supportedMimes.mp4 ? 'Native H.264/AVC MP4' : 'MP4 not supported in current browser'}
                       >
                         .MP4 (AVC)
                       </button>
@@ -414,6 +463,12 @@ export const PublishModal: React.FC = () => {
                   </div>
                 </div>
 
+                <p className="text-[11px] text-slate-400">
+                  {videoFormat === 'mp4' && frameMp4
+                    ? 'MP4 renders frame by frame through the OmniStage Player (exact timing, any machine speed) with the soundtrack mixed in.'
+                    : 'Real-time recording of the studio viewport; keep this tab visible while it records.'}
+                </p>
+
                 {/* Second row of options */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/80 text-xs">
                   <div className="flex items-center gap-4">
@@ -425,6 +480,16 @@ export const PublishModal: React.FC = () => {
                         className="rounded border-slate-700 text-cyan-500 focus:ring-0"
                       />
                       <span className="text-slate-300">Overlay Scene HUD Badge</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none" title="Mood music, ambience and timed SFX from each scene's soundtrack">
+                      <input
+                        type="checkbox"
+                        checked={withSound}
+                        onChange={(e) => setWithSound(e.target.checked)}
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-0"
+                      />
+                      <span className="text-slate-300">Soundtrack</span>
                     </label>
 
                     <div className="flex items-center gap-2 text-slate-400">

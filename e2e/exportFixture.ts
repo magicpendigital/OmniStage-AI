@@ -54,6 +54,7 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
     view3d: () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d) as Promise<{
       actors: Record<string, { position: number[]; yaw: number; clip?: string }>;
       camera: { position: number[]; fov: number };
+      world: string[];
     }>,
     /** Renders one frame and measures the canvas (mean luminance + spread) in the same task, before the buffer swap. */
     pixelStats: () =>

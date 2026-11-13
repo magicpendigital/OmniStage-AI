@@ -22,7 +22,10 @@ paths:
   are mirrored in `src/verification/sceneVerifier.ts` (`PLATFORMER_PHYSICS`). Change both together and re-run `npm test`.
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
-- Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`.
+- Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`. The film soundtrack is rendered by
+  `src/audio/soundtrack.ts` (pure, deterministic) and played by `soundtrackPlayback.ts` from the store — renderers never touch it.
+- Phase 10B world: biome presets are data (`src/runtime/biomes.ts`); water landmarks are built in `src/render3d/waterFeatures.ts`
+  and animate from `ctx.time` only. New scatter types go in `world3d.tsx` `scatterItem` + `DEFAULT_SCATTER_COLORS`.
 - Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or
   anything DOM-only beyond canvas; they read/write state via `runtimeStore` (`src/runtime/host.ts`). Renderers stay thin wrappers so the
   OmniStage Player runs the same code. Rebuild the Player (`npm run build:player`) after runtime changes.

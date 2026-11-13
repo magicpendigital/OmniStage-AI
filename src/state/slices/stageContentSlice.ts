@@ -142,6 +142,19 @@ export const createStageContentSlice = (set: StudioSet, get: StudioGet): StudioS
       };
     }),
 
+  updateSoundtrack: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (patch === null) delete nextSpec.soundtrack;
+      else nextSpec.soundtrack = { ...(nextSpec.soundtrack || {}), ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
+      };
+    }),
+
   updateSceneAudio: (patch, library) =>
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);

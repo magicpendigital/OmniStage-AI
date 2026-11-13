@@ -4,6 +4,7 @@
  */
 import { DEFAULT_WORLD_SPEC, cloneSceneSpec } from '../../registry/assetRegistry';
 import { syncGraphWithScene } from '../../runtime/graphSync';
+import { applyBiomeToScene } from '../../runtime/biomes';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
 
 export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
@@ -63,6 +64,41 @@ export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
         spreadRadius: 22,
         scaleRange: [0.8, 1.5],
       });
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  applyBiomePreset: (biome) =>
+    set((state) => {
+      const nextSpec = applyBiomeToScene(cloneSceneSpec(state.sceneSpec), biome);
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: syncGraphWithScene(nextSpec),
+      };
+    }),
+
+  addWorldFeature: (type) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const features = nextSpec.world.features || [];
+      // Default spots behind / beside the stage, clear of the acting area.
+      const spots: Record<typeof type, [number, number, number]> = { waterfall: [0, 0, -15], river: [-9, 0, 4], pond: [9, 0, -8] };
+      nextSpec.world.features = [...features, { id: `${type}-${Date.now().toString(36)}`, type, position: spots[type], size: 1 }];
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  removeWorldFeature: (id) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world.features = (nextSpec.world.features || []).filter((f) => f.id !== id);
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],

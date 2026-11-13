@@ -71,6 +71,11 @@ Bấm **Test connection** để kiểm tra. Mục "How the AI edits your scene" 
 
 **Export & Publish**:
 - **Video** (tab *Sequencer*): ghi cả storyboard thành **một file MP4/WebM** có chuyển cảnh — giống thứ tự của Preview.
+  MP4 được dựng từng khung hình qua OmniStage Player (đúng thời gian dù máy chậm) và **có âm thanh**: nhạc theo cảm xúc, âm nền theo
+  bối cảnh và hiệu ứng âm thanh theo thời gian (tab *World* → *Film Soundtrack*). Cần Chrome/Edge bản mới (WebCodecs); trình duyệt
+  khác dùng chế độ ghi thời gian thực (WebM).
+- **Bối cảnh nhanh** (tab *World* → *Biome & Water*): rừng, đồng cỏ, bãi biển, sa mạc, núi tuyết, thung lũng thác nước, rừng đêm,
+  thành phố đêm — kèm thác, sông, hồ có nước chảy thật.
   Giữ tab trình duyệt hiển thị trong lúc ghi.
 - **HTML5 / ZIP**: game hoặc quảng cáo chơi được, chạy offline (TikTok, Meta, Telegram, itch.io…).
 - **.scenespec.json**: bản thiết kế dự án để mở lại hoặc đưa cho agent khác.

@@ -160,7 +160,12 @@ AVAILABLE 3D WORLD & ENVIRONMENT OPTIONS (sceneSpec.world):
 - skybox: 'daylight-sky' | 'sunset-atmosphere' | 'night-stars' | 'cyber-void' | 'studio-hdri' | 'overcast'
 - terrain.type: 'flat-grid' | 'grassy-hills' | 'desert-dunes' | 'snow-mountains' | 'ocean-island' | 'city-asphalt' | 'none'
 - weather.type: 'clear' | 'rain' | 'snow' | 'floating-embers' | 'foggy-mist'
-- scatterObjects[].type: 'pine-trees' | 'cyber-buildings' | 'rocks-boulders' | 'street-lights' | 'ancient-pillars' | 'crystal-clusters'
+- scatterObjects[].type: 'pine-trees' | 'broadleaf-trees' | 'palm-trees' | 'bushes' | 'flowers' | 'grass-tufts' | 'cacti' | 'rocks-boulders'
+  | 'cyber-buildings' | 'street-lights' | 'ancient-pillars' | 'crystal-clusters' (count <= 80 per layer; several layers fill the frame)
+- biome (fastest way to a full location): 'forest' | 'meadow' | 'beach' | 'desert' | 'snowy-peaks' | 'waterfall-valley' | 'night-forest' | 'city-night'.
+  world: { biome: 'forest' } alone is enough — OmniStage fills sky, terrain, props, water and outdoor lighting; add fields only to change them.
+- features (real animated water, never fake it with VFX beams): [{ id, type: 'waterfall' | 'river' | 'pond', position: [x, 0, z], rotationDeg?, size? }].
+  Keep them 6+ m from the stage centre, e.g. a waterfall behind the actors at [0, 0, -15] (its cliff faces +z), a river at [-9, 0, 4].
 
 AVAILABLE LIGHTING STUDIO PRESETS:
 ${lightingSummary}
@@ -197,6 +202,12 @@ AUTHORING & SPATIAL DESIGN RULES:
      move?: 'static'|'push-in'|'pull-out'|'pan-left'|'pan-right'|'crane-up'|'orbit', fov? (lens only: framing keeps the shot size) }]. Shots are hard cuts framed on the subject
      wherever it is; change shot every 2-4 s and when the action changes. Shots replace camera.mode in media scenes.
    - Keep moveTo targets within x/z ±8 and away from other actors; give both characters something to do when two are on screen.
+12. SOUND (media mode — a silent film feels unfinished): sceneSpec.soundtrack = {
+     music: { mood: 'calm'|'happy'|'playful'|'adventure'|'epic'|'tense'|'sad'|'mysterious'|'none', volume? },
+     ambience: { type: 'auto' (follows the biome / water / weather) | 'forest'|'meadow'|'beach'|'river'|'waterfall'|'rain'|'wind'|'night'|'city'|'cave'|'space'|'none' },
+     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }] }.
+   Everything is synthesised (no audio URLs). Pick the mood from the beat, keep the same mood across consecutive shots of one sequence
+   (the music then continues across the cut), and put cues on the script's actions (a splash when someone reaches the water, a whoosh on a fast move).
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 
@@ -283,8 +294,9 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
   * Higher difficulty => narrower platforms, more pits, more stars, shorter timeLimitSeconds (min 15).
 - Set mode to "game" for levels and "media" for film shots.
 - MEDIA SHOTS: turn the beat's "script" into actors[].performance and camera.shots (see ACTING & SHOTS) so the scene actually happens on
-  screen; captions carry the script's caption lines at the same times. Fill the frame: world.terrain + at least 2 scatterObjects layers
-  (or an HDRI) matching the place; never leave a bare grid floor (environment.groundGrid false for films).`;
+  screen; captions carry the script's caption lines at the same times. Fill the frame: world.biome (or world.terrain + at least 2
+  scatterObjects layers, or an HDRI) matching the place, world.features for water the script mentions; never leave a bare grid floor
+  (environment.groundGrid false for films). Give every shot a soundtrack (mood + ambience 'auto' + cues on the actions, see SOUND).`;
 }
 
 export function buildStoryboardSceneUserPrompt(params: {

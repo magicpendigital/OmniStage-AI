@@ -10,6 +10,7 @@ import { DEFAULT_WORLD_SPEC } from '../registry/assetRegistry';
 import {
   createClouds, createScatterLayer, createSky, createStars, createTerrain, createWater, createWeather, waterLevelFor,
 } from '../render3d/world3d';
+import { createWaterFeature } from '../render3d/waterFeatures';
 import { Built } from './Built';
 
 export { computeTerrainHeight } from '../runtime/world';
@@ -46,8 +47,13 @@ export const WorldRenderer: React.FC = () => {
       <Built factory={() => createClouds(world)} deps={[clouds.enabled, clouds.density, clouds.speed, clouds.color]} />
       <Built factory={() => createWeather(world)} deps={[weather.type, weather.intensity]} />
       {(world.scatterObjects || []).map((layer) => (
-        <Built key={layer.id} factory={() => createScatterLayer(layer, terrain.type, terrain.elevationScale)}
-          deps={[layer, terrain.type, terrain.elevationScale]} />
+        <Built key={layer.id} factory={() => createScatterLayer(layer, terrain.type, terrain.elevationScale, world.features || [])}
+          deps={[layer, terrain.type, terrain.elevationScale, JSON.stringify(world.features || [])]} />
+      ))}
+      {/* Phase 10B: waterfalls, rivers and ponds */}
+      {(world.features || []).map((f) => (
+        <Built key={f.id} factory={() => createWaterFeature(f, terrain.type, terrain.elevationScale)}
+          deps={[JSON.stringify(f), terrain.type, terrain.elevationScale]} />
       ))}
     </group>
   );

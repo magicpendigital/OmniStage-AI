@@ -35,17 +35,38 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
     id: 'scene-dressing',
     title: 'Scene Dressing',
     description: 'Fill the frame with a believable place: terrain, layered props, sky, weather and light that match the story.',
-    triggers: ['rừng', 'forest', 'bối cảnh', 'background', 'outdoor', 'núi', 'mountain', 'suối', 'river', 'biển', 'beach', 'thành phố', 'city', 'làng', 'village', 'đồi', 'hill', 'sa mạc', 'desert', 'tuyết', 'snow'],
+    triggers: ['rừng', 'forest', 'bối cảnh', 'thác', 'waterfall', 'hồ', 'lake', 'đồng cỏ', 'meadow', 'background', 'outdoor', 'núi', 'mountain', 'suối', 'river', 'biển', 'beach', 'thành phố', 'city', 'làng', 'village', 'đồi', 'hill', 'sa mạc', 'desert', 'tuyết', 'snow'],
     engine: '3d',
     mode: 'any',
     source: 'builtin',
     guidance: `SCENE DRESSING (sceneSpec.world + environment):
-- Never leave a bare floor in a film: environment.groundGrid = false, reflectivePedestal = false; set world.terrain to the place
+- Start from a biome: world.biome = 'forest' | 'meadow' | 'beach' | 'desert' | 'snowy-peaks' | 'waterfall-valley' | 'night-forest' |
+  'city-night' dresses sky, terrain, 4-6 prop layers, water and outdoor light in one word; override single fields only when the story needs it.
+- Water is real geometry: world.features [{ type: 'waterfall' | 'river' | 'pond', position, rotationDeg?, size? }] 6+ m from the stage
+  (waterfall behind the actors at [0, 0, -15]); never fake water with laser / beam VFX.
+- Without a biome: environment.groundGrid = false, reflectivePedestal = false; set world.terrain to the place
   (forest/hills → 'grassy-hills', snow → 'snow-mountains', coast → 'ocean-island', city → 'city-asphalt', desert → 'desert-dunes').
-- Layer props: one dense layer (count 30-60, spreadRadius 18-26) + one accent layer (count 8-16), e.g. pine-trees + rocks-boulders.
+- Layer props: one dense layer (count 30-60, spreadRadius 18-26) + accents (flowers, grass-tufts, bushes near the stage; trees far).
 - Sky, light and weather tell the time: morning 'daylight-sky' + clear; evening 'sunset-atmosphere' + 'floating-embers' (fireflies);
   night 'night-stars' + sparkles VFX near the characters. Progress the time of day across scenes.
 - Add 1-2 vfx accents where the action is (sparkles on magic, shockwave on a landing), with startTime at that moment.`,
+  },
+  {
+    id: 'sound-design',
+    title: 'Sound Design',
+    description: 'Mood music, location ambience and timed sound effects for films and ads (all synthesised).',
+    triggers: ['âm thanh', 'nhạc', 'sound', 'music', 'phim', 'film', 'movie', 'video', 'quảng cáo', 'ad', 'soundtrack'],
+    engine: 'any',
+    mode: 'media',
+    source: 'builtin',
+    guidance: `SOUND DESIGN (sceneSpec.soundtrack — every film shot needs one):
+- music.mood follows the beat: opening/discovery 'calm' or 'adventure'; play and friendship 'happy' / 'playful'; danger 'tense';
+  big reveal or victory 'epic'; loss 'sad'; magic or night secrets 'mysterious'. Keep one mood across consecutive shots of a sequence
+  so the score flows over the cuts; change it only when the story turns.
+- ambience.type 'auto' matches the place (biome, waterfall, river, rain, night); name one only to override (e.g. 'cave', 'space').
+- cues land on the action, from the script: footstep when a walk starts, splash at the water, whoosh on fast moves / camera whips,
+  pop or chime when something appears, powerup / win on a triumph, hit on a fall. 2-5 cues per 10 s; never stack two within 0.3 s.
+- Keep music.volume 0.4-0.6 under dialogue-heavy captions; 0.7 for montage.`,
   },
   {
     id: 'cinematic-shot-grammar',

@@ -228,8 +228,26 @@ the verifier only checks playability. Fix in layers: contract → production too
     which actor is `partner`; outdoor fog follows the sky horizon (dark studio fog made dark clouds / horizon); AI terrain without a
     colour gets a natural one (was near-black); leaving the page with unsaved work and no open project now asks first.
   - Not yet: sound (10B), dialogue (10C), a real waterfall / water props (the AI faked one with a laser beam).
-- [ ] **10B** Frame-stepped MP4 export with mixed audio (Player `step()` + WebCodecs/Mediabunny; MediaRecorder fallback); procedural
-  `soundtrack` (mood music, biome ambience, timed SFX) that also runs in playables; biome presets that fill the frame.
+- [x] **10B (done 2026-11-13)** Sound, biomes and a frame-perfect MP4:
+  - `sceneSpec.soundtrack` = mood music (calm / happy / playful / adventure / epic / tense / sad / mysterious), ambience ('auto' follows
+    the world: forest, meadow, beach, river, waterfall, rain, wind, night, city, cave, space) and timed SFX cues (new foley: chime,
+    splash, footstep, pop). `src/audio/soundtrack.ts` renders it to PCM in plain JS (wavetables, Karplus-Strong plucks, seeded noise),
+    deterministic and unit-tested; music sits on a global bar grid so same-mood shots continue across cuts. Live playback follows the
+    timeline in the studio, Preview and the Player (`soundtrackPlayback.ts`, installed by the audio bus).
+  - MP4 export (`src/exporter/filmExport.ts`): the exported Player runs in a hidden iframe with its clock stopped; each frame is one
+    `step(1/fps)`, composited (letterbox, transitions, 3D captions, badge) and encoded with WebCodecs via Mediabunny; the whole film's
+    soundtrack is muxed as AAC/Opus. The Player waits for its asset loads before frame 1. WebM / browsers without WebCodecs keep the
+    real-time sequencer, which now records the soundtrack too.
+  - Biomes (`src/runtime/biomes.ts`): forest, meadow, beach, desert, snowy-peaks, waterfall-valley, night-forest, city-night dress sky,
+    terrain, 4-6 prop layers (new: broadleaf trees, bushes, flowers, grass tufts, palms, cacti), water and outdoor light.
+    `world.features` = real animated waterfall (cliff, scrolling sheet, pool, foam, mist), river (meanders on the terrain) and pond;
+    props keep out of the water.
+  - AI: prompt sections for SOUND, biome and features; `sound-design` skill; normaliser keeps soundtrack / biome / features and expands
+    a bare `{ biome }`; offline director picks a biome (waterfall when asked) and a mood arc. Verifier: `media.silent` craft hint,
+    `soundtrack.invalid`, `world.biome-invalid`, `world.feature-invalid`, `world.feature-on-stage` (all auto-fixed).
+  - UI: World tab → Film Soundtrack panel, Biome & Water section; Publish → MP4 is frame-perfect with a Soundtrack switch.
+  - Tests: `tests/soundtrack.test.ts`, `tests/biomes.test.ts`, E2E waterfall-valley film in the exported Player.
+  - Not yet: dialogue / TTS (10C); footsteps synced to walk cycles; lighting presets per biome are a patch, not a full outdoor rig.
 - [ ] **10C** `dialogue[]` with in-browser Piper TTS (Vietnamese voice), auto captions, talk motion; CC0 Quaternius animation library retargeted.
 - [ ] **10D** Paid Production Tools via Settings/Extensions (ElevenLabs voice/music/SFX, Blockade skybox, Meshy animation), licences recorded
   in the project library; vision-model "director QA" scoring rendered keyframes → extra patch round.

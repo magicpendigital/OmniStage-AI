@@ -1,22 +1,20 @@
 /**
  * Phase 4 — Procedural SFX runtime (sfxr-style WebAudio synthesis, zero assets, zero dependencies).
- *
- * IMPORTANT: `createOmniSfxPlayer` must stay fully self-contained (no imports, no references to
- * module-level identifiers). The standalone playable exporter inlines it with
- * `createOmniSfxPlayer.toString()` so exported HTML5 ads get the exact same sounds offline.
+ * IMPORTANT: `createOmniSfxPlayer` must stay self-contained (no imports, no outer references) — tests rebuild it from
+ * `toString()`. Its recipe table mirrors ./sfxRecipes (used by the offline soundtrack renderer); tests/soundtrack.test.ts
+ * checks they match.
  */
-
 export interface OmniSfxPlayer {
   /** Plays a preset. Volume 0..1. Silently no-ops when WebAudio is unavailable. */
   play: (presetId: string, volume?: number) => void;
   /** Creates / resumes the AudioContext; call from a user gesture. */
   unlock: () => void;
   presets: string[];
+  /** Recipe table (tests check it matches BUILTIN_SFX_RECIPES). */
+  recipes: Record<string, any>;
 }
 
 export function createOmniSfxPlayer(extraPresets?: Record<string, any>): OmniSfxPlayer {
-  // wave: oscillator type or 'noise'; f0 → f1 frequency sweep; notes = arpeggio (Hz) stepped every `step` s;
-  // lp0 → lp1 = low-pass cutoff sweep (Hz). All times in seconds.
   var RECIPES: Record<string, any> = {
     coin: { wave: 'square', notes: [988, 1319], step: 0.07, dur: 0.26, vol: 0.2 },
     jump: { wave: 'square', f0: 220, f1: 560, dur: 0.18, vol: 0.18 },
@@ -28,6 +26,10 @@ export function createOmniSfxPlayer(extraPresets?: Record<string, any>): OmniSfx
     lose: { wave: 'triangle', notes: [392, 330, 262, 196], step: 0.16, dur: 0.8, vol: 0.3 },
     click: { wave: 'sine', f0: 1250, f1: 880, dur: 0.06, vol: 0.25 },
     whoosh: { wave: 'noise', dur: 0.45, vol: 0.35, lp0: 300, lp1: 3200, attack: 0.18 },
+    chime: { wave: 'sine', notes: [1568, 2093, 2637, 3136], step: 0.09, dur: 1.1, vol: 0.2 },
+    splash: { wave: 'noise', dur: 0.7, vol: 0.42, lp0: 5200, lp1: 380, attack: 0.012 },
+    footstep: { wave: 'noise', dur: 0.1, vol: 0.32, lp0: 900, lp1: 180, layer: { wave: 'sine', f0: 110, f1: 60 } },
+    pop: { wave: 'sine', f0: 380, f1: 980, dur: 0.09, vol: 0.32 },
   };
   // Phase 6: presets contributed by extensions (copied into SceneSpec.sfxLibrary).
   if (extraPresets) for (var key in extraPresets) if (!RECIPES[key]) RECIPES[key] = extraPresets[key];
@@ -115,5 +117,5 @@ export function createOmniSfxPlayer(extraPresets?: Record<string, any>): OmniSfx
     }
   }
 
-  return { play: play, unlock: function () { ensureContext(); }, presets: Object.keys(RECIPES) };
+  return { play: play, unlock: function () { ensureContext(); }, presets: Object.keys(RECIPES), recipes: RECIPES };
 }

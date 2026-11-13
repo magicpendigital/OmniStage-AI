@@ -17,6 +17,7 @@ import { buildCompositeActor } from '../render3d/compositeActors';
 import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/actorMotion';
 import { disposeObject } from '../render3d/h';
 import { createWorld } from '../render3d/world3d';
+import { trackLoad } from './loading';
 import { clickRunsBuiltIn } from '../runtime/gameSlice';
 import { matchClipName, performedActor, resolveShot } from '../runtime/cinematics';
 import { createContactShadows } from '../render3d/contactShadows';
@@ -54,7 +55,7 @@ function loadGltf(url: string) {
   if (!gltfCache.has(url)) {
     gltfCache.set(
       url,
-      new GLTFLoader().loadAsync(url).then((g) => {
+      trackLoad(new GLTFLoader().loadAsync(url)).then((g) => {
         (g.scene as any).animations = g.animations;
         return g.scene as any;
       })
@@ -111,7 +112,12 @@ export class View3D {
   inspect() {
     const actors: Record<string, { position: number[]; yaw: number; clip?: string }> = {};
     for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip };
-    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov } };
+    // Phase 10B: named world parts (water landmarks, scatter layers) for E2E checks.
+    const world: string[] = [];
+    this.world.traverse((o) => {
+      if (/^(WaterFeature|ScatterLayer)-/.test(o.name)) world.push(o.name);
+    });
+    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world };
   }
 
   private resize() {
@@ -151,7 +157,7 @@ export class View3D {
     this.hdriTexture = undefined;
     if (!hdri) return;
     const sceneId = this.sceneId;
-    new RGBELoader().loadAsync(this.resolveUrl(hdri.url)).then((tex) => {
+    trackLoad(new RGBELoader().loadAsync(this.resolveUrl(hdri.url))).then((tex) => {
       if (this.sceneId !== sceneId) return tex.dispose();
       tex.mapping = THREE.EquirectangularReflectionMapping;
       this.hdriTexture = tex;

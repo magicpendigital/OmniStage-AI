@@ -8,8 +8,10 @@
  */
 import * as THREE from 'three';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
-import type { ScatterLayerSpec, TerrainType, WorldSpec } from '../types/scene.schema';
+import type { ScatterLayerSpec, TerrainType, WorldFeatureSpec, WorldSpec } from '../types/scene.schema';
 import { computeTerrainHeight, SKY_PALETTES } from '../runtime/world';
+import { featureFootprint } from '../runtime/biomes';
+import { createWaterFeature } from './waterFeatures';
 import { createGpuParticles } from './gpuParticles';
 import { disposeObject, h } from './h';
 import type { Built3D, FrameContext, RenderQuality } from './types';
@@ -22,6 +24,12 @@ export const DEFAULT_SCATTER_COLORS: Record<ScatterLayerSpec['type'], string> = 
   'street-lights': '#38bdf8',
   'ancient-pillars': '#cbd5e1',
   'crystal-clusters': '#ec4899',
+  'broadleaf-trees': '#3f8f3a',
+  bushes: '#3d7a2f',
+  flowers: '#f472b6',
+  'grass-tufts': '#5f9a35',
+  'palm-trees': '#2f8a3c',
+  cacti: '#4d7c3a',
 };
 
 // ------------------------------------------------------------------ sky
@@ -281,13 +289,113 @@ function scatterItem(type: ScatterLayerSpec['type'], position: [number, number, 
           </mesh>
         </group>
       );
+    case 'broadleaf-trees':
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          <mesh position={[0, 0.7, 0]} castShadow receiveShadow>
+            <cylinderGeometry args={[0.13, 0.2, 1.4, 7]} />
+            <meshStandardMaterial color="#6b4423" roughness={0.9} />
+          </mesh>
+          <mesh position={[0, 1.95, 0]} castShadow receiveShadow>
+            <icosahedronGeometry args={[0.95, 1]} />
+            <meshStandardMaterial color={color} roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0.5, 1.65, 0.25]} castShadow receiveShadow>
+            <icosahedronGeometry args={[0.6, 1]} />
+            <meshStandardMaterial color={color} roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[-0.45, 1.7, -0.2]} castShadow receiveShadow>
+            <icosahedronGeometry args={[0.62, 1]} />
+            <meshStandardMaterial color={color} roughness={0.8} flatShading />
+          </mesh>
+        </group>
+      );
+    case 'bushes':
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          <mesh position={[0, 0.32, 0]} scale={[1.2, 0.8, 1]} castShadow receiveShadow>
+            <icosahedronGeometry args={[0.45, 1]} />
+            <meshStandardMaterial color={color} roughness={0.85} flatShading />
+          </mesh>
+          <mesh position={[0.4, 0.24, 0.1]} castShadow receiveShadow>
+            <icosahedronGeometry args={[0.3, 1]} />
+            <meshStandardMaterial color={color} roughness={0.85} flatShading />
+          </mesh>
+        </group>
+      );
+    case 'flowers': {
+      const petals = ['#f472b6', '#facc15', '#f8fafc', '#a78bfa', '#fb7185'];
+      const petal = color === DEFAULT_SCATTER_COLORS.flowers ? petals[Math.floor(rotationY * 10) % petals.length] : color;
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          {[[0, 0], [0.18, 0.1], [-0.15, 0.14], [0.05, -0.18]].map(([x, z], i) => (
+            <group position={[x, 0, z]}>
+              <mesh position={[0, 0.14 + i * 0.02, 0]}>
+                <cylinderGeometry args={[0.012, 0.012, 0.28 + i * 0.04, 4]} />
+                <meshStandardMaterial color="#3f7d2a" roughness={0.9} />
+              </mesh>
+              <mesh position={[0, 0.3 + i * 0.04, 0]}>
+                <sphereGeometry args={[0.055, 6, 5]} />
+                <meshStandardMaterial color={petal} roughness={0.6} emissive={petal} emissiveIntensity={0.12} />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      );
+    }
+    case 'grass-tufts':
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <mesh position={[Math.cos(i * 1.3) * 0.08, 0.16, Math.sin(i * 1.3) * 0.08]} rotation={[Math.cos(i * 2.1) * 0.35, i * 1.3, Math.sin(i * 2.1) * 0.35]}>
+              <coneGeometry args={[0.035, 0.36, 3]} />
+              <meshStandardMaterial color={color} roughness={0.9} />
+            </mesh>
+          ))}
+        </group>
+      );
+    case 'palm-trees':
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          {[0, 1, 2, 3].map((i) => (
+            <mesh position={[i * 0.06, 0.45 + i * 0.85, 0]} rotation={[0, 0, -0.06 * i]} castShadow>
+              <cylinderGeometry args={[0.12 - i * 0.012, 0.15 - i * 0.012, 0.9, 7]} />
+              <meshStandardMaterial color="#8b6b43" roughness={0.9} />
+            </mesh>
+          ))}
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <mesh position={[0.24 + Math.cos(i * 1.047) * 0.7, 3.35, Math.sin(i * 1.047) * 0.7]} rotation={[Math.sin(i * 1.047) * 0.5, -i * 1.047, -Math.cos(i * 1.047) * 0.5]} scale={[1.6, 0.12, 0.45]} castShadow>
+              <sphereGeometry args={[0.5, 8, 4]} />
+              <meshStandardMaterial color={color} roughness={0.8} />
+            </mesh>
+          ))}
+        </group>
+      );
+    case 'cacti':
+      return (
+        <group position={position} scale={scale} rotation={[0, rotationY, 0]}>
+          <mesh position={[0, 0.8, 0]} castShadow receiveShadow>
+            <capsuleGeometry args={[0.2, 1.2, 4, 8]} />
+            <meshStandardMaterial color={color} roughness={0.8} />
+          </mesh>
+          <mesh position={[0.32, 0.95, 0]} rotation={[0, 0, -0.2]} castShadow>
+            <capsuleGeometry args={[0.11, 0.5, 4, 8]} />
+            <meshStandardMaterial color={color} roughness={0.8} />
+          </mesh>
+          <mesh position={[-0.3, 1.2, 0]} rotation={[0, 0, 0.25]} castShadow>
+            <capsuleGeometry args={[0.1, 0.4, 4, 8]} />
+            <meshStandardMaterial color={color} roughness={0.8} />
+          </mesh>
+        </group>
+      );
     default:
       return null;
   }
 }
 
 /** Golden-angle placement keeps the play area (radius 5.2) clear; capped at 80 props per layer. */
-export function scatterPlacements(layer: ScatterLayerSpec, terrainType: TerrainType, elevationScale: number) {
+export function scatterPlacements(layer: ScatterLayerSpec, terrainType: TerrainType, elevationScale: number, features: WorldFeatureSpec[] = []) {
+  const keepOut = features.map(featureFootprint);
   const items: Array<{ pos: [number, number, number]; scale: number; rotY: number }> = [];
   const count = Math.min(layer.count, 80);
   const minRadius = 5.2;
@@ -297,17 +405,18 @@ export function scatterPlacements(layer: ScatterLayerSpec, terrainType: TerrainT
     const r = minRadius + Math.sqrt((i + 0.5) / Math.max(1, count)) * (outerRadius - minRadius);
     const x = Math.cos(golden) * r;
     const z = Math.sin(golden) * r;
+    if (keepOut.some((f) => f.contains(x, z))) continue;
     const scale = layer.scaleRange[0] + (((i * 17) % 100) / 100) * Math.max(0.05, layer.scaleRange[1] - layer.scaleRange[0]);
     items.push({ pos: [x, computeTerrainHeight(terrainType, x, z, elevationScale), z], scale, rotY: ((i * 43) % 360) * (Math.PI / 180) });
   }
   return items;
 }
 
-export function createScatterLayer(layer: ScatterLayerSpec, terrainType: TerrainType, elevationScale: number): Built3D<THREE.Group> {
+export function createScatterLayer(layer: ScatterLayerSpec, terrainType: TerrainType, elevationScale: number, features: WorldFeatureSpec[] = []): Built3D<THREE.Group> {
   const color = layer.color || DEFAULT_SCATTER_COLORS[layer.type] || '#15803d';
   const group = new THREE.Group();
   group.name = `ScatterLayer-${layer.id}`;
-  for (const item of scatterPlacements(layer, terrainType, elevationScale)) {
+  for (const item of scatterPlacements(layer, terrainType, elevationScale, features)) {
     const obj = scatterItem(layer.type, item.pos, item.scale, item.rotY, color);
     if (obj) group.add(obj);
   }
@@ -340,7 +449,8 @@ export function createWorld(world: WorldSpec, opts: WorldBuildOptions): Built3D<
   if (level !== null) add(createWater(world, level, opts.quality, opts.reflectionSize));
   add(createClouds(world));
   add(createWeather(world));
-  for (const layer of world.scatterObjects || []) add(createScatterLayer(layer, world.terrain.type, world.terrain.elevationScale));
+  for (const layer of world.scatterObjects || []) add(createScatterLayer(layer, world.terrain.type, world.terrain.elevationScale, world.features || []));
+  for (const f of world.features || []) add(createWaterFeature(f, world.terrain.type, world.terrain.elevationScale));
   return {
     object: group,
     update(ctx: FrameContext) {

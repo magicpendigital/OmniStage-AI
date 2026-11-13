@@ -4,6 +4,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { openExport, template } from './exportFixture';
+import { applyBiomeToScene } from '../src/runtime/biomes';
 
 const PLAYER_3D = 's.sceneSpec.actors.find((a) => a.physicsRole === "player").position';
 
@@ -110,5 +111,24 @@ test('3D film: performance walks the hero and the shot list cuts the camera (Pha
   const closeDist = Math.hypot(t7.camera.position[0] - 3, t7.camera.position[2]);
   expect(closeDist).toBeLessThan(wideDist / 2);
   expect(t7.camera.fov).toBeLessThan(t35.camera.fov);
+  expect(p.errors).toEqual([]);
+});
+
+test('3D biome film: waterfall valley renders its landmarks and animates the water (Phase 10B)', async ({ page }) => {
+  const spec = applyBiomeToScene(template('blank-3d-authoring'), 'waterfall-valley');
+  spec.mode = 'media';
+  spec.durationSeconds = 6;
+  spec.soundtrack = { music: { mood: 'adventure' }, ambience: { type: 'auto' }, cues: [{ time: 1, sfx: 'splash' }] };
+  spec.camera.shots = [{ start: 0, type: 'establishing', subject: spec.actors[0].id }];
+  const p = await openExport(page, spec);
+  await p.step(10, 0.05);
+  const world = (await p.view3d()).world;
+  for (const f of spec.world.features!) expect(world).toContain(`WaterFeature-${f.id}`);
+  expect(world.filter((n) => n.startsWith('ScatterLayer-')).length).toBe(spec.world.scatterObjects.length);
+  const a = await p.pixelStats();
+  await p.step(20, 0.05);
+  const b = await p.pixelStats();
+  expect(a.std, 'a dressed outdoor frame, not a flat colour').toBeGreaterThan(8);
+  expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std), 'water and actors move').toBeGreaterThan(0);
   expect(p.errors).toEqual([]);
 });

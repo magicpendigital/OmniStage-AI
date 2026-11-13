@@ -1,6 +1,7 @@
 /**
  * Phase 7C — StudioState and the types shared by the store slices (src/state/slices/*).
  */
+import { BiomeId, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
 import { ActorNode, AspectRatioPreset, CameraMode, CaptionCue, ChatMessage, DirectorSkill, EngineType, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
@@ -174,6 +175,10 @@ export interface StudioState {
   updateWeather: (patch: Partial<WorldSpec['weather']>) => void;
   addScatterLayer: (type: ScatterObjectType) => void;
   removeScatterLayer: (id: string) => void;
+  /** Phase 10B: dress the world (sky, terrain, props, water, outdoor light) from a biome preset. */
+  applyBiomePreset: (biome: BiomeId) => void;
+  addWorldFeature: (type: WorldFeatureType) => void;
+  removeWorldFeature: (id: string) => void;
 
   // 3D Actor & Custom GLB Actions
   selectActor: (id: string | null) => void;
@@ -239,6 +244,8 @@ export interface StudioState {
   markSkillsUsed: (skillIds: string[]) => void;
   /** `library` copies extension SFX recipes into SceneSpec.sfxLibrary in the same undo step. */
   updateSceneAudio: (patch: Partial<SceneAudioSpec>, library?: Record<string, SfxRecipe>) => void;
+  /** Phase 10B: set / merge the scene soundtrack (null removes it). */
+  updateSoundtrack: (patch: Partial<SoundtrackSpec> | null) => void;
 
   // Phase 6 batch 2: play test, full preview, guide
   openPlayTest: (startSceneId?: string) => void;
