@@ -6,6 +6,7 @@ import { generateStandaloneHTMLContent, buildStandalonePlayable } from '../src/e
 import { collectAssetUrls, embedAssets, inlineJSON } from '../src/exporter/playerHtml';
 import { analyzePlayableBudget } from '../src/exporter/playableBundle';
 import { PLAYER_RUNTIME, PLAYER_RUNTIME_VERSION } from '../src/exporter/generated/playerRuntime';
+import { PLAYER_RUNTIME_WEBGPU, PLAYER_RUNTIME_WEBGPU_VERSION } from '../src/exporter/generated/playerRuntimeWebgpu';
 import type { SceneSpec } from '../src/types/scene.schema';
 
 function gameScene(engine: '2d' | '3d', title: string): SceneSpec {
@@ -20,6 +21,11 @@ test('the generated Player runtime is up to date with src/player + src/runtime',
   const { buildPlayer } = await import('../scripts/build-player.mjs');
   const { hash } = await buildPlayer();
   assert.equal(hash, PLAYER_RUNTIME_VERSION, 'run `npm run build:player` and commit src/exporter/generated/playerRuntime.ts');
+  // Phase 7: the WebGPU build too — and the WebGL build must not carry three/webgpu.
+  const gpu = await buildPlayer({ webgpu: true });
+  assert.equal(gpu.hash, PLAYER_RUNTIME_WEBGPU_VERSION, 'run `npm run build:player` (WebGPU runtime is stale)');
+  assert.ok(!PLAYER_RUNTIME.includes('WebGPURenderer'), 'the WebGL Player must not bundle three/webgpu');
+  assert.ok(PLAYER_RUNTIME_WEBGPU.length > PLAYER_RUNTIME.length);
 });
 
 test('player store runs the same game slice as the studio (score, win, retry, timer)', () => {

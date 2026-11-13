@@ -568,6 +568,8 @@ export interface StandalonePlayerOptions {
   /** Phase 6 batch 2: show an FPS / frame-time meter (Play Test). */
   showFps?: boolean;
   quality?: 'auto' | 'low' | 'high';
+  /** Phase 7: renderer of the exported Player ('webgl' = smallest file; 'auto' / 'webgpu' embed the WebGPU build). */
+  renderer?: 'webgl' | 'webgpu' | 'auto';
 }
 
 export interface PlayableBuildResult {
@@ -701,10 +703,13 @@ export function generateStandaloneHTMLContent(
     sound: options.enableProceduralAudio !== false,
     showFps: options.showFps,
     quality: options.quality,
+    renderer: options.renderer,
   });
 }
 
-export async function loadPlayerRuntime(): Promise<string> {
+/** The Player runtime for a renderer choice: the WebGPU build (bigger) only when WebGPU may be used. */
+export async function loadPlayerRuntime(renderer: 'webgl' | 'webgpu' | 'auto' = 'webgl'): Promise<string> {
+  if (renderer !== 'webgl') return (await import('./generated/playerRuntimeWebgpu')).PLAYER_RUNTIME_WEBGPU;
   const mod = await import('./generated/playerRuntime');
   return mod.PLAYER_RUNTIME;
 }
@@ -718,7 +723,7 @@ export async function buildStandalonePlayable(
   scenes?: SceneSpec[],
   options?: StandalonePlayerOptions & { offline?: boolean; fetcher?: typeof defaultFetcher }
 ): Promise<PlayableBuildResult> {
-  const playerRuntimeSource = options?.playerRuntimeSource ?? (await loadPlayerRuntime());
+  const playerRuntimeSource = options?.playerRuntimeSource ?? (await loadPlayerRuntime(options?.renderer));
   const all = scenes && scenes.length ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s)) : [sceneSpec];
   let embed: EmbedResult | undefined;
   let assets = options?.assets;

@@ -16,6 +16,16 @@ export default defineConfig({
     channel: process.env.OMNI_E2E_CHANNEL || 'chrome',
     headless: true,
     viewport: { width: 960, height: 540 },
+    // Software rendering (SwiftShader): stable on every machine. WebGPU tests skip here (no adapter).
     launchOptions: { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] },
   },
+  projects: [
+    { name: 'default' },
+    // Phase 7: WebGPU parity on the real GPU (npm run test:e2e:gpu).
+    {
+      name: 'gpu',
+      testMatch: 'webgpu.e2e.ts',
+      use: { launchOptions: { args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--enable-gpu'] } },
+    },
+  ],
 });

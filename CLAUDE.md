@@ -11,6 +11,7 @@ npm run dev           # tsx server.ts on :3000 (PORT env overrides)
 npm run mcp -- --project projects/x.scenespec.json   # OmniStage MCP server (stdio)
 npm run build:player                                  # regenerate the OmniStage Player bundle after changing src/player or src/runtime
 npm run test:e2e      # Playwright: exported Player in the installed Chrome, frame-stepped (after Player/runtime/render3d changes)
+npm run test:e2e:gpu  # WebGPU vs WebGL pixel parity on the real GPU (after render3d / render3d/webgpu changes)
 ```
 
 Verification loop: change → `npm run verify` → fix until exit code 0. Do not eyeball results or skip failing tests.

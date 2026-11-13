@@ -3,6 +3,7 @@
  * now also used by the OmniStage Player). Each frame `prerender` draws the scene's depth from below into a small
  * render target, blurs it twice, and a transparent ground plane shows the result.
  */
+import { nodeBackend } from './backend';
 import * as THREE from 'three';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import { HorizontalBlurShader } from 'three/examples/jsm/shaders/HorizontalBlurShader.js';
@@ -22,6 +23,12 @@ export interface ContactShadowOptions {
 }
 
 export function createContactShadows(opts: ContactShadowOptions = {}): Built3D<THREE.Group> {
+  // The depth-pass trick relies on WebGL shader hooks; under WebGPU the renderer's shadow maps ground the actors instead.
+  if (nodeBackend()) {
+    const empty = new THREE.Group();
+    empty.name = 'ContactShadows (WebGPU: shadow maps)';
+    return { object: empty, dispose: () => undefined };
+  }
   const scale = opts.scale ?? 16;
   const far = opts.far ?? 5;
   const blur = opts.blur ?? 2;

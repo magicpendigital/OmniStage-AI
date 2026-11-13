@@ -16,7 +16,8 @@
     "mcp": "tsx mcp/server.ts",
     "review:agent": "bash scripts/agent-review.sh",
     "build:player": "node scripts/build-player.mjs",
-    "test:e2e": "node scripts/build-player.mjs && playwright test"
+    "test:e2e": "node scripts/build-player.mjs && playwright test --project=default",
+    "test:e2e:gpu": "node scripts/build-player.mjs && playwright test --project=gpu"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

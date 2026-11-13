@@ -6,6 +6,7 @@
  * editor viewport and every export render the same world. HDRI image lighting stays host-specific (drei Environment in
  * the studio, RGBELoader in the Player).
  */
+import { nodeBackend } from './backend';
 import * as THREE from 'three';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import type { ScatterLayerSpec, TerrainType, WorldFeatureSpec, WorldSpec } from '../types/scene.schema';
@@ -34,6 +35,8 @@ export const DEFAULT_SCATTER_COLORS: Record<ScatterLayerSpec['type'], string> = 
 
 // ------------------------------------------------------------------ sky
 export function createSky(world: WorldSpec): Built3D<THREE.Mesh> {
+  const nb = nodeBackend();
+  if (nb) return nb.sky(world);
   const uniforms = {
     uTime: { value: 0 }, uDuration: { value: 8 }, uZenith: { value: new THREE.Color() },
     uHorizon: { value: new THREE.Color() }, uSun: { value: new THREE.Vector3() }, uSunStrength: { value: 1 },
@@ -129,6 +132,8 @@ export function createTerrain(world: WorldSpec): Built3D<THREE.Mesh> | null {
 
 /** Planar-reflection water (high quality) or a cheap tinted plane (low quality / weak phones). */
 export function createWater(world: WorldSpec, level: number, quality: RenderQuality, reflectionSize = 512): Built3D {
+  const nb = nodeBackend();
+  if (nb) return nb.water(world, level, quality, reflectionSize);
   if (quality === 'low') {
     const geometry = new THREE.PlaneGeometry(140, 140);
     const material = new THREE.MeshStandardMaterial({ color: '#0b6f8c', transparent: true, opacity: 0.78, roughness: 0.12, metalness: 0.35 });

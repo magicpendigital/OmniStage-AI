@@ -4,6 +4,7 @@
  * Phase 7B — studio lighting rig, background / fog, studio reflection environment and reflective pedestal as plain
  * Three.js, shared by the studio SceneDirector and the OmniStage Player.
  */
+import { nodeBackend } from './backend';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { SceneSpec } from '../types/scene.schema';
@@ -55,6 +56,8 @@ export function createPedestal(env: Env): Built3D<THREE.Group> {
  */
 export function createGroundGrid(env: Env, opts: { size?: number; cellSize?: number; sectionSize?: number; fadeDistance?: number } = {}): Built3D<THREE.Mesh> {
   const size = opts.size ?? 30;
+  const nb = nodeBackend();
+  if (nb) return nb.grid(env, { size, cellSize: opts.cellSize ?? 1, sectionSize: opts.sectionSize ?? 5, fadeDistance: opts.fadeDistance ?? 24 });
   const geometry = new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2);
   const material = new THREE.ShaderMaterial({
     transparent: true,
@@ -125,6 +128,8 @@ export function applyBackgroundAndFog(scene: THREE.Scene, env: Env, world?: Pick
 
 /** Procedural studio reflections (RoomEnvironment through PMREM). Returns a disposer. */
 export function applyStudioEnvironment(renderer: THREE.WebGLRenderer, scene: THREE.Scene): () => void {
+  const nb = nodeBackend();
+  if (nb) return nb.studioEnvironment(renderer, scene);
   const pmrem = new THREE.PMREMGenerator(renderer);
   const room = new RoomEnvironment();
   const texture = pmrem.fromScene(room, 0.04).texture;

@@ -20,6 +20,8 @@ paths:
 - Exports run the OmniStage Player (`src/player/*`, bundled by `npm run build:player` into `src/exporter/generated/playerRuntime.ts`).
   Never add game logic to the exporter: put it in `src/runtime/*` so the studio and the Player share it. After changing `src/player`,
   `src/runtime` or anything they import, run `npm run build:player` (tests/player.test.ts fails on a stale bundle). Never hand-edit the generated file.
+- Two Player runtimes: `playerRuntime.ts` (WebGL, default, smallest) and `playerRuntimeWebgpu.ts` (built with `__OMNI_WEBGPU__`). Pick with
+  `loadPlayerRuntime(renderer)`; `npm run build:player` regenerates both and `tests/player.test.ts` checks both hashes.
 - Phase 10B MP4: `src/exporter/filmExport.ts` renders films frame by frame on the exported Player in a hidden iframe (`manual(true)` +
   `step(1/fps)`, wait for `pendingLoads() === 0`) and encodes with Mediabunny (WebCodecs). Read the stage canvas in the same task as
   `step()`; never add a real-time path to it. Sound comes from `renderFilmSoundtrack` (one render for the whole film, scene lengths in

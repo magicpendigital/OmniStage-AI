@@ -17,6 +17,7 @@ import { transitionInto, transitionOverlay } from '../runtime/cinematics';
 import { Hud, PLAYER_CSS } from './hud';
 import { pendingLoads } from './loading';
 import { registerVoiceAssets } from '../audio/voices';
+import { setNodeBackend } from '../render3d/backend';
 
 export interface OmniPlayerData {
   scenes: SceneSpec[];
@@ -31,7 +32,12 @@ export interface OmniPlayerOptions {
   /** Exported asset URL → data URI (embedded GLB / images) so the build works offline. */
   assets?: Record<string, string>;
   sound?: boolean;
+  /** Phase 7: 'webgpu' / 'auto' use WebGPU where the device has it (WebGPU build of the Player only), else WebGL. */
+  renderer?: 'webgl' | 'webgpu' | 'auto';
 }
+
+/** true only in the WebGPU build of the Player (scripts/build-player.mjs defines it); undefined in the studio. */
+declare const __OMNI_WEBGPU__: boolean | undefined;
 
 export interface OmniPlayerHandle {
   store: PlayerStore;
@@ -49,6 +55,8 @@ export interface OmniPlayerHandle {
   };
   /** Phase 10B: asset loads still in flight (frame-stepped capture waits for 0). */
   pendingLoads: () => number;
+  /** Phase 7: which renderer the 3D view uses ('pending' while WebGPU initialises). */
+  backend: () => 'webgl' | 'webgpu' | 'pending';
   /** Phase 10C: lay the frame out now (headless capture: off-screen iframes may never run ResizeObserver). */
   relayout: () => void;
   /** Phase 10B: the stage canvas currently shown (2D or 3D). */
@@ -90,6 +98,24 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   const resolveUrl = (url: string) => assets[url] || url;
   const quality = pickQuality(options.quality);
   const touch = options.touchControls === 'auto' || options.touchControls === undefined ? isTouchDevice() : options.touchControls;
+
+  // Phase 7: optional WebGPU. Frames wait until the device is ready; without a WebGPU adapter the Player stays on WebGL.
+  let backend: 'webgl' | 'webgpu' | 'pending' = 'webgl';
+  let sharedRenderer: any = null;
+  const wantsGpu = options.renderer === 'webgpu' || options.renderer === 'auto';
+  if (wantsGpu && typeof __OMNI_WEBGPU__ !== 'undefined' && __OMNI_WEBGPU__) {
+    backend = 'pending';
+    import('../render3d/webgpu')
+      .then(async (m) => {
+        const r = await m.createWebGPURenderer({ antialias: quality !== 'low' });
+        if (r) {
+          setNodeBackend(m.webgpuBackend);
+          sharedRenderer = r;
+          backend = 'webgpu';
+        } else backend = 'webgl';
+      })
+      .catch(() => { backend = 'webgl'; });
+  }
 
   const ctaUrl = () => store.getState().sceneSpec.marketingOverlay?.ctaUrl || '';
   const openCta = () => {
@@ -145,7 +171,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     const engine = store.getState().sceneSpec.engineType;
     if (engine === viewEngine && view) return;
     view?.dispose();
-    view = engine === '2d' ? new View2D(frame, runtimes['2d'], input, resolveUrl) : new View3D(frame, runtimes['3d'], input, resolveUrl, quality);
+    view = engine === '2d' ? new View2D(frame, runtimes['2d'], input, resolveUrl) : new View3D(frame, runtimes['3d'], input, resolveUrl, quality, sharedRenderer || undefined);
     frame.insertBefore(view.canvas, hud.root);
     viewEngine = engine;
   };
@@ -170,6 +196,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   let last = performance.now();
   let lastAspect = '';
   const tick = (dt: number) => {
+    if (backend === 'pending') return;
     input.pollGamepads();
     ensureView();
     const aspectKey = store.getState().sceneSpec.aspectRatio;
@@ -221,7 +248,9 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     },
     setKey: (key, down) => input.setVirtualKey(key.toLowerCase(), down),
     pendingLoads,
+    backend: () => backend,
     relayout: () => {
+      if (backend === 'pending') return;
       ensureView();
       layout();
       if (view instanceof View3D) view.resize();

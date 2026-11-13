@@ -87,6 +87,8 @@ export const PublishModal: React.FC = () => {
   const [enableMobileTouch, setEnableMobileTouch] = useState<boolean>(true);
   const [enableAudioSynth, setEnableAudioSynth] = useState<boolean>(true);
   const [offlineRuntime, setOfflineRuntime] = useState<boolean>(true);
+  // Phase 7: renderer of the exported Player (WebGPU build is ~640 KB larger)
+  const [playerRenderer, setPlayerRenderer] = useState<'webgl' | 'auto'>('webgl');
   const [lastBudget, setLastBudget] = useState<PlayableBudgetReport | null>(null);
 
   // UI Feedback
@@ -240,6 +242,7 @@ export const PublishModal: React.FC = () => {
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
       offline: offlineRuntime,
+      renderer: playerRenderer,
     });
     setLastBudget(budget);
     triggerToast(`Exported ${network.toUpperCase()} Standalone HTML5 Game (${scenes.length} scene${scenes.length > 1 ? 's' : ''})`);
@@ -252,6 +255,7 @@ export const PublishModal: React.FC = () => {
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
       offline: offlineRuntime,
+      renderer: playerRenderer,
     });
     setLastBudget(budget);
     triggerToast(`Exported complete ${network.toUpperCase()} Game ZIP Package`);
@@ -766,6 +770,17 @@ export const PublishModal: React.FC = () => {
                     className="accent-cyan-500"
                   />
                   <span>Embed models & images for offline play (fits within the network size budget)</span>
+                </label>
+                <label className="flex items-center justify-between gap-2 text-slate-200">
+                  <span title="WebGPU draws the same scene with the newer GPU API where the phone / browser has it, and falls back to WebGL elsewhere">3D renderer</span>
+                  <select
+                    value={playerRenderer}
+                    onChange={(e) => setPlayerRenderer(e.target.value as 'webgl' | 'auto')}
+                    className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-100"
+                  >
+                    <option value="webgl">WebGL — smallest file, every device</option>
+                    <option value="auto">WebGPU where available, WebGL fallback (+~640 KB)</option>
+                  </select>
                 </label>
                 {lastBudget && (
                   <div

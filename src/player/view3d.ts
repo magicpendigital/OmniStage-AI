@@ -18,6 +18,7 @@ import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/
 import { disposeObject } from '../render3d/h';
 import { createWorld } from '../render3d/world3d';
 import { trackLoad } from './loading';
+import { nodeBackend } from '../render3d/backend';
 import { clickRunsBuiltIn } from '../runtime/gameSlice';
 import { matchClipName, performedActor, resolveShot } from '../runtime/cinematics';
 import { createContactShadows } from '../render3d/contactShadows';
@@ -92,8 +93,14 @@ export class View3D {
   private ro: ResizeObserver;
   private bloom?: PostFx;
 
-  constructor(private parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string, quality: QualityLevel) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: quality !== 'low', alpha: false, powerPreference: 'high-performance' });
+  /** Phase 7: 'webgpu' when a shared WebGPURenderer was handed in (its custom parts come from the node backend). */
+  readonly backend: 'webgl' | 'webgpu';
+  private ownsRenderer: boolean;
+
+  constructor(private parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string, quality: QualityLevel, sharedRenderer?: THREE.WebGLRenderer) {
+    this.backend = sharedRenderer ? 'webgpu' : 'webgl';
+    this.ownsRenderer = !sharedRenderer;
+    this.renderer = sharedRenderer || new THREE.WebGLRenderer({ antialias: quality !== 'low', alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, quality !== 'low' ? 2 : 1));
     this.renderer.shadowMap.enabled = quality !== 'low';
     configureRenderer(this.renderer);
@@ -102,7 +109,10 @@ export class View3D {
     this.canvas = this.renderer.domElement;
     this.canvas.className = 'omni-stage omni-stage-3d';
     parent.appendChild(this.canvas);
-    if (quality === 'ultra') this.bloom = createBloom(this.renderer, this.scene, this.camera);
+    if (quality === 'ultra') {
+      const nb = nodeBackend();
+      this.bloom = nb ? nb.bloom(this.renderer, this.scene, this.camera) : createBloom(this.renderer, this.scene, this.camera);
+    }
     this.scene.add(this.world, this.actorsGroup, this.fxGroup);
     this.canvas.addEventListener('pointerdown', this.onPointer);
     this.ro = new ResizeObserver(() => this.resize());
@@ -117,9 +127,9 @@ export class View3D {
     // Phase 10B: named world parts (water landmarks, scatter layers) for E2E checks.
     const world: string[] = [];
     this.world.traverse((o) => {
-      if (/^(WaterFeature|ScatterLayer)-/.test(o.name)) world.push(o.name);
+      if (/^(WaterFeature|ScatterLayer|GPU)-/.test(o.name)) world.push(o.name + (o.type === 'Sprite' ? ':sprite' : ''));
     });
-    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world };
+    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world, backend: this.backend };
   }
 
   /** Re-reads the frame size (ResizeObserver does it automatically; headless capture calls it directly). */
@@ -504,7 +514,8 @@ export class View3D {
     this.bloom?.dispose();
     this.ro.disconnect();
     this.canvas.removeEventListener('pointerdown', this.onPointer);
-    this.renderer.dispose();
+    // A shared WebGPU renderer outlives this view (switching 2D ↔ 3D scenes must not re-initialise the GPU device).
+    if (this.ownsRenderer) this.renderer.dispose();
     this.canvas.remove();
   }
 }

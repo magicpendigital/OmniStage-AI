@@ -3,6 +3,7 @@
  * fading run in the vertex shader from immutable seeds, so timeline scrubbing is reproducible. Shared by the studio
  * (GpuParticles.tsx wrapper) and the OmniStage Player.
  */
+import { nodeBackend } from './backend';
 import * as THREE from 'three';
 import type { Built3D, FrameContext } from './types';
 
@@ -119,6 +120,9 @@ function seedBuffers(count: number, spread: number) {
 }
 
 export function createGpuParticles(opts: GpuParticleOptions): Built3D<THREE.Points> {
+  // WebGPU has no large points: the node backend draws the same field as instanced sprites.
+  const nb = nodeBackend();
+  if (nb) return nb.particles(opts) as unknown as Built3D<THREE.Points>;
   const count = Math.min(4096, Math.max(0, Math.floor(Number.isFinite(opts.count) ? opts.count : 0)));
   const spread = opts.spread ?? 48;
   const { positions, seeds } = seedBuffers(count, spread);

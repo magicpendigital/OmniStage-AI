@@ -36,6 +36,8 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
   await page.goto('file://' + file.replace(/\\/g, '/'));
   await page.waitForFunction(() => !!(window as any).__omniPlayer);
   await page.evaluate(() => (window as any).__omniPlayer.manual(true));
+  // Phase 7: a WebGPU Player initialises its device first
+  await page.waitForFunction(() => (window as any).__omniPlayer.backend?.() !== 'pending', undefined, { timeout: 20000 });
 
   return {
     errors,
@@ -51,10 +53,17 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
     /** Live 2D physics body of a node (the store keeps authored positions). */
     body2D: (nodeId: string) => page.evaluate((id) => (window as any).__omniPlayer.inspect().bodies2D[id], nodeId) as Promise<{ x: number; y: number; collected: boolean }>,
     /** Live 3D actor poses and camera from the Player view. */
+    backend: () => page.evaluate(() => (window as any).__omniPlayer.backend()) as Promise<'webgl' | 'webgpu' | 'pending'>,
+    /** Steps once (so the view requests its models) and waits until every asset load has finished. */
+    waitAssets: async () => {
+      await page.evaluate(() => (window as any).__omniPlayer.step(0));
+      await page.waitForFunction(() => (window as any).__omniPlayer.pendingLoads() === 0, undefined, { timeout: 20000 });
+    },
     view3d: () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d) as Promise<{
       actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }>;
       camera: { position: number[]; fov: number };
       world: string[];
+      backend: 'webgl' | 'webgpu';
     }>,
     /** Renders one frame and measures the canvas (mean luminance + spread) in the same task, before the buffer swap. */
     pixelStats: () =>

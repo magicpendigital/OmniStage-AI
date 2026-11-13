@@ -176,11 +176,20 @@ so that moves to the front.
   2D platformer run (`inspect()` exposes live 2D bodies). Uses the installed Chrome (no browser download; `OMNI_E2E_CHANNEL` overrides).
 - [x] **Bug found by E2E**: when a logic graph reacted to a tap, the gift box skipped its own unbox counter, so "Tap to Unbox" could never
   be opened or won (studio and exports). Shared rule `clickRunsBuiltIn` (`src/runtime/gameSlice.ts`) now keeps unbox progress.
-- [ ] Later: optional WebGPU renderer (Three r17x WebGPURenderer + TSL) once the custom shaders are ported.
-  Assessment 2026-11-13: this is the only open Phase 7 item and it is a port, not a fix — WebGPURenderer cannot run the 7 custom
-  GLSL materials (sky, Reflector water, shader grid, contact shadows, GPU particles, ambient dust, Unreal bloom pass), each needs a TSL
-  rewrite, plus an async renderer path in the Player and R3F. WebGL2 already runs everywhere we ship (incl. iOS WebViews), so it is
-  kept as a separate, optional task (Player-only first, WebGL fallback, pixel-parity E2E).
+- [x] **WebGPU renderer for the Player (done 2026-11-13)** — Phase 7 complete.
+  - The custom GLSL parts are ported to TSL node materials (`src/render3d/webgpu`): shader sky, reflective water (`reflector()` node with
+    the same wave / fresnel / specular maths), the anti-aliased grid, GPU particles (instanced sprites — WebGPU has no large points; same
+    seeds and motion for all 7 kinds), node PMREM studio environment and node bloom (`RenderPipeline` + `BloomNode`) on Ultra.
+  - Builders stay shared: `src/render3d/backend.ts` routes those parts to the node backend only when the Player installed it; contact
+    shadows step aside under WebGPU (shadow maps ground the actors). The studio viewport stays on WebGL (R3F editor host).
+  - Two Player builds: the default WebGL runtime is unchanged (861 KB, no three/webgpu inside — a test checks it); the WebGPU runtime
+    (1.5 MB) is embedded only when an export picks "WebGPU where available" (Publish → 3D renderer, `renderer: 'auto' | 'webgpu'`).
+    It initialises the device before the first frame and falls back to WebGL when the device has no adapter. The MP4 exporter accepts
+    the same option.
+  - Tests: `tests/webgpu.test.ts` (backend switch, runtime selection); `e2e/webgpu.e2e.ts` renders the same scenes with both renderers at
+    the same frame (open world with water, waterfall valley + grid + snow, ultra bloom) — `npm run test:e2e:gpu` on the real GPU
+    (SwiftShader has no WebGPU adapter, so the default E2E run skips them).
+  - Not yet: WebGPU in the studio viewport (R3F async renderer); contact shadows as a node pass.
 
 ### Phase 8 — Mobile native (Android first, then iOS)
 - [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.

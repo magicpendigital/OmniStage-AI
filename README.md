@@ -74,6 +74,8 @@ Bấm **Test connection** để kiểm tra. Mục "How the AI edits your scene" 
   MP4 được dựng từng khung hình qua OmniStage Player (đúng thời gian dù máy chậm) và **có âm thanh**: nhạc theo cảm xúc, âm nền theo
   bối cảnh và hiệu ứng âm thanh theo thời gian (tab *World* → *Film Soundtrack*). Cần Chrome/Edge bản mới (WebCodecs); trình duyệt
   khác dùng chế độ ghi thời gian thực (WebM).
+- **WebGPU**: khi xuất HTML5 có thể chọn *3D renderer → WebGPU where available*: máy/trình duyệt có WebGPU sẽ vẽ bằng WebGPU, máy
+  khác tự quay về WebGL (file nặng hơn khoảng 640 KB). Mặc định vẫn là WebGL để file nhỏ nhất.
 - **Tự rig nhân vật (OmniRig)** (tab *Assets* → *Auto-rig a character*): nạp file GLB (người tư thế chữ T/A, thú bốn chân hoặc đồ
   vật), OmniRig tự dựng khung xương, trọng số skin, chấm điểm bằng tư thế thử (A–D) và tạo sẵn các động tác (đứng, đi, chạy, vẫy tay,
   nhảy, gật/lắc đầu, ngồi, nhảy múa). Kéo các khớp màu vàng để sửa nếu cần, rồi lưu vào *My Library* và đưa vào cảnh.

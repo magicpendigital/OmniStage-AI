@@ -34,6 +34,8 @@ export interface FilmExportOptions {
   height: number;
   fps?: number;
   quality?: 'high' | 'ultra';
+  /** Phase 7: render the frames with WebGPU where available (falls back to WebGL). */
+  renderer?: 'webgl' | 'webgpu' | 'auto';
   withSound?: boolean;
   watermark?: boolean;
   /** Fallback transition when a scene has none of its own. */
@@ -132,9 +134,9 @@ export async function exportFilmMP4(options: FilmExportOptions): Promise<{ ok: b
 
   // Exact scene lengths in whole frames, so picture and sound stay in sync to the frame.
   const timed = scenes.map((s, i) => ({ ...s, durationSeconds: frameCounts[i] / fps }));
-  const runtime = await loadPlayerRuntime();
+  const runtime = await loadPlayerRuntime(options.renderer);
   // Voice clips go in too, so talk motion follows the real voice in the captured frames.
-  const html = generatePlayerHTML(timed[0], 'universal', timed, { playerRuntimeSource: runtime, touchControls: false, sound: false, quality, assets: voiceClipAssets(timed) });
+  const html = generatePlayerHTML(timed[0], 'universal', timed, { playerRuntimeSource: runtime, touchControls: false, sound: false, quality, assets: voiceClipAssets(timed), renderer: options.renderer });
 
   const compositor = document.createElement('canvas');
   compositor.width = width;

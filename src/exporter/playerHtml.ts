@@ -16,6 +16,8 @@ export interface PlayerHtmlOptions {
   sound?: boolean;
   showFps?: boolean;
   quality?: 'auto' | 'low' | 'high' | 'ultra';
+  /** Phase 7: 'webgpu' / 'auto' need the WebGPU build of the runtime (PLAYER_RUNTIME_WEBGPU); WebGL is the fallback. */
+  renderer?: 'webgl' | 'webgpu' | 'auto';
 }
 
 /** JSON safe inside an inline <script> (no `</script>` / `<!--` breakouts). */
@@ -47,6 +49,7 @@ export function generatePlayerHTML(
     touchControls: opts.touchControls ?? 'auto',
     sound: opts.sound !== false,
     quality: opts.quality || 'auto',
+    renderer: opts.renderer || 'webgl',
   };
   const title = `${activeScene.title} — OmniStage`;
   const networkScripts =
