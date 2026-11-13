@@ -5,8 +5,9 @@ import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } f
 import { ActorNode, AspectRatioPreset, CameraMode, CaptionCue, ChatMessage, DirectorSkill, EngineType, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
-import { MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
+import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
 import type { StoreApi } from 'zustand';
+import { voiceClipAssets } from '../audio/voices';
 
 export interface FullPreviewState {
   order: string[];
@@ -30,7 +31,9 @@ export interface ExtensionReviewRequest {
 /** Studio-compatible bundle of the open game (same shape as Export → .scenespec.json and the MCP server). */
 export function buildProjectBundle(state: { sceneSpec: SceneSpec; scenes: SceneSpec[] }) {
   const scenes = state.scenes.length ? state.scenes.map((s) => (s.id === state.sceneSpec.id ? state.sceneSpec : s)) : [state.sceneSpec];
-  return { ...state.sceneSpec, projectBundleVersion: '3.1.0', activeSceneId: state.sceneSpec.id, scenes };
+  // Phase 10C: generated voices travel with the work (they would otherwise live only in this browser).
+  const voiceClips = voiceClipAssets(scenes);
+  return { ...state.sceneSpec, projectBundleVersion: '3.1.0', activeSceneId: state.sceneSpec.id, scenes, ...(Object.keys(voiceClips).length ? { voiceClips } : {}) };
 }
 
 export interface StoryboardJobState {
@@ -86,6 +89,12 @@ export interface StudioState {
   activeProject: ProjectMeta | null;
   activeGameId: string | null;
   projectSaveState: ProjectSaveState;
+  /** Autosaved draft (work without a project) in ~/OmniStage/drafts. */
+  activeDraftId: string | null;
+  draftSaveState: 'idle' | 'saving' | 'saved' | 'error';
+  draftSavedAt: string | null;
+  /** Drafts untouched for 30+ days, waiting for the user's keep / delete decision. */
+  staleDrafts: DraftSummary[];
   installedExtensions: InstalledExtension[];
   memories: MemoryEntry[];
   memoryEnabled: boolean;
@@ -272,6 +281,16 @@ export interface StudioState {
   openProjectGame: (project: ProjectMeta, gameId: string) => Promise<void>;
   closeProject: () => void;
   saveActiveGame: () => Promise<boolean>;
+  /** Autosave the current work as a draft (no project open). */
+  saveDraft: () => Promise<boolean>;
+  /** On start: reopen the latest draft and collect stale drafts for the clean-up dialog. */
+  restoreDrafts: () => Promise<void>;
+  openDraft: (id: string) => Promise<void>;
+  /** Move the current draft into a project as a new game and open it there. */
+  promoteDraftToProject: (project: ProjectMeta, name: string) => Promise<boolean>;
+  resolveStaleDraft: (id: string, action: 'keep' | 'delete') => Promise<void>;
+  /** Start a new piece of work (the next autosave writes a new draft). */
+  startNewDraft: () => void;
   markProjectDirty: () => void;
   refreshExtensions: () => Promise<void>;
   refreshMemory: () => Promise<void>;

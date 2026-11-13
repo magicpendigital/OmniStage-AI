@@ -19,6 +19,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { workspacePath } from '../workspace/workspaceClient';
 import { AspectRatioPreset, EngineType, StudioMode } from '../types/scene.schema';
 import { exportCanvasSnapshotPNG } from '../exporter/mediaExporter';
 import { startPreview } from '../guide/guideActions';
@@ -36,6 +37,10 @@ export const TopNavBar: React.FC = () => {
   const activeProject = useStudioStore((s) => s.activeProject);
   const activeGameId = useStudioStore((s) => s.activeGameId);
   const projectSaveState = useStudioStore((s) => s.projectSaveState);
+  const activeDraftId = useStudioStore((s) => s.activeDraftId);
+  const draftSaveState = useStudioStore((s) => s.draftSaveState);
+  const draftSavedAt = useStudioStore((s) => s.draftSavedAt);
+  const workspaceHome = useStudioStore((s) => s.workspaceHome);
   const setProjectHubOpen = useStudioStore((s) => s.setProjectHubOpen);
   const setExtensionsOpen = useStudioStore((s) => s.setExtensionsOpen);
   const saveActiveGame = useStudioStore((s) => s.saveActiveGame);
@@ -99,6 +104,15 @@ export const TopNavBar: React.FC = () => {
           <FolderOpen className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
           <span className="truncate">{projectLabel}</span>
         </button>
+        {!activeGameId && activeDraftId && (
+          <button
+            onClick={() => setProjectHubOpen(true)}
+            title={`Not in a project yet: autosaved as a draft in ${workspacePath(workspaceHome, 'drafts')}. Open Projects to save it into a project.`}
+            className={'text-[10px] font-mono px-1.5 py-0.5 rounded border ' + (draftSaveState === 'error' ? 'border-rose-500/50 text-rose-300' : 'border-amber-500/40 text-amber-300')}
+          >
+            {draftSaveState === 'saving' ? 'Saving draft…' : draftSaveState === 'error' ? 'Draft save failed' : `Draft · ${draftSavedAt ? new Date(draftSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'autosave'}`}
+          </button>
+        )}
         {activeGameId && (
           <button
             onClick={() => saveActiveGame()}

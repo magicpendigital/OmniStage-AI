@@ -22,6 +22,7 @@ import {
   updateProject,
 } from './projects';
 import { omniHome, WorkspaceError } from './store';
+import { keepDraft, listDrafts, loadDraft, promoteDraft, saveDraft, trashDraft } from './drafts';
 import { join } from 'node:path';
 
 const personalLibrary = () => new AssetStore(join(omniHome(), 'library'));
@@ -69,6 +70,14 @@ export function registerWorkspaceRoutes(app: Express) {
   r.get('/projects/:pid/games/:gid', route(async (req) => ({ bundle: await loadGame(req.params.pid, req.params.gid), path: gameFilePath(req.params.pid, req.params.gid) })));
   r.put('/projects/:pid/games/:gid', route((req) => saveGame(req.params.pid, req.params.gid, req.body?.bundle, req.body?.name)));
   r.delete('/projects/:pid/games/:gid', route((req) => trashGame(req.params.pid, req.params.gid)));
+
+  // Drafts: autosaved work without a project (moved into a project when the user saves it there)
+  r.get('/drafts', route(() => listDrafts()));
+  r.get('/drafts/:id', route((req) => loadDraft(req.params.id)));
+  r.put('/drafts/:id', route((req) => saveDraft(req.params.id, req.body?.bundle)));
+  r.post('/drafts/:id/keep', route((req) => keepDraft(req.params.id)));
+  r.post('/drafts/:id/promote', route((req) => promoteDraft(req.params.id, String(req.body?.projectId || ''), req.body?.name, req.body?.bundle)));
+  r.delete('/drafts/:id', route(async (req) => ({ trashedTo: await trashDraft(req.params.id) })));
 
   // Libraries (personal + project-shared)
   r.get('/library', route((req) => storeFor(String(req.query.scope || 'personal')).list()));

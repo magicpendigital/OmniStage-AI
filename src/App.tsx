@@ -19,6 +19,7 @@ import { GuideModal } from './components/GuideModal';
 import { WelcomeTour } from './components/WelcomeTour';
 import { useStudioStore } from './state/useStudioStore';
 import { useProjectAutosave } from './workspace/useProjectAutosave';
+import { StaleDraftsDialog } from './components/StaleDraftsDialog';
 
 export default function App() {
   // Phase 6: connect to the local workspace (projects, extensions, memory) and autosave the open game.
@@ -47,6 +48,7 @@ export default function App() {
 
       {/* Phase 6: projects, extensions and the install approval gate */}
       <ProjectHubModal />
+      <StaleDraftsDialog />
       <ExtensionsModal />
       <ExtensionReviewDialog />
 

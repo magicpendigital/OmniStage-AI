@@ -8,6 +8,7 @@
  *     library/{index.json, files/}                          (personal asset library, shared by all projects)
  *     extensions/<extensionId>/{manifest.json, main.js}     + extensions/registry.json
  *     memory/memory.json
+ *     drafts/<draftId>/draft.json                         (autosaved work not in a project yet; see drafts.ts)
  *     .trash/                                               (deleted projects/games land here, never hard-deleted)
  */
 import { promises as fs } from 'node:fs';

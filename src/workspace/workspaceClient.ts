@@ -54,6 +54,27 @@ export interface MemoryEntry {
   updatedAt: string;
 }
 
+/** Autosaved work that is not in a project yet (~/OmniStage/drafts). */
+export interface DraftSummary {
+  id: string;
+  title: string;
+  sceneCount: number;
+  engineType?: '2d' | '3d';
+  mode?: 'game' | 'media';
+  createdAt: string;
+  updatedAt: string;
+  keptAt?: string;
+  stale: boolean;
+  idleDays: number;
+}
+
+/** A folder inside the workspace home with the home's own separator (Windows paths stay Windows paths). */
+export function workspacePath(home: string | null | undefined, sub: string): string {
+  const base = home || '~/OmniStage';
+  const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/';
+  return `${base.replace(/[\\/]+$/, '')}${sep}${sub}`;
+}
+
 export class WorkspaceRequestError extends Error {
   constructor(message: string, public status: number) {
     super(message);
@@ -87,6 +108,14 @@ export const workspaceApi = {
   saveGame: (projectId: string, gameId: string, bundle: unknown) =>
     api<ProjectGameEntry>(`/projects/${projectId}/games/${gameId}`, { method: 'PUT', body: body({ bundle }) }),
   deleteGame: (projectId: string, gameId: string) => api(`/projects/${projectId}/games/${gameId}`, { method: 'DELETE' }),
+
+  listDrafts: () => api<DraftSummary[]>('/drafts'),
+  loadDraft: (id: string) => api<{ meta: DraftSummary; bundle: any }>(`/drafts/${id}`),
+  saveDraft: (id: string, bundle: unknown) => api<DraftSummary>(`/drafts/${id}`, { method: 'PUT', body: body({ bundle }) }),
+  keepDraft: (id: string) => api<DraftSummary>(`/drafts/${id}/keep`, { method: 'POST' }),
+  promoteDraft: (id: string, projectId: string, name: string, bundle?: unknown) =>
+    api<{ project: ProjectMeta; game: ProjectGameEntry }>(`/drafts/${id}/promote`, { method: 'POST', body: body({ projectId, name, bundle }) }),
+  deleteDraft: (id: string) => api<{ trashedTo: string }>(`/drafts/${id}`, { method: 'DELETE' }),
 
   listLibrary: (scope: string) => api<LibraryAsset[]>(`/library?scope=${encodeURIComponent(scope)}`),
   uploadToLibrary: (scope: string, file: File, extra: { tags?: string[]; source?: string; license?: string } = {}) => {

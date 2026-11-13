@@ -29,5 +29,8 @@ paths:
 - Phone preview: `/play/:token` is the ONLY route meant for the LAN. Keep tokens random (crypto) with an expiry, never serve workspace
   files through it, and keep session creation behind `isLoopbackRequest`. Play Test iframes stay `sandbox="allow-scripts allow-pointer-lock"`
   (no same-origin). Guide content changes need both `vi` and `en` with the same number of steps (`tests/playAndGuide.test.ts`).
+- Drafts (`server/workspace/drafts.ts`, `~/OmniStage/drafts`): work without a project autosaves there (studio `saveDraft`), the latest
+  draft reopens on start, saving it into a project MOVES it (`promoteDraft`, draft folder to the trash). Drafts idle 30+ days are only
+  ever removed after the user chooses Delete in `StaleDraftsDialog` (keep restarts the clock). Saved bundles carry `voiceClips`.
 - Memory is user data: only explicit commands or user-confirmed suggestions are stored; keep `selectMemories` scoped (never leak another
   project's memories) and keep `tests/extensions.test.ts` / `tests/workspace.test.ts` green.

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, FolderPlus, Gamepad2, Film, Layers, Loader2, Plus, Trash2, X } from 'lucide-react';
+import { FileClock, FolderOpen, FolderPlus, Gamepad2, Film, Layers, Loader2, Plus, Trash2, X } from 'lucide-react';
 import { buildProjectBundle, useStudioStore } from '../state/useStudioStore';
 import { createBlankSceneSpec } from '../registry/assetRegistry';
-import { ProjectMeta, workspaceApi } from '../workspace/workspaceClient';
+import { DraftSummary, ProjectMeta, workspaceApi, workspacePath } from '../workspace/workspaceClient';
 
 const KIND_ICON = { game: Gamepad2, media: Film, collection: Layers };
 
@@ -18,6 +18,10 @@ export const ProjectHubModal: React.FC = () => {
   const activeProject = useStudioStore((s) => s.activeProject);
   const activeGameId = useStudioStore((s) => s.activeGameId);
   const openProjectGame = useStudioStore((s) => s.openProjectGame);
+  const activeDraftId = useStudioStore((s) => s.activeDraftId);
+  const openDraft = useStudioStore((s) => s.openDraft);
+  const promoteDraftToProject = useStudioStore((s) => s.promoteDraftToProject);
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -29,8 +33,9 @@ export const ProjectHubModal: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const list = await workspaceApi.listProjects();
+      const [list, draftList] = await Promise.all([workspaceApi.listProjects(), workspaceApi.listDrafts().catch(() => [] as DraftSummary[])]);
       setProjects(list);
+      setDrafts(draftList);
       setSelectedId((cur) => cur ?? activeProject?.id ?? list[0]?.id ?? null);
     } catch (e: any) {
       setError(e?.message || 'Could not load projects');
@@ -64,6 +69,13 @@ export const ProjectHubModal: React.FC = () => {
 
   const createGame = async () => {
     if (!selected) return;
+    // Work without a project lives as an autosaved draft: saving it here MOVES it into the project folder.
+    if (newGame.from === 'current' && !activeGameId) {
+      const ok = await promoteDraftToProject(selected, newGame.name || drafts.find((d) => d.id === activeDraftId)?.title || 'Untitled game');
+      if (ok) setNewGame({ name: '', from: 'current' });
+      else setError('Could not save the draft into this project');
+      return;
+    }
     const state = useStudioStore.getState();
     const bundle =
       newGame.from === 'current'
@@ -86,6 +98,13 @@ export const ProjectHubModal: React.FC = () => {
     if (!selected || !window.confirm('Move this game to ~/OmniStage/.trash?')) return;
     await workspaceApi.deleteGame(selected.id, gameId);
     if (activeGameId === gameId) useStudioStore.getState().closeProject();
+    await reload();
+  };
+
+  const deleteDraft = async (id: string) => {
+    if (!window.confirm('Move this draft to ~/OmniStage/.trash?')) return;
+    await workspaceApi.deleteDraft(id);
+    if (activeDraftId === id) useStudioStore.getState().startNewDraft();
     await reload();
   };
 
@@ -131,6 +150,26 @@ export const ProjectHubModal: React.FC = () => {
                 <button type="button" onClick={createProject} disabled={!form.name.trim()} className="w-full py-1.5 rounded-lg bg-cyan-500 text-slate-950 font-semibold disabled:opacity-40">Create</button>
               </div>
               {loading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+              {drafts.length > 0 && (
+                <div className="p-2.5 rounded-xl bg-amber-950/20 border border-amber-500/30 space-y-1.5">
+                  <div className="font-semibold text-amber-200 flex items-center gap-1"><FileClock className="w-3.5 h-3.5" /> Drafts (not in a project)</div>
+                  <p className="text-[10px] text-amber-100/70">Autosaved in {workspacePath(workspaceHome, 'drafts')}. Pick a project and "Create &amp; open" from what's open now to move a draft there. Drafts idle for 30 days are offered for clean-up.</p>
+                  {drafts.map((d) => (
+                    <div key={d.id} className={`flex items-center gap-1.5 p-1.5 rounded border ${activeDraftId === d.id ? 'border-amber-400/70 bg-amber-900/20' : 'border-slate-800 bg-slate-900'}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate text-slate-100">{d.title}</div>
+                        <div className="text-[10px] text-slate-500">{d.sceneCount} scene(s) · {new Date(d.updatedAt).toLocaleString()}</div>
+                      </div>
+                      {activeDraftId === d.id ? (
+                        <span className="text-[10px] text-amber-300 px-1">open</span>
+                      ) : (
+                        <button type="button" onClick={() => openDraft(d.id)} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 hover:bg-slate-700">Open</button>
+                      )}
+                      <button type="button" onClick={() => deleteDraft(d.id)} aria-label={`Delete draft ${d.title}`} className="p-0.5 text-slate-400 hover:text-rose-300"><Trash2 className="w-3 h-3" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {projects.map((p) => {
                 const Icon = KIND_ICON[p.kind] || Gamepad2;
                 return (
@@ -185,7 +224,7 @@ export const ProjectHubModal: React.FC = () => {
                     <div className="flex flex-wrap gap-1.5">
                       <input value={newGame.name} onChange={(e) => setNewGame({ ...newGame, name: e.target.value })} placeholder="Game name" className="flex-1 min-w-[140px] px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-slate-100 placeholder-slate-600" />
                       <select value={newGame.from} onChange={(e) => setNewGame({ ...newGame, from: e.target.value as any })} className="px-2 py-1.5 rounded bg-slate-950 border border-slate-700 text-slate-100">
-                        <option value="current">From what's open now</option>
+                        <option value="current">{activeGameId ? "From what's open now (copy)" : "From what's open now (moves the draft here)"}</option>
                         <option value="blank-2d">Blank 2D</option>
                         <option value="blank-3d">Blank 3D</option>
                       </select>
