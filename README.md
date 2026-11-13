@@ -74,6 +74,9 @@ Bấm **Test connection** để kiểm tra. Mục "How the AI edits your scene" 
   MP4 được dựng từng khung hình qua OmniStage Player (đúng thời gian dù máy chậm) và **có âm thanh**: nhạc theo cảm xúc, âm nền theo
   bối cảnh và hiệu ứng âm thanh theo thời gian (tab *World* → *Film Soundtrack*). Cần Chrome/Edge bản mới (WebCodecs); trình duyệt
   khác dùng chế độ ghi thời gian thực (WebM).
+- **Lời thoại** (tab *World* → *Dialogue*): nhân vật nói câu thoại có phụ đề tự động, quay sang người nghe và gật đầu khi nói.
+  Bấm *Generate real voices* để tạo giọng thật tiếng Việt bằng Piper chạy ngay trong trình duyệt (lần đầu tải mô hình ~60MB);
+  chưa tạo thì nhân vật nói bằng giọng "babble" mô phỏng thanh điệu. Giọng được nhúng vào MP4 và bản xuất HTML5.
 - **Bối cảnh nhanh** (tab *World* → *Biome & Water*): rừng, đồng cỏ, bãi biển, sa mạc, núi tuyết, thung lũng thác nước, rừng đêm,
   thành phố đêm — kèm thác, sông, hồ có nước chảy thật.
   Giữ tab trình duyệt hiển thị trong lúc ghi.

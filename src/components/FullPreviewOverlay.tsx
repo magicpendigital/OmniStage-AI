@@ -1,3 +1,4 @@
+import { sceneCaptions } from '../audio/voices';
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { transitionInto, transitionOverlay } from '../runtime/cinematics';
@@ -103,7 +104,7 @@ export const FullPreviewOverlay: React.FC = () => {
         <div className={`relative overflow-hidden bg-[#0B101B] ${frameClass}`}>
           {is2D ? <StageCanvas2D /> : <StageCanvas />}
           {!is2D &&
-            activeCaptions(sceneSpec.captions, currentTime).map((cue, i) => (
+            activeCaptions(sceneCaptions(sceneSpec), currentTime).map((cue, i) => (
               <div key={cue.id || i} className={`pointer-events-none absolute inset-x-0 flex justify-center px-6 ${cue.position === 'top' ? 'top-[8%]' : cue.position === 'center' ? 'top-1/2 -translate-y-1/2' : 'bottom-[9%]'}`}>
                 <span className={cue.style === 'title' ? 'text-3xl font-extrabold text-white text-center [text-shadow:0_2px_8px_rgba(0,0,0,0.85)]' : 'px-3 py-1.5 rounded bg-slate-950/75 text-sm font-semibold text-slate-50 text-center'}>{cue.text}</span>
               </div>

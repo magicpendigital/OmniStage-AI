@@ -248,7 +248,23 @@ the verifier only checks playability. Fix in layers: contract → production too
   - UI: World tab → Film Soundtrack panel, Biome & Water section; Publish → MP4 is frame-perfect with a Soundtrack switch.
   - Tests: `tests/soundtrack.test.ts`, `tests/biomes.test.ts`, E2E waterfall-valley film in the exported Player.
   - Not yet: dialogue / TTS (10C); footsteps synced to walk cycles; lighting presets per biome are a patch, not a full outdoor rig.
-- [ ] **10C** `dialogue[]` with in-browser Piper TTS (Vietnamese voice), auto captions, talk motion; CC0 Quaternius animation library retargeted.
+- [x] **10C (done 2026-11-13)** Dialogue:
+  - `sceneSpec.dialogue[]` = { time, speaker, text, emotion?, listener? } + `actors[].voice` { engine piper | babble, voiceId, pitch, rate }.
+    `src/audio/voices.ts` (pure) times lines, writes captions (speaker-prefixed when several talk), drives talk levels and mixes the voice
+    track (levelled lines, music / ambience duck under speech) into the soundtrack renderer.
+  - Real voices: Piper neural TTS in the browser (`src/audio/piperVoice.ts`, @mintplex-labs/piper-tts-web + onnxruntime-web 1.18,
+    Vietnamese `vi_VN-vais1000-medium` by default; model ~60 MB downloaded once). Clips are cached in IndexedDB by content key,
+    restored on reload, embedded as WAV in HTML5 exports and the MP4 export. Without a clip a line speaks with the procedural
+    "babble" voice (syllables with vowel formants and Vietnamese tone contours from the diacritics) — deterministic, offline.
+  - Talk motion: speakers nod / lean with the voice envelope and turn to their listener (eased in and out), in studio, Player and MP4.
+  - AI: DIALOGUE prompt section, `dialogue-writing` skill, normaliser keeps lines and voices, offline director writes a short exchange
+    in the prompt's language. Verifier: `dialogue.invalid`, `dialogue.overlap`, `dialogue.cut-off` (auto-fixed).
+  - UI: World tab → Dialogue (lines, emotions, listeners, per-character voice + pitch, hear a line, Generate real voices).
+  - MP4 capture fix: the hidden Player iframe is kept in the viewport (scaled) and laid out explicitly — off-screen iframes did not
+    run layout, which squeezed frames in small windows.
+  - Tests: `tests/dialogue.test.ts`, E2E dialogue in the exported Player.
+  - Not done: CC0 Quaternius animation library retargeting (gesture clips per emotion); lip-sync visemes (models have no mouth rigs);
+    voice clips are per browser (a project opened elsewhere falls back to babble until voices are generated again).
 - [ ] **10D** Paid Production Tools via Settings/Extensions (ElevenLabs voice/music/SFX, Blockade skybox, Meshy animation), licences recorded
   in the project library; vision-model "director QA" scoring rendered keyframes → extra patch round.
 

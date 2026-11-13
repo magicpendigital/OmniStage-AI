@@ -161,9 +161,10 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
   // Phase 10A: in media mode the actor's performance (walk paths, clip changes, facing) drives what is drawn.
   const sceneActors = useStudioStore((s) => s.sceneSpec.actors);
   const sceneWorld = useStudioStore((s) => s.sceneSpec.world);
+  const sceneDialogue = useStudioStore((s) => s.sceneSpec.dialogue);
   const performed = useMemo(
-    () => performedActor(actor, { mode, actors: sceneActors, world: sceneWorld }, currentTime),
-    [actor, mode, sceneActors, sceneWorld, currentTime]
+    () => performedActor(actor, { mode, actors: sceneActors, world: sceneWorld, dialogue: sceneDialogue }, currentTime),
+    [actor, mode, sceneActors, sceneWorld, sceneDialogue, currentTime]
   );
 
   // Check timeline window visibility in Media mode

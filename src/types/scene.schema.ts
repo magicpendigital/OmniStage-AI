@@ -559,6 +559,45 @@ export interface ActorNode {
    * walk to points, switch clips, face another actor. Shared by the studio and the Player (src/runtime/cinematics.ts).
    */
   performance?: PerformanceStep[];
+  /** Phase 10C: how this character sounds when it speaks dialogue lines. */
+  voice?: ActorVoice;
+  /**
+   * Phase 10C (runtime only, never authored): 0..1 speaking level at the current time, set by performedActor so the
+   * renderers can add talk motion. Not saved.
+   */
+  talkLevel?: number;
+}
+
+/** Phase 10C: 'piper' = real neural voice synthesised in the studio (downloaded once); 'babble' = procedural voice, no download. */
+export type VoiceEngine = 'piper' | 'babble';
+
+export interface ActorVoice {
+  engine?: VoiceEngine;
+  /** Piper voice id, e.g. 'vi_VN-vais1000-medium' (default picked from the line's language). */
+  voiceId?: string;
+  /** Semitones, -8..8 (small creatures higher, giants lower). */
+  pitch?: number;
+  /** Speaking rate 0.7..1.4 (babble only; Piper keeps its natural pace). */
+  rate?: number;
+}
+
+export type DialogueEmotion = 'neutral' | 'happy' | 'excited' | 'sad' | 'angry' | 'scared' | 'whisper';
+
+/** Phase 10C: one spoken line. Captions, talk motion and the voice track are all derived from it. */
+export interface DialogueLine {
+  id: string;
+  /** Start, seconds from the scene start. */
+  time: number;
+  /** actorId of the speaker. */
+  speaker: string;
+  text: string;
+  emotion?: DialogueEmotion;
+  /** actorId the speaker turns to while talking (when standing still). */
+  listener?: string;
+  /** Spoken length in seconds — filled in when the voice is generated (else estimated from the text). */
+  duration?: number;
+  /** Key of the generated voice clip (content hash) — filled in when the voice is generated. */
+  clip?: string;
 }
 
 /** Phase 10A — one beat of an actor's performance. */
@@ -719,6 +758,10 @@ export interface SceneSpec {
   audio?: SceneAudioSpec;
   /** Phase 10B: film soundtrack (music, ambience, timed SFX). Plays in Preview, the Player and MP4 exports. */
   soundtrack?: SoundtrackSpec;
+  /** Phase 10C: spoken lines (voice, auto captions, talk motion). */
+  dialogue?: DialogueLine[];
+  /** Phase 10C: show dialogue as captions (default true). */
+  dialogueCaptions?: boolean;
   /** Phase 5: timed captions / subtitles (drawn on the 2D canvas, overlaid in 3D, exportable as WebVTT). */
   captions?: CaptionCue[];
   /** Phase 6: particle presets from extensions used by this scene (recipes copied in, so the scene is portable). */

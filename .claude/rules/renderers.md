@@ -24,6 +24,8 @@ paths:
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
 - Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`. The film soundtrack is rendered by
   `src/audio/soundtrack.ts` (pure, deterministic) and played by `soundtrackPlayback.ts` from the store — renderers never touch it.
+- Phase 10C talk motion: `performedActor` sets `actor.talkLevel` and turns speakers to their listener; `actorMotion` turns it into the
+  nod / lean. Renderers pass `dialogue` to `performedActor` and draw captions from `sceneCaptions(spec)` (authored + dialogue).
 - Phase 10B world: biome presets are data (`src/runtime/biomes.ts`); water landmarks are built in `src/render3d/waterFeatures.ts`
   and animate from `ctx.time` only. New scatter types go in `world3d.tsx` `scatterItem` + `DEFAULT_SCATTER_COLORS`.
 - Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or

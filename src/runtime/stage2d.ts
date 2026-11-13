@@ -3,6 +3,7 @@
  * text, sprites, spritesheets, particles), VFX and captions. Shared verbatim by the studio StageCanvas2D and the
  * OmniStage Player, so the editor, Play Test, phones and exports run the same simulation.
  */
+import { sceneCaptions } from '../audio/voices';
 import { playerClipFor, spriteFrameAt } from '../animation/spriteSheet';
 import { particleRuntimeFor } from '../vfx/particles2D';
 import { activeCaptions, drawCaptionOnCanvas } from '../media/captions';
@@ -319,7 +320,7 @@ export function drawStage2D(
   }
 
   // Phase 5: captions are drawn into the canvas so recorded video and snapshots include them.
-  for (const cue of activeCaptions(runtimeStore.getState().sceneSpec.captions, currentTime)) {
+  for (const cue of activeCaptions(sceneCaptions(runtimeStore.getState().sceneSpec), currentTime)) {
     drawCaptionOnCanvas(ctx, cue, DESIGN_WIDTH, DESIGN_HEIGHT);
   }
 }

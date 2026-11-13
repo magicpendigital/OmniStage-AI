@@ -1,5 +1,6 @@
 import { SceneSpec } from '../types/scene.schema';
 import { renderFilmSoundtrack } from '../audio/soundtrack';
+import { voiceClipAssets } from '../audio/voices';
 import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
 import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML } from './playerHtml';
 
@@ -726,6 +727,9 @@ export async function buildStandalonePlayable(
     embed = await embedAssets(collectAssetUrls(all), assetBudgetFor(targetNetwork, new TextEncoder().encode(shell).length), options?.fetcher ?? defaultFetcher);
     assets = embed.assets;
   }
+  // Phase 10C: generated voice clips always travel inside the file (they exist only in this browser).
+  const voices = voiceClipAssets(all);
+  if (Object.keys(voices).length) assets = { ...voices, ...(assets || {}) };
   const html = generateStandaloneHTMLContent(sceneSpec, targetNetwork, all, { ...options, playerRuntimeSource, assets });
   const remote = options?.offline === false ? collectAssetUrls(all) : embed?.skipped.map((s) => s.url) || [];
   return { html, budget: analyzePlayableBudget(html, targetNetwork, undefined, remote), embed };

@@ -24,6 +24,9 @@ paths:
   `step(1/fps)`, wait for `pendingLoads() === 0`) and encodes with Mediabunny (WebCodecs). Read the stage canvas in the same task as
   `step()`; never add a real-time path to it. Sound comes from `renderFilmSoundtrack` (one render for the whole film, scene lengths in
   whole frames). Shared compositor drawing (transitions, badge) lives in `mediaExporter.ts`.
+- Phase 10C voices: generated Piper clips exist only in the studio browser (IndexedDB + `src/audio/voices.ts` registry). Exports carry
+  them as `omni-voice:<key>` WAV assets (`voiceClipAssets`), the Player registers them at start (`registerVoiceAssets`). Never import
+  `src/audio/piperVoice.ts` (Piper / onnxruntime) from the Player or runtime.
 - Scene data goes into the HTML through `inlineJSON` only (escapes `<`, U+2028/2029); asset embedding must respect the network budget and
   report what stays online.
 - 2D physics live in `src/runtime/stage2d.ts` and must match `PLATFORMER_PHYSICS` in the verifier, so verified levels stay beatable everywhere.

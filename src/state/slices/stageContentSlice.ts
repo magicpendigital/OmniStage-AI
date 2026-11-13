@@ -3,7 +3,7 @@
  * Composed into the single studio store in src/state/useStudioStore.ts.
  */
 import { PRESET_2D_ASSETS, cloneSceneSpec } from '../../registry/assetRegistry';
-import { Node2D, VFXNode, VFXType } from '../../types/scene.schema';
+import { Node2D, SceneSpec, VFXNode, VFXType } from '../../types/scene.schema';
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { resolveAudioSpec } from '../../audio/audioBus';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
@@ -147,6 +147,52 @@ export const createStageContentSlice = (set: StudioSet, get: StudioGet): StudioS
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       if (patch === null) delete nextSpec.soundtrack;
       else nextSpec.soundtrack = { ...(nextSpec.soundtrack || {}), ...patch };
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
+      };
+    }),
+
+  setDialogue: (lines) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (lines.length) nextSpec.dialogue = lines;
+      else delete nextSpec.dialogue;
+      return {
+        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)),
+      };
+    }),
+
+  setDialogueCaptions: (on) =>
+    set((state) => {
+      const nextSpec = { ...cloneSceneSpec(state.sceneSpec), dialogueCaptions: on };
+      return { sceneSpec: nextSpec, scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : s)) };
+    }),
+
+  applyDialogueVoices: (dialogue) =>
+    set((state) => {
+      const patch = (s: SceneSpec) => (dialogue[s.id] ? { ...cloneSceneSpec(s), dialogue: dialogue[s.id] } : s);
+      const nextSpec = patch(state.sceneSpec);
+      return {
+        sceneSpec: nextSpec,
+        scenes: state.scenes.map((s) => (s.id === nextSpec.id ? nextSpec : patch(s))),
+      };
+    }),
+
+  updateActorVoice: (actorId, voice) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const actor = nextSpec.actors.find((a) => a.id === actorId);
+      if (!actor) return {};
+      if (voice) actor.voice = voice;
+      else delete actor.voice;
+      // A new voice invalidates the generated clips of this speaker.
+      for (const line of nextSpec.dialogue || []) if (line.speaker === actorId) { delete line.clip; delete line.duration; }
       return {
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],

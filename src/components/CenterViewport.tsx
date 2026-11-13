@@ -1,3 +1,4 @@
+import { sceneCaptions } from '../audio/voices';
 import React from 'react';
 import {
   Box,
@@ -221,7 +222,7 @@ export const CenterViewport: React.FC = () => {
               {!fullPreviewActive && <ViewportOverlay />}
               {/* Phase 5: 3D caption overlay (2D draws captions into its canvas). */}
               {!is2D &&
-                activeCaptions(sceneSpec.captions, currentTime).map((cue, i) => (
+                activeCaptions(sceneCaptions(sceneSpec), currentTime).map((cue, i) => (
                   <div
                     key={cue.id || i}
                     className={`pointer-events-none absolute inset-x-0 flex justify-center px-6 ${

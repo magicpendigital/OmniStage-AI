@@ -8,6 +8,7 @@
  */
 import type { AmbienceId, MusicMood, SceneSpec, WorldSpec } from '../types/scene.schema';
 import { BUILTIN_SFX_RECIPES, SfxRecipeDef } from './sfxRecipes';
+import { dialogueKey, renderDialogueTrack } from './voices';
 
 export const MUSIC_MOODS: MusicMood[] = ['none', 'calm', 'happy', 'playful', 'adventure', 'epic', 'tense', 'sad', 'mysterious'];
 export const AMBIENCE_IDS: AmbienceId[] = [
@@ -24,7 +25,15 @@ export interface StereoPcm {
 }
 
 export type SoundtrackScene = Pick<SceneSpec, 'soundtrack' | 'durationSeconds'> &
-  Partial<Pick<SceneSpec, 'id' | 'world' | 'engineType' | 'sfxLibrary' | 'sequence'>>;
+  Partial<Pick<SceneSpec, 'id' | 'world' | 'engineType' | 'sfxLibrary' | 'sequence' | 'actors' | 'dialogue'>>;
+
+/** Phase 10C: dialogue speaks even in a scene without music / ambience. */
+function hasDialogue(scene: SoundtrackScene) {
+  return !!scene.dialogue?.length && !!scene.actors;
+}
+function dialogueScene(scene: SoundtrackScene) {
+  return { actors: scene.actors || [], dialogue: scene.dialogue, durationSeconds: scene.durationSeconds };
+}
 
 type ConcreteAmbience = Exclude<AmbienceId, 'auto'>;
 
@@ -95,7 +104,7 @@ export function autoAmbience(world?: Partial<WorldSpec>): ConcreteAmbience {
 
 /** Effective soundtrack of a scene (defaults, 'auto' ambience, valid cues only), or null when it has none. */
 export function resolveSoundtrack(scene: SoundtrackScene): ResolvedSoundtrack | null {
-  const st = scene.soundtrack;
+  const st = scene.soundtrack || (hasDialogue(scene) ? { music: { mood: 'none' as MusicMood }, ambience: { type: 'none' as AmbienceId } } : undefined);
   if (!st) return null;
   const mood = MUSIC_MOODS.includes(st.music?.mood as MusicMood) ? (st.music!.mood as MusicMood) : 'none';
   const rawAmb = st.ambience?.type ?? 'auto';
@@ -122,7 +131,7 @@ export function soundtrackKey(scene: SoundtrackScene): string {
   const r = resolveSoundtrack(scene);
   if (!r) return '';
   return JSON.stringify([r.mood, r.musicGain, r.tempo, r.ambience, r.ambienceGain, r.volume, r.seed, num(scene.durationSeconds, 8),
-    r.cues.map((c) => [c.time, c.volume, c.recipe])]);
+    r.cues.map((c) => [c.time, c.volume, c.recipe]), hasDialogue(scene) ? dialogueKey(dialogueScene(scene)) : '']);
 }
 
 // =====================================================================================================================
@@ -741,6 +750,28 @@ export function renderSoundtrackLayers(scene: SoundtrackScene, samples: number, 
   renderMusic(music, r.mood, r.tempo, r.seed, musicOffsetSamples, r.musicGain);
   renderAmbience(ambience, r.ambience, r.seed + hashString(r.ambience), r.ambienceGain);
   renderCues(cues, r.cues, 1);
+  // Phase 10C: voices go into the foreground layer; the music ducks under them.
+  const dlg = hasDialogue(scene) ? renderDialogueTrack(dialogueScene(scene), samples, sampleRate) : null;
+  if (dlg) {
+    const mixed = new Uint8Array(samples);
+    for (const p of dlg.pans) {
+      const gl = Math.cos(((p.pan + 1) * Math.PI) / 4) * Math.SQRT2;
+      const gr = Math.sin(((p.pan + 1) * Math.PI) / 4) * Math.SQRT2;
+      for (let i = p.from; i < p.to; i++) {
+        if (mixed[i]) continue; // overlapping lines: the voice track already holds both
+        mixed[i] = 1;
+        cues.left[i] += dlg.voice[i] * gl;
+        cues.right[i] += dlg.voice[i] * gr;
+      }
+    }
+    for (let i = 0; i < samples; i++) {
+      const g = 1 - 0.6 * dlg.duck[i];
+      music.left[i] *= g;
+      music.right[i] *= g;
+      ambience.left[i] *= 1 - 0.45 * dlg.duck[i];
+      ambience.right[i] *= 1 - 0.45 * dlg.duck[i];
+    }
+  }
   return { music, ambience, cues, resolved: r };
 }
 

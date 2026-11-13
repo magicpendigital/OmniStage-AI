@@ -19,6 +19,7 @@ import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
+import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 
 // --- Phase 10A: film craft (media 3D) ---
@@ -290,6 +291,31 @@ function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
   }
 }
 
+/** Phase 10C: dialogue lines — valid speakers, inside the scene, no two lines on top of each other. */
+function verifyDialogue(spec: SceneSpec, issues: VerificationIssue[]) {
+  const lines = spec.dialogue || [];
+  if (!lines.length) return;
+  const duration = Math.max(1, spec.durationSeconds || 8);
+  const ids = new Set([...spec.actors.map((a) => a.id), ...(spec.nodes2D || []).map((n) => n.id)]);
+  const bad = lines.filter((l) => !l || typeof l.text !== 'string' || !l.text.trim() || !ids.has(l.speaker) || !Number.isFinite(l.time) ||
+    l.time < 0 || l.time >= duration || (l.emotion !== undefined && !DIALOGUE_EMOTIONS.includes(l.emotion)) || (l.listener !== undefined && !ids.has(l.listener)));
+  if (bad.length) {
+    issues.push(issue('dialogue.invalid', 'warning', `${bad.length} dialogue line(s) have no text, an unknown speaker / listener (use actor ids: ${spec.actors.map((a) => a.id).join(', ')}), an unknown emotion or a time outside 0..${duration}s.`, true));
+  }
+  const timeline = dialogueTimeline(spec);
+  for (let i = 1; i < timeline.length; i++) {
+    if (timeline[i].start < timeline[i - 1].end - 0.05) {
+      issues.push(issue('dialogue.overlap', 'warning', `Line "${timeline[i].line.text.slice(0, 40)}" starts at ${timeline[i].start}s while "${timeline[i - 1].line.text.slice(0, 40)}" is still being said (until ${timeline[i - 1].end.toFixed(1)}s). Give each line its own time.`, true, timeline[i].line.id));
+      break;
+    }
+  }
+  // Spoken length without the scene clamp: a line that would run past the end is cut off.
+  const late = dialogueTimeline({ ...spec, durationSeconds: 1e9 }).find((t) => t.start < duration && t.end > duration + 0.05);
+  if (late) {
+    issues.push(issue('dialogue.cut-off', 'warning', `"${late.line.text.slice(0, 40)}" is cut off by the end of the scene; start it earlier or make the scene longer.`, true, late.line.id));
+  }
+}
+
 /** Phase 10B: soundtrack values the renderer understands (any engine). */
 function verifySoundtrack(spec: SceneSpec, issues: VerificationIssue[]) {
   const st = spec.soundtrack;
@@ -389,6 +415,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
   verifySoundtrack(spec, issues);
+  verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
@@ -482,6 +509,42 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
         .filter((sh) => SHOT_TYPES.includes(sh.type) && Number.isFinite(sh.start) && sh.start < duration)
         .map((sh) => ({ ...sh, start: Math.max(0, sh.start), subject: sh.subject && ids.has(sh.subject) ? sh.subject : undefined, partner: sh.partner && ids.has(sh.partner) ? sh.partner : undefined }));
       return 'Removed / repaired invalid camera shots';
+    }
+    case 'dialogue.invalid': {
+      const duration = Math.max(1, spec.durationSeconds || 8);
+      const ids = new Set([...spec.actors.map((a) => a.id), ...(spec.nodes2D || []).map((n) => n.id)]);
+      spec.dialogue = (spec.dialogue || [])
+        .filter((l) => l && typeof l.text === 'string' && l.text.trim() && ids.has(l.speaker) && Number.isFinite(l.time) && l.time < duration)
+        .map((l) => {
+          const next = { ...l, time: Math.max(0, l.time) };
+          if (next.emotion !== undefined && !DIALOGUE_EMOTIONS.includes(next.emotion)) delete next.emotion;
+          if (next.listener !== undefined && !ids.has(next.listener)) delete next.listener;
+          return next;
+        });
+      return 'Repaired dialogue lines (speakers, times, emotions)';
+    }
+    case 'dialogue.overlap': {
+      // Push every line to start after the previous one ends (keeps the order the author wrote).
+      const timeline = dialogueTimeline(spec);
+      let free = 0;
+      const shifted = new Map<string, number>();
+      for (const t of timeline) {
+        const start = Math.max(t.start, free);
+        shifted.set(t.line.id, Math.round(start * 100) / 100);
+        free = start + (t.end - t.start) + 0.2;
+      }
+      spec.dialogue = (spec.dialogue || []).map((l) => (shifted.has(l.id) ? { ...l, time: shifted.get(l.id)! } : l));
+      return 'Spaced out overlapping dialogue lines';
+    }
+    case 'dialogue.cut-off': {
+      const duration = Math.max(1, spec.durationSeconds || 8);
+      const line = (spec.dialogue || []).find((l) => l.id === i.targetId);
+      if (!line) return null;
+      const t = dialogueTimeline({ ...spec, durationSeconds: 1e9 }).find((x) => x.line.id === line.id);
+      const len = t ? t.end - t.start : 1;
+      if (len + 0.2 <= duration) line.time = Math.round(Math.max(0, duration - len - 0.2) * 100) / 100;
+      else spec.durationSeconds = Math.min(30, Math.ceil(line.time + len + 0.5));
+      return `Moved "${line.text.slice(0, 30)}" so it is heard to the end`;
     }
     case 'soundtrack.invalid': {
       const st = spec.soundtrack;

@@ -45,6 +45,8 @@ interface ActorView {
   badge?: Built3D<THREE.Sprite>;
   badgeText?: string;
   clickPulse: number;
+  /** Phase 10C: current talk level (inspect / tests). */
+  talk?: number;
 }
 
 const compositeKeyFor = (a: ActorNode, taps: number) => [a.assetId, a.primaryColor, a.secondaryColor, a.metalness, a.roughness, taps].join('|');
@@ -110,8 +112,8 @@ export class View3D {
 
   /** Phase 10A: live actor poses + camera (E2E tests / debugging). */
   inspect() {
-    const actors: Record<string, { position: number[]; yaw: number; clip?: string }> = {};
-    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip };
+    const actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }> = {};
+    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip, talk: v.talk || 0 };
     // Phase 10B: named world parts (water landmarks, scatter layers) for E2E checks.
     const world: string[] = [];
     this.world.traverse((o) => {
@@ -120,7 +122,8 @@ export class View3D {
     return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world };
   }
 
-  private resize() {
+  /** Re-reads the frame size (ResizeObserver does it automatically; headless capture calls it directly). */
+  resize() {
     const w = Math.max(1, this.parent.clientWidth);
     const h = Math.max(1, this.parent.clientHeight);
     this.renderer.setSize(w, h, false);
@@ -254,6 +257,7 @@ export class View3D {
       }
       // Procedural motion + click pulse: the studio ActorRenderer's exact maths (src/render3d/actorMotion).
       const motion = actorMotion(actor, spec.mode, time, view.hasRig, view.clickPulse, this.clock);
+      view.talk = actor.talkLevel || 0;
       view.clickPulse = Math.max(0, view.clickPulse - dt * 3);
       const a = view.anim;
       a.position.set(damp(a.position.x, motion.offset[0], 10, dt), damp(a.position.y, motion.offset[1], 10, dt), damp(a.position.z, motion.offset[2], 10, dt));

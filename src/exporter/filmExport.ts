@@ -7,8 +7,10 @@
  * encoded with WebCodecs through Mediabunny; the procedural soundtrack is rendered offline for the whole film and
  * muxed as AAC (or Opus). Browsers without WebCodecs keep the real-time MediaRecorder sequencer.
  */
+import { sceneCaptions } from '../audio/voices';
 import type { SceneSpec } from '../types/scene.schema';
 import { renderFilmSoundtrack } from '../audio/soundtrack';
+import { voiceClipAssets } from '../audio/voices';
 import { activeCaptions, drawCaptionOnCanvas } from '../media/captions';
 import { generatePlayerHTML } from './playerHtml';
 import {
@@ -48,6 +50,7 @@ interface PlayerHandle {
   step: (dt: number) => void;
   manual: (on: boolean) => void;
   pendingLoads: () => number;
+  relayout?: () => void;
   canvas: () => HTMLCanvasElement | null;
   destroy: () => void;
 }
@@ -69,7 +72,11 @@ async function mountPlayer(html: string, width: number, height: number, quality:
   const iframe = document.createElement('iframe');
   // The Player renders at min(devicePixelRatio, 2): size the CSS box so the canvas comes out at the target pixels.
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  iframe.style.cssText = `position:fixed;left:0;top:0;width:${Math.round(width / ratio)}px;height:${Math.round(height / ratio)}px;border:0;opacity:0;pointer-events:none;z-index:-1`;
+  const cssW = Math.round(width / ratio);
+  const cssH = Math.round(height / ratio);
+  // Keep the frame inside the viewport (scaled down, invisible): Chrome stops rendering off-screen iframes.
+  const fit = Math.min(1, (window.innerWidth || cssW) / cssW, (window.innerHeight || cssH) / cssH);
+  iframe.style.cssText = `position:fixed;left:0;top:0;width:${cssW}px;height:${cssH}px;transform:scale(${fit});transform-origin:0 0;border:0;opacity:0.001;pointer-events:none;z-index:-1`;
   iframe.setAttribute('aria-hidden', 'true');
   iframe.srcdoc = html;
   document.body.appendChild(iframe);
@@ -82,6 +89,7 @@ async function mountPlayer(html: string, width: number, height: number, quality:
       const want = width / height;
       const t0 = performance.now();
       for (;;) {
+        handle.relayout?.();
         handle.step(0);
         const c = handle.canvas();
         if (c && c.height > 0 && Math.abs(c.width / c.height - want) < 0.02) break;
@@ -101,6 +109,7 @@ async function mountPlayer(html: string, width: number, height: number, quality:
 async function waitForAssets(player: PlayerHandle, abort?: AbortSignal) {
   const started = performance.now();
   // A couple of frames first so the view exists and has requested its models / images.
+  player.relayout?.();
   player.step(0);
   await sleep(30);
   player.step(0);
@@ -124,7 +133,8 @@ export async function exportFilmMP4(options: FilmExportOptions): Promise<{ ok: b
   // Exact scene lengths in whole frames, so picture and sound stay in sync to the frame.
   const timed = scenes.map((s, i) => ({ ...s, durationSeconds: frameCounts[i] / fps }));
   const runtime = await loadPlayerRuntime();
-  const html = generatePlayerHTML(timed[0], 'universal', timed, { playerRuntimeSource: runtime, touchControls: false, sound: false, quality });
+  // Voice clips go in too, so talk motion follows the real voice in the captured frames.
+  const html = generatePlayerHTML(timed[0], 'universal', timed, { playerRuntimeSource: runtime, touchControls: false, sound: false, quality, assets: voiceClipAssets(timed) });
 
   const compositor = document.createElement('canvas');
   compositor.width = width;
@@ -190,7 +200,7 @@ export async function exportFilmMP4(options: FilmExportOptions): Promise<{ ok: b
           ctx.drawImage(src, (width - dw) / 2, (height - dh) / 2, dw, dh);
         }
         if (scene.engineType === '3d') {
-          for (const cue of activeCaptions(scene.captions, f / fps)) drawCaptionOnCanvas(ctx, cue, width, height);
+          for (const cue of activeCaptions(sceneCaptions(scene), f / fps)) drawCaptionOnCanvas(ctx, cue, width, height);
         }
         if (f < transitionFrames) drawSceneTransition(ctx, previous, kind, f / transitionFrames, width, height);
         if (watermark) drawWatermark(ctx, scene, i, timed.length);

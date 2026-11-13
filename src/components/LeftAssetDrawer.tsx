@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { AudioCuePanel } from './AudioCuePanel';
 import { SoundtrackPanel } from './SoundtrackPanel';
+import { DialoguePanel } from './DialoguePanel';
 import { BIOME_IDS, BIOME_PRESETS } from '../runtime/biomes';
 import { CaptionsPanel } from './CaptionsPanel';
 import { PersonalLibraryPanel } from './PersonalLibraryPanel';
@@ -500,6 +501,7 @@ export const LeftAssetDrawer: React.FC = () => {
         {activeTab === 'world' && (
           <div className="space-y-4 text-xs">
             {/* Phase 4: Procedural Game Audio (both engines, embedded in playable exports) */}
+            <DialoguePanel />
             <SoundtrackPanel />
             <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
             {/* Phase 5: captions / subtitles track */}

@@ -12,6 +12,7 @@
 import { resolvePerformance } from '../runtime/cinematics';
 import { applyBiomeToScene, BIOME_IDS, biomeEnvironmentPatch, expandBiome } from '../runtime/biomes';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
+import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
 import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
 import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
 import {
@@ -23,6 +24,7 @@ import {
 import {
   ActorNode,
   BiomeId,
+  DialogueLine,
   CameraMode,
   EngineType,
   LightingPresetId,
@@ -200,6 +202,13 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
       : undefined,
     modelUrl: raw.customGlbUrl ? str(raw.modelUrl, raw.customGlbUrl) : entry.modelUrl,
     customGlbUrl: typeof raw.customGlbUrl === 'string' ? raw.customGlbUrl : undefined,
+    // Phase 10C: character voice
+    ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
+      ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
+      ...(typeof raw.voice.voiceId === 'string' ? { voiceId: raw.voice.voiceId } : {}),
+      ...(Number.isFinite(raw.voice.pitch) ? { pitch: Math.max(-8, Math.min(8, raw.voice.pitch)) } : {}),
+      ...(Number.isFinite(raw.voice.rate) ? { rate: Math.max(0.7, Math.min(1.4, raw.voice.rate)) } : {}),
+    } } : {}),
     position: isVec3(raw.position) ? [raw.position[0], 0, raw.position[2]] : [index * 1.8 - 1.8, 0, 0],
     rotation: isVec3(raw.rotation) ? raw.rotation : [0, 0, 0],
     scale: isVec3(raw.scale) ? raw.scale : [1, 1, 1],
@@ -258,6 +267,22 @@ function normalizeTerrain(raw: Partial<WorldSpec['terrain']> | undefined): World
   const hasColor = typeof raw?.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color);
   if (!hasColor && TERRAIN_COLORS[terrain.type]) terrain.color = TERRAIN_COLORS[terrain.type]!;
   return terrain;
+}
+
+/** Phase 10C: AI dialogue lines → valid lines (speaker / listener ids are checked by the verifier against the actors). */
+export function normalizeDialogue(raw: any): DialogueLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l: any) => l && typeof l.text === 'string' && l.text.trim() && typeof l.speaker === 'string' && Number.isFinite(Number(l.time)))
+    .slice(0, 40)
+    .map((l: any, i: number) => ({
+      id: typeof l.id === 'string' && l.id ? l.id : `line-${i + 1}`,
+      time: Math.max(0, Number(l.time)),
+      speaker: l.speaker,
+      text: l.text.trim().slice(0, 240),
+      ...(DIALOGUE_EMOTIONS.includes(l.emotion) ? { emotion: l.emotion } : {}),
+      ...(typeof l.listener === 'string' && l.listener ? { listener: l.listener } : {}),
+    }));
 }
 
 /** Phase 10B: keeps a valid AI soundtrack (unknown moods / ambiences fall back, cues need a time and an sfx id). */
@@ -382,6 +407,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     gameRules: { ...base.gameRules, ...(raw.gameRules ?? {}) },
     timelineTracks: Array.isArray(raw.timelineTracks) ? raw.timelineTracks : base.timelineTracks,
     ...(normalizeSoundtrack(raw.soundtrack) ? { soundtrack: normalizeSoundtrack(raw.soundtrack) } : {}),
+    ...(normalizeDialogue(raw.dialogue).length ? { dialogue: normalizeDialogue(raw.dialogue) } : {}),
   };
 }
 
@@ -753,6 +779,19 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
   // Phase 10A: offline acting + shot list so even keyless films have movement and cuts.
   const performers = actors.filter((a) => a.availableClips?.length);
   directOfflineShot(spec, performers, characters, { index, isClimax, isFinale, duration });
+  // Phase 10C: a short exchange in the prompt's language (voice, captions and talk motion follow from it).
+  const [speakerA, speakerB] = performers;
+  if (speakerA) {
+    const vi = lineLanguage(prompt) === 'vi';
+    const pick = isFinale ? 2 : isClimax ? 1 : 0;
+    const LINES = vi
+      ? [['Ồ, nơi này đẹp quá!', 'Mình đi xem phía trước nhé!'], ['Cẩn thận! Có gì đó đang đến!', 'Đừng sợ, có mình ở đây.'], ['Chúng ta làm được rồi!', 'Hành trình tuyệt vời nhất!']]
+      : [['Wow, this place is beautiful!', "Let's see what's ahead!"], ['Watch out! Something is coming!', "Don't worry, I'm right here."], ['We did it!', 'Best adventure ever!']];
+    spec.dialogue = [
+      { id: 'line-1', time: 1.2, speaker: speakerA.id, text: LINES[pick][0], emotion: isClimax ? 'scared' : 'excited', ...(speakerB ? { listener: speakerB.id } : {}) },
+      ...(speakerB ? [{ id: 'line-2', time: 5.4, speaker: speakerB.id, text: LINES[pick][1], emotion: (isFinale ? 'happy' : 'neutral') as DialogueLine['emotion'], listener: speakerA.id }] : []),
+    ];
+  }
   spec.environment.groundGrid = false;
   spec.environment.reflectivePedestal = false;
 

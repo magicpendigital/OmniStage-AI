@@ -208,6 +208,12 @@ AUTHORING & SPATIAL DESIGN RULES:
      cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }] }.
    Everything is synthesised (no audio URLs). Pick the mood from the beat, keep the same mood across consecutive shots of one sequence
    (the music then continues across the cut), and put cues on the script's actions (a splash when someone reaches the water, a whoosh on a fast move).
+13. DIALOGUE (media mode — characters speak; voice, captions and talk motion are generated from it):
+   sceneSpec.dialogue = [{ id, time, speaker: actorId, text, emotion?: 'neutral'|'happy'|'excited'|'sad'|'angry'|'scared'|'whisper', listener?: actorId }].
+   Write the lines in the user's language (Vietnamese prompt → Vietnamese lines). One short sentence per line (<= 14 words, ~3 s spoken);
+   leave ~0.4 s between lines and never two lines at once; the last line must end before durationSeconds. The listener is who the speaker
+   turns to. Do not also put dialogue text in captions (dialogue shows as captions automatically). Optional actors[].voice =
+   { engine?: 'piper'|'babble', pitch?: -8..8 (small creatures +3..+5, big ones -3) } — each character a different pitch.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 
@@ -296,7 +302,8 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
 - MEDIA SHOTS: turn the beat's "script" into actors[].performance and camera.shots (see ACTING & SHOTS) so the scene actually happens on
   screen; captions carry the script's caption lines at the same times. Fill the frame: world.biome (or world.terrain + at least 2
   scatterObjects layers, or an HDRI) matching the place, world.features for water the script mentions; never leave a bare grid floor
-  (environment.groundGrid false for films). Give every shot a soundtrack (mood + ambience 'auto' + cues on the actions, see SOUND).`;
+  (environment.groundGrid false for films). Give every shot a soundtrack (mood + ambience 'auto' + cues on the actions, see SOUND).
+  The script's quoted lines become sceneSpec.dialogue (see DIALOGUE) at the times the script gives, in the script's language.`;
 }
 
 export function buildStoryboardSceneUserPrompt(params: {

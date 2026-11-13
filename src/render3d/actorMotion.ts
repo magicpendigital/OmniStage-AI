@@ -44,6 +44,14 @@ export function actorMotion(actor: ActorNode, mode: 'game' | 'media' | string, t
     }
   }
 
+  // Phase 10C: talking — a small nod and lean in time with the voice (works on rigged and procedural actors).
+  const talk = actor.talkLevel || 0;
+  if (talk > 0) {
+    oy += talk * 0.025;
+    rx += talk * 0.07 * (0.6 + 0.4 * Math.sin(time * 9));
+    ry += Math.sin(time * 2.3) * 0.06 * talk;
+  }
+
   if (clickPulse > 0.01) {
     if (actor.onClickAction === 'unbox-tap' || actor.assetId === 'mystery-gift-box') {
       rz += Math.sin(clock * 45) * clickPulse * 0.28;

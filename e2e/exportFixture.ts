@@ -52,7 +52,7 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
     body2D: (nodeId: string) => page.evaluate((id) => (window as any).__omniPlayer.inspect().bodies2D[id], nodeId) as Promise<{ x: number; y: number; collected: boolean }>,
     /** Live 3D actor poses and camera from the Player view. */
     view3d: () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d) as Promise<{
-      actors: Record<string, { position: number[]; yaw: number; clip?: string }>;
+      actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }>;
       camera: { position: number[]; fov: number };
       world: string[];
     }>,

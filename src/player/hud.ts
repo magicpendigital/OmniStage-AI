@@ -2,6 +2,7 @@
  * Phase 7 — Player HUD (plain DOM): score / timer / level, sound + fullscreen, 3D captions, marketing CTA,
  * end cards (next level / retry / replay) and on-screen touch controls. Safe-area aware for phones.
  */
+import { sceneCaptions } from '../audio/voices';
 import { activeCaptions } from '../media/captions';
 import { isSfxMuted, setSfxMuted } from '../audio/audioBus';
 import type { PlayerState } from './playerStore';
@@ -120,7 +121,7 @@ export class Hud {
     if (layout !== this.touchLayout) this.buildTouch(layout);
 
     // Captions (2D draws them into its canvas).
-    const cues = spec.engineType === '3d' ? activeCaptions(spec.captions, s.currentTime) : [];
+    const cues = spec.engineType === '3d' ? activeCaptions(sceneCaptions(spec), s.currentTime) : [];
     const capKey = cues.map((c) => c.text).join('|');
     if (this.captions.dataset.key !== capKey) {
       this.captions.dataset.key = capKey;

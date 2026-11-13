@@ -16,6 +16,7 @@ import { QualityLevel, View3D } from './view3d';
 import { transitionInto, transitionOverlay } from '../runtime/cinematics';
 import { Hud, PLAYER_CSS } from './hud';
 import { pendingLoads } from './loading';
+import { registerVoiceAssets } from '../audio/voices';
 
 export interface OmniPlayerData {
   scenes: SceneSpec[];
@@ -48,6 +49,8 @@ export interface OmniPlayerHandle {
   };
   /** Phase 10B: asset loads still in flight (frame-stepped capture waits for 0). */
   pendingLoads: () => number;
+  /** Phase 10C: lay the frame out now (headless capture: off-screen iframes may never run ResizeObserver). */
+  relayout: () => void;
   /** Phase 10B: the stage canvas currently shown (2D or 3D). */
   canvas: () => HTMLCanvasElement | null;
   /** Hold or release a logical key ('arrowright', ' ', …) as if pressed (tests / accessibility tools). */
@@ -75,6 +78,8 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   frame.className = 'omni-frame';
   root.appendChild(frame);
 
+  // Phase 10C: generated voice clips embedded in the export (WAV data URIs) → voice registry.
+  registerVoiceAssets(options.assets);
   const store = createPlayerStore(data.scenes, data.activeSceneId);
   bindRuntimeStore(store);
   const uninstallAudio = options.sound === false ? () => undefined : installAudioBus(store);
@@ -216,6 +221,11 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     },
     setKey: (key, down) => input.setVirtualKey(key.toLowerCase(), down),
     pendingLoads,
+    relayout: () => {
+      ensureView();
+      layout();
+      if (view instanceof View3D) view.resize();
+    },
     canvas: () => (view ? view.canvas : null),
     destroy: () => {
       cancelAnimationFrame(raf);

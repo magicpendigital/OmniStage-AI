@@ -52,6 +52,21 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Add 1-2 vfx accents where the action is (sparkles on magic, shockwave on a landing), with startTime at that moment.`,
   },
   {
+    id: 'dialogue-writing',
+    title: 'Dialogue',
+    description: 'Short spoken lines that move the story, timed between actions, with emotions and listeners.',
+    triggers: ['thoại', 'nói', 'lời thoại', 'hội thoại', 'trò chuyện', 'dialogue', 'talk', 'speak', 'say', 'conversation', 'voice', 'giọng'],
+    engine: 'any',
+    mode: 'media',
+    source: 'builtin',
+    guidance: `DIALOGUE (sceneSpec.dialogue — spoken, captioned and acted automatically):
+- 2-5 lines per 10 s scene, each <= 14 words, in the user's language. Each line does a job: a question, a reaction, a decision.
+- Time lines into the quiet moments of the performance (after a character stops walking, before the next move); a speaker
+  standing still turns to its listener, so set listener on exchanges and frame them with over-shoulder / close-up shots.
+- emotion follows the beat ('excited' at a discovery, 'scared' at danger, 'whisper' for secrets); alternate speakers.
+- Give characters distinct voices: actors[].voice.pitch (small +4, big -4); never write dialogue into captions[] as well.`,
+  },
+  {
     id: 'sound-design',
     title: 'Sound Design',
     description: 'Mood music, location ambience and timed sound effects for films and ads (all synthesised).',

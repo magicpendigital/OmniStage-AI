@@ -132,3 +132,28 @@ test('3D biome film: waterfall valley renders its landmarks and animates the wat
   expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std), 'water and actors move').toBeGreaterThan(0);
   expect(p.errors).toEqual([]);
 });
+
+test('3D dialogue: the speaker talks, turns to its listener and the line is captioned (Phase 10C)', async ({ page }) => {
+  const spec = template('blank-3d-authoring');
+  spec.mode = 'media';
+  spec.durationSeconds = 6;
+  const robot = { ...spec.actors[0], id: 'robot', name: 'Robot', position: [-2, 0, 0] as [number, number, number], performance: undefined };
+  const friend = { ...spec.actors[0], id: 'friend', name: 'Bạn', position: [2, 0, 0] as [number, number, number], performance: undefined };
+  spec.actors = [robot, friend];
+  spec.dialogue = [{ id: 'l1', time: 1, speaker: 'robot', listener: 'friend', text: 'Xin chào! Mình là chú robot nhỏ.' }];
+  const p = await openExport(page, spec);
+  const at = async (t: number) => {
+    const now = await p.state<number>('s.currentTime');
+    const frames = Math.round((t - now) / 0.05);
+    for (let i = 0; i < frames; i += 20) await p.step(Math.min(20, frames - i), 0.05);
+    return p.view3d();
+  };
+  const before = await at(0.5);
+  expect(before.actors.robot.talk).toBe(0);
+  const during = await at(1.8);
+  expect(during.actors.robot.talk).toBeGreaterThan(0);
+  expect(during.actors.friend.talk).toBe(0);
+  expect(during.actors.robot.yaw).toBeCloseTo(Math.PI / 2, 1);
+  await expect(page.locator('.omni-captions')).toContainText('Xin chào! Mình là chú robot nhỏ.');
+  expect(p.errors).toEqual([]);
+});

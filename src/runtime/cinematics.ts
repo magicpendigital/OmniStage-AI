@@ -3,6 +3,7 @@
  * Pure maths (no Three.js, React or store): given a SceneSpec and a time, where is each performer, which clip plays,
  * and where is the camera. Deterministic, so scrubbing, Preview and frame-stepped renders agree.
  */
+import { dialogueTimeline, talkLevelAt } from '../audio/voices';
 import { applyEase } from '../animation/easing';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { computeTerrainHeight } from './world';
@@ -142,16 +143,40 @@ export function resolvePerformance(actor: ActorNode, time: number, actors: Actor
  * The actor as the renderers should draw it at `time`: performance applied in media mode (base actor otherwise).
  * Studio and Player both draw this, so editor, Preview and exports match.
  */
-export function performedActor(actor: ActorNode, spec: Pick<SceneSpec, 'mode' | 'actors' | 'world'>, time: number): ActorNode {
-  if (spec.mode !== 'media' || !hasPerformance(actor)) return actor;
-  const pose = resolvePerformance(actor, time, spec.actors, spec.world);
+export function performedActor(actor: ActorNode, spec: Pick<SceneSpec, 'mode' | 'actors' | 'world'> & Partial<Pick<SceneSpec, 'dialogue'>>, time: number): ActorNode {
+  const talks = spec.mode === 'media' && !!spec.dialogue?.some((l) => l.speaker === actor.id);
+  if (spec.mode !== 'media' || (!hasPerformance(actor) && !talks)) return actor;
+  const pose = hasPerformance(actor)
+    ? resolvePerformance(actor, time, spec.actors, spec.world)
+    : { position: actor.position, yaw: actor.rotation?.[1] ?? 0, clip: actor.activeClip, animation: actor.activeAnimation, speed: actor.animationSpeed ?? 1, moving: false };
+  let yaw = pose.yaw;
+  let talkLevel = 0;
+  if (talks) {
+    // Phase 10C: a speaker standing still turns to its listener for the line (eased in and back out).
+    const scene = { actors: spec.actors, dialogue: spec.dialogue };
+    talkLevel = talkLevelAt(scene, actor.id, time);
+    if (!pose.moving) {
+      for (const tl of dialogueTimeline(scene)) {
+        if (tl.line.speaker !== actor.id || !tl.line.listener || time < tl.start || time > tl.end + TURN_SECONDS) continue;
+        const other = spec.actors.find((a) => a.id === tl.line.listener);
+        if (!other || other.id === actor.id) continue;
+        const target = hasPerformance(other) ? resolvePerformance(other, time, spec.actors, spec.world, 1).position : other.position;
+        const dx = target[0] - pose.position[0];
+        const dz = target[2] - pose.position[2];
+        if (Math.hypot(dx, dz) < 0.01) continue;
+        const w = smooth((time - tl.start) / TURN_SECONDS) * (1 - smooth((time - tl.end) / TURN_SECONDS));
+        yaw = lerpAngle(pose.yaw, Math.atan2(dx, dz), w);
+      }
+    }
+  }
   return {
     ...actor,
     position: pose.position,
-    rotation: [actor.rotation?.[0] ?? 0, pose.yaw, actor.rotation?.[2] ?? 0],
+    rotation: [actor.rotation?.[0] ?? 0, yaw, actor.rotation?.[2] ?? 0],
     activeClip: pose.clip,
     activeAnimation: pose.animation,
     animationSpeed: pose.speed,
+    ...(talkLevel > 0 ? { talkLevel } : {}),
   };
 }
 

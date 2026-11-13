@@ -1,7 +1,7 @@
 /**
  * Phase 7C — StudioState and the types shared by the store slices (src/state/slices/*).
  */
-import { BiomeId, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
+import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
 import { ActorNode, AspectRatioPreset, CameraMode, CaptionCue, ChatMessage, DirectorSkill, EngineType, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
@@ -246,6 +246,13 @@ export interface StudioState {
   updateSceneAudio: (patch: Partial<SceneAudioSpec>, library?: Record<string, SfxRecipe>) => void;
   /** Phase 10B: set / merge the scene soundtrack (null removes it). */
   updateSoundtrack: (patch: Partial<SoundtrackSpec> | null) => void;
+  /** Phase 10C: replace the active scene's dialogue lines. */
+  setDialogue: (lines: DialogueLine[]) => void;
+  setDialogueCaptions: (on: boolean) => void;
+  /** Phase 10C: generated voices (clip / duration) for several scenes at once, by scene id. */
+  applyDialogueVoices: (dialogue: Record<string, DialogueLine[]>) => void;
+  /** Phase 10C: a character's voice settings. */
+  updateActorVoice: (actorId: string, voice: ActorVoice | undefined) => void;
 
   // Phase 6 batch 2: play test, full preview, guide
   openPlayTest: (startSceneId?: string) => void;
