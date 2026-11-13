@@ -177,6 +177,10 @@ so that moves to the front.
 - [x] **Bug found by E2E**: when a logic graph reacted to a tap, the gift box skipped its own unbox counter, so "Tap to Unbox" could never
   be opened or won (studio and exports). Shared rule `clickRunsBuiltIn` (`src/runtime/gameSlice.ts`) now keeps unbox progress.
 - [ ] Later: optional WebGPU renderer (Three r17x WebGPURenderer + TSL) once the custom shaders are ported.
+  Assessment 2026-11-13: this is the only open Phase 7 item and it is a port, not a fix — WebGPURenderer cannot run the 7 custom
+  GLSL materials (sky, Reflector water, shader grid, contact shadows, GPU particles, ambient dust, Unreal bloom pass), each needs a TSL
+  rewrite, plus an async renderer path in the Player and R3F. WebGL2 already runs everywhere we ship (incl. iOS WebViews), so it is
+  kept as a separate, optional task (Player-only first, WebGL fallback, pixel-parity E2E).
 
 ### Phase 8 — Mobile native (Android first, then iOS)
 - [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.
@@ -187,17 +191,36 @@ so that moves to the front.
 - [ ] **Store assistant**: icon/splash generation, screenshots from the Player, privacy/data-safety checklist, version & signing checks.
 - [ ] Mobile verifier rules: touch-reachable UI, text size, performance budget per profile, orientation lock.
 
-### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation)
-- [ ] Import analysis & normalisation (weld, clean, decimate > 300k faces, unit scale, up-axis/facing via PCA + symmetry, watertight voxel proxy).
-- [ ] Classification: vision-LLM JSON (humanoid / quadruped / bird / prop, facing, parts) cross-checked by geometry; ask the user when unsure.
-- [ ] Humanoid auto-rig: render → MediaPipe Pose landmarks → back-project to mesh centres → fit Mixamo/VRM-compatible template
-  (symmetry, bone ratios, consistent bone roll) → bone-heat skin weights (TypeScript, WASM when needed).
-- [ ] Validation: stress poses (arm raise, squat, stride) measuring stretch / volume loss / self-intersection + vision-LLM score; rig quality grade.
-- [ ] Animation: own rest-pose retargeter (not `SkeletonUtils.retargetClip`), clip library (Mixamo-format / licensed mocap / provider presets),
-  procedural locomotion (stride from leg length), foot IK on terrain, look-at, spring bones; LLM outputs the animation state machine as JSON.
-- [ ] Manual fix UI: joint gizmos, simple weight painting, "re-rig". Characters saved to the personal library (rigged GLB + `rig.json` + score).
-- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server
-  for non-humanoid creatures. Quadruped / bird templates.
+### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
+Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
+extensions (Phase 6), and neither consumes the other's output. Phase 8's mobile budgets will later include rig cost (bones,
+vertices, texture size of OmniRig characters).
+
+**Done (v1, all local and deterministic, `src/rig/*`, World → Assets → "Auto-rig a character")**
+- [x] Analysis & normalisation: area-weighted surface sampling, up axis (lying models detected), facing at ANY yaw (horizontal PCA +
+  mirror symmetry; front/back from toes in front of each ankle), height normalised (humanoid 1.8 m), triangle-count warning.
+- [x] Classification by geometry (ground contacts in thin slices, proportions, arms at shoulder height) with a confidence; the user
+  picks the type when unsure. (Vision-LLM cross-check: not yet.)
+- [x] Joint finding without ML: legs from horizontal slices (crotch = highest slice with two separate legs; touching legs fall back to
+  body proportions with a warning), arms from slices across x (T / A pose), neck at the narrowest slice above the shoulders; mirror
+  symmetric. Mixamo-named humanoid skeleton (27 bones), quadruped skeleton (legs, spine, neck, tail), one-piece prop rig.
+- [x] Skin weights Pinocchio-style without a solver: voxel solid + visibility (a bone only influences vertices it can "see" through the
+  body), inverse-distance falloff, fade behind each joint, smoothing over welded neighbours, 4 bones per vertex.
+- [x] Validation: arms-raised / squat / stride (quadruped: gallop reach / head down) with linear blend skinning; edge stretch p95,
+  volume change, flipped triangles → score and A–D grade.
+- [x] Animation: procedural clips with the names the AI already uses (Idle, Walking, Running, Wave, Jump, Yes, No, Sitting, Dance;
+  quadruped Idle / Walking / Running / Sitting), stride from leg length; rest-pose retargeter (`retargetClip`, tested).
+- [x] Manual fix: drag joints in the preview (left / right stay mirrored) → re-skin + re-validate. Characters saved to My Library as a
+  rigged GLB (opaque textures as JPEG, ≤ 2048 px) + `rig.json` in the asset meta, and placed with their clips and real size.
+- [x] Checked on real models: Soldier (B, 81), Expressive Robot (C, 65 — big head / thin arms), Fox (B), Horse (B, 2 of 4 feet found
+  → warning). Tests: `tests/omnirig.test.ts`.
+
+**Not yet**
+- [ ] Decimation above 300k triangles (now only a warning); rigging runs on the main thread (a worker for big meshes).
+- [ ] Vision-LLM classification / scoring of rendered views; MediaPipe landmarks for arms-down (I-pose) characters.
+- [ ] Clip library import (Mixamo-format GLB → `retargetClip` UI), foot IK on terrain, look-at, spring bones, LLM state machine JSON.
+- [ ] Weight painting; bird / serpent templates; finger bones.
+- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
 
 ### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
 Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;

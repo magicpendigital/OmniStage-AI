@@ -199,7 +199,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       };
     }),
 
-  registerAndSpawnCustomAsset: (name, url, fileType) => {
+  registerAndSpawnCustomAsset: (name, url, fileType, entryPatch) => {
     const state = get();
     if (fileType === 'glb') {
       const customId = `custom-glb-${Date.now().toString(36)}`;
@@ -220,6 +220,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         boundingBox: { width: 1.5, height: 2.0, depth: 1.5 },
         attachmentSockets: { ground: [0, 0, 0], top_badge: [0, 2.3, 0] },
         supportedAnimations: ['idle', 'spin', 'float', 'bounce'],
+        ...(entryPatch || {}),
       };
       set((s) => ({
         customRegistryAssets: [newEntry, ...s.customRegistryAssets],

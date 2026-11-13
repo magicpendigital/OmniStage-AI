@@ -26,6 +26,7 @@ import { DialoguePanel } from './DialoguePanel';
 import { BIOME_IDS, BIOME_PRESETS } from '../runtime/biomes';
 import { CaptionsPanel } from './CaptionsPanel';
 import { PersonalLibraryPanel } from './PersonalLibraryPanel';
+import { OmniRigModal } from './OmniRigModal';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
 import { enabledContributions } from '../extensions/registry';
 import {
@@ -53,6 +54,7 @@ export const LeftAssetDrawer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AuthoringTab>('outliner');
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'rigged' | 'procedural' | '2d'>('all');
   const [customGlbUrl, setCustomGlbUrl] = useState('');
+  const [omniRigOpen, setOmniRigOpen] = useState(false);
   const [customGlbName, setCustomGlbName] = useState('');
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -762,6 +764,16 @@ export const LeftAssetDrawer: React.FC = () => {
            ========================================================= */}
         {activeTab === 'library' && (
           <div className="space-y-3.5">
+            {/* Phase 9: OmniRig — auto-rig a character model */}
+            <button
+              type="button"
+              onClick={() => setOmniRigOpen(true)}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-100 text-xs font-semibold hover:bg-amber-500/25"
+              title="Skeleton, skin weights and animations for a humanoid, four-legged or prop model"
+            >
+              🦴 Auto-rig a character (OmniRig)
+            </button>
+            {omniRigOpen && <OmniRigModal onClose={() => setOmniRigOpen(false)} />}
             {/* Phase 6: personal + project-shared library on this computer */}
             <PersonalLibraryPanel />
             {/* Drag & Drop File Upload Zone (.glb, .gltf, .svg, .png, .json) */}

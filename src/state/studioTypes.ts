@@ -204,7 +204,8 @@ export interface StudioState {
   registerActorClips: (actorId: string, clipNames: string[]) => void;
   duplicateActor: (actorId: string) => void;
   spawnAsset: (assetId: string, customGlbUrl?: string, customName?: string) => void;
-  registerAndSpawnCustomAsset: (name: string, url: string, fileType: 'glb' | 'svg' | 'image') => void;
+  /** `entry` overrides registry fields of a GLB (Phase 9: OmniRig characters carry their clips and real size). */
+  registerAndSpawnCustomAsset: (name: string, url: string, fileType: 'glb' | 'svg' | 'image', entry?: Partial<SemanticAssetEntry>) => void;
   removeActor: (actorId: string) => void;
 
   // 2D Node Authoring Actions
