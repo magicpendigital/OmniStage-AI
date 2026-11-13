@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  clearVoiceClips, decodeWav, dialogueCaptions, dialogueTimeline, encodeWavMono16, estimateLineDuration, getVoiceClip,
+  clearVoiceClips, decodeWav, pitchedClip, timeStretch, dialogueCaptions, dialogueTimeline, encodeWavMono16, estimateLineDuration, getVoiceClip,
   lineLanguage, registerVoiceAssets, registerVoiceClip, renderBabble, sceneCaptions, syllablesOf, talkLevelAt, voiceClipAssets, voiceFor,
 } from '../src/audio/voices';
 import { renderSceneSoundtrack, renderSoundtrackLayers, windowRms } from '../src/audio/soundtrack';
@@ -91,7 +91,7 @@ test('generated clips: WAV round trip, export assets, timing from the clip and t
   const spec = talkScene([{ id: 'a', time: 2, speaker: 'robot', text: 'Xin chào', clip: 'k1' }, { id: 'b', time: 5, speaker: 'fox', text: 'Chào!', clip: 'k1' }]);
   const tl = dialogueTimeline(spec);
   assert.ok(Math.abs(tl[0].end - 3) < 1e-6);
-  assert.ok(Math.abs(tl[1].end - tl[1].start - 1 / Math.pow(2, 4 / 12)) < 1e-6, 'the fox clip is pitched up and shorter');
+  assert.ok(Math.abs(tl[1].end - tl[1].start - 1) < 1e-6, 'pitched up, same tempo');
   const assets = voiceClipAssets([spec]);
   assert.deepEqual(Object.keys(assets), ['omni-voice:k1']);
   clearVoiceClips();
@@ -99,6 +99,19 @@ test('generated clips: WAV round trip, export assets, timing from the clip and t
   assert.equal(registerVoiceAssets(assets), 1);
   assert.equal(getVoiceClip('k1')!.data.length, SR);
   clearVoiceClips();
+});
+
+test('pitch shift keeps the tempo and moves the pitch', () => {
+  const sr = 16000;
+  const tone = new Float32Array(sr);
+  for (let i = 0; i < sr; i++) tone[i] = Math.sin((2 * Math.PI * 200 * i) / sr) * 0.5;
+  const up = pitchedClip('t', { sampleRate: sr, data: tone }, sr, 12);
+  assert.ok(Math.abs(up.length - sr) < sr * 0.01, `length ${up.length}`);
+  // zero crossings double one octave up
+  const zc = (a: Float32Array) => { let n = 0; for (let i = 2000; i < 14000; i++) if (a[i - 1] < 0 && a[i] >= 0) n++; return n; };
+  const ratio = zc(up) / zc(tone);
+  assert.ok(ratio > 1.85 && ratio < 2.15, `ratio ${ratio}`);
+  assert.ok(Math.abs(timeStretch(tone, sr, 1.5).length - 1.5 * sr) < 2);
 });
 
 test('mixing: dialogue is heard on its own and the music ducks under it', () => {

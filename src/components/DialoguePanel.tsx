@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { MessageSquare, Mic, Play, Plus, Trash2 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
-import { DIALOGUE_EMOTIONS, dialogueTimeline, getVoiceClip, PIPER_VOICES, renderBabble, voiceFor } from '../audio/voices';
+import { DIALOGUE_EMOTIONS, dialogueTimeline, getVoiceClip, PIPER_VOICES, pitchedClip, renderBabble, voiceFor } from '../audio/voices';
 import type { DialogueEmotion, DialogueLine, VoiceEngine } from '../types/scene.schema';
 
 let previewCtx: AudioContext | null = null;
@@ -65,7 +65,7 @@ export const DialoguePanel: React.FC = () => {
     const tl = timed.get(line.id);
     const voice = voiceFor(actors.find((a) => a.id === line.speaker), line.text);
     const clip = getVoiceClip(line.clip);
-    if (clip) playPcm(clip.data, clip.sampleRate * Math.pow(2, voice.pitch / 12));
+    if (clip && line.clip) playPcm(pitchedClip(line.clip, clip, 32000, voice.pitch), 32000);
     else playPcm(renderBabble(line, voice, 32000, /robot/i.test(tl?.speaker?.assetId || '')), 32000);
   };
 

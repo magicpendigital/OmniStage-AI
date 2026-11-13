@@ -239,7 +239,10 @@ export function shoulderOffsets(actor: ActorNode): { back: number; off: number }
   const k = actorHeight(actor) / 1.8;
   const halfDepth = ((box?.depth ?? 0.6) * sz) / 2;
   const halfWidth = ((box?.width ?? 0.6) * sx) / 2;
-  return { back: Math.max(0.9 * k, halfDepth + 0.75), off: Math.max(0.45 * k, halfWidth + 0.6) };
+  // Far enough that the foreground shoulder / head fills about a third of the frame width, not
+  // half of it: distance ≈ 2.2 × the actor's width (seen from behind: side to side), split behind (0.86) and beside (0.5).
+  const reach = Math.max(1.2 * k, halfWidth * 2 * 2.2);
+  return { back: Math.max(halfDepth + 0.95, reach * 0.86), off: Math.max(halfWidth + 0.8, reach * 0.5) };
 }
 
 export function shotWindows(spec: Pick<SceneSpec, 'durationSeconds' | 'camera'>): Array<{ shot: CameraShot; start: number; end: number }> {
@@ -277,7 +280,7 @@ const ANGLE_DEG: Record<NonNullable<CameraShot['angle']>, number> = {
  * Camera for the shot active at `time`, framing performers where they are at that moment. Returns null when the
  * scene has no shot list (the camera `mode` presets apply instead).
  */
-export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' | 'actors' | 'mode' | 'world'>, time: number): ShotFrame | null {
+export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' | 'actors' | 'mode' | 'world'> & Partial<Pick<SceneSpec, 'dialogue' | 'aspectRatio'>>, time: number): ShotFrame | null {
   const windows = shotWindows(spec);
   if (!windows.length) return null;
   let index = windows.findIndex((w) => time >= w.start && time < w.end);
@@ -288,8 +291,12 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
 
   const subject = spec.actors.find((a) => a.id === shot.subject) || heroActor(spec);
   if (!subject) return null;
-  const poseAt = (a: ActorNode, t: number): Pick<PerformedPose, 'position' | 'yaw' | 'clip'> =>
-    spec.mode === 'media' && hasPerformance(a) ? resolvePerformance(a, t, spec.actors, spec.world) : { position: a.position, yaw: a.rotation?.[1] ?? 0 };
+  // The pose the renderers draw (performance + Phase 10C turns towards a listener), so the camera frames the face we see.
+  const poseAt = (a: ActorNode, t: number): Pick<PerformedPose, 'position' | 'yaw' | 'clip'> => {
+    if (spec.mode !== 'media') return { position: a.position, yaw: a.rotation?.[1] ?? 0 };
+    const p = performedActor(a, spec, t);
+    return { position: p.position, yaw: p.rotation?.[1] ?? 0, clip: p.activeClip };
+  };
   const pose = poseAt(subject, time);
   // Frame relative to where the subject faced when the shot started: stable framing, no camera whip on turns.
   const baseYaw = poseAt(subject, start).yaw;
@@ -317,7 +324,13 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
       const side = shot.angle === 'three-quarter-right' || shot.angle === 'right' ? -1 : 1;
       // Stand clear of the foreground actor's own bulk (a big-headed robot is ~1.4 m deep): offsets come from the
       // partner's size, otherwise a small subject puts the camera inside a large partner.
-      const { back, off } = shoulderOffsets(partner);
+      const { back } = shoulderOffsets(partner);
+      let { off } = shoulderOffsets(partner);
+      // The sight line to the subject must pass beside the partner's body, not through it: at the partner it is
+      // off · L / (back + L) to the side (L = partner → subject distance).
+      const box = ASSET_REGISTRY[partner.assetId]?.boundingBox;
+      const halfW = ((box?.width ?? 0.6) * Math.abs(partner.scale?.[0] ?? 1)) / 2;
+      off = Math.max(off, ((halfW + 0.35) * (back + len)) / Math.max(0.5, len));
       const position: Vector3Tuple = [pp[0] - ux * back + -uz * off * side, pp[1] + ph * 0.95, pp[2] - uz * back + ux * off * side];
       return { position, target, fov: Math.max(fov, 34), shotIndex: index };
     }
@@ -327,46 +340,67 @@ export function resolveShot(spec: Pick<SceneSpec, 'durationSeconds' | 'camera' |
   let height = b.height * 1.8 * k * (shot.type === 'establishing' || shot.type === 'wide' || shot.type === 'high-angle' ? 1 : seat);
   let angle = baseYaw + ((shot.angle ? ANGLE_DEG[shot.angle] : b.angle) * Math.PI) / 180;
   let dollied = false;
-  if (!shot.angle && b.angle !== 0) {
-    // No explicit angle: film from the side where nobody stands between camera and subject. Decided at the shot's start
-    // (not per frame) so the camera never flips mid-shot.
-    const s0 = poseAt(subject, start).position;
-    const others = spec.actors.filter((a) => a.id !== subject.id && a.visible !== false).map((a) => poseAt(a, start).position);
+  if ((!shot.angle && b.angle !== 0) || (shot.angle && shot.angle !== 'back')) {
+    // Film from a side where nobody stands between camera and subject (decided once per shot, so the camera never flips
+    // mid-shot). An authored angle is a preference: kept when clear, otherwise the camera dollies in or turns a little.
+    // Checked over the whole shot (start, middle, end): someone walking into the line of sight later still counts.
+    // Each blocker has its own footprint (a fox is long, a coin is tiny).
+    const samples = [start, (start + end) / 2, Math.max(start, end - 0.05)];
+    const others = spec.actors.filter((a) => a.id !== subject.id && a.visible !== false);
+    const footprint = (a: ActorNode) => {
+      const box = ASSET_REGISTRY[a.assetId]?.boundingBox;
+      return (Math.max(box?.width ?? 0.6, box?.depth ?? 0.6) * Math.max(Math.abs(a.scale?.[0] ?? 1), Math.abs(a.scale?.[2] ?? 1))) / 2;
+    };
+    const frames = samples.map((t) => ({ s: poseAt(subject, t).position, o: others.map((a) => ({ p: poseAt(a, t).position, r: footprint(a) })) }));
+    const s0 = frames[0].s;
+    // How far (radians) the nearest foreground blocker stays outside the middle of the frame, worst moment of the shot.
+    // Only actors between the camera and the subject count (behind it they are background); a big actor close to the
+    // lens fills the frame even when it is beside the line of sight, so this works in frame angles, not metres.
+    const aspect = spec.aspectRatio === '9:16' ? 9 / 16 : spec.aspectRatio === '1:1' ? 1 : 16 / 9;
+    const halfH = Math.atan(Math.tan((fov * Math.PI) / 360) * aspect);
     const clearance = (ang: number, r = dist) => {
-      const cx = s0[0] + Math.sin(ang) * r;
-      const cz = s0[2] + Math.cos(ang) * r;
       let best = Infinity;
-      for (const o of others) {
-        // distance from o to the segment camera → subject (x/z plane)
-        const vx = s0[0] - cx;
-        const vz = s0[2] - cz;
-        const len2 = vx * vx + vz * vz || 1;
-        const u = Math.max(0, Math.min(1, ((o[0] - cx) * vx + (o[2] - cz) * vz) / len2));
-        best = Math.min(best, Math.hypot(o[0] - (cx + vx * u), o[2] - (cz + vz * u)));
+      for (const f of frames) {
+        const cx = f.s[0] + Math.sin(ang) * r;
+        const cz = f.s[2] + Math.cos(ang) * r;
+        const ax = f.s[0] - cx;
+        const az = f.s[2] - cz;
+        const len = Math.hypot(ax, az) || 1;
+        for (const o of f.o) {
+          const ox = o.p[0] - cx;
+          const oz = o.p[2] - cz;
+          const depth = (ox * ax + oz * az) / len;
+          if (depth > len - 0.15 || depth < -o.r) continue; // behind the subject, or behind the camera
+          const lateral = Math.abs(ox * az - oz * ax) / len;
+          const edge = Math.atan2(lateral, Math.max(0.05, depth)) - Math.atan2(o.r * 1.15, Math.max(0.05, Math.hypot(ox, oz)));
+          best = Math.min(best, edge - 0.85 * halfH);
+        }
       }
       return best;
     };
-    if (others.length && clearance(angle) < 1.2) {
+    if (others.length && clearance(angle) < 0) {
       // 1) Keep the frontal view but stand in front of the blocker (dolly in), when that still frames the shot.
-      const nearest = Math.min(...others.map((o) => Math.hypot(o[0] - s0[0], o[2] - s0[2])));
-      const closer = Math.min(dist, nearest - 0.9);
+      const nearest = Math.min(...frames.flatMap((f) => f.o.map((o) => Math.hypot(o.p[0] - f.s[0], o.p[2] - f.s[2]) - o.r)));
+      const closer = Math.min(dist, nearest - 0.4);
       const minDist = shot.type === 'close-up' || shot.type === 'medium' ? 1.55 * k : dist * 0.55;
-      if (closer >= minDist && clearance(angle, closer) >= 0.6) {
+      if (closer >= minDist && clearance(angle, closer) >= 0) {
         dist = closer;
         dollied = true;
       }
     }
-    if (others.length && !dollied && clearance(angle) < 1.2) {
+    if (others.length && !dollied && clearance(angle) < 0) {
       // 2) Try the mirrored angle, then swing further round the subject (still a front-ish view).
       const deg = (b.angle * Math.PI) / 180;
       // Close-ups must keep the face: swing at most ~50°.
       const wide = shot.type === 'close-up' ? [] : [baseYaw + deg + 1.3, baseYaw - deg - 1.3];
-      const candidates = [baseYaw - deg, baseYaw + deg + 0.7, baseYaw - deg - 0.7, ...wide];
+      const candidates = shot.angle
+        ? [angle + 0.45, angle - 0.45, angle + 0.85, angle - 0.85, angle + 1.3, angle - 1.3]
+        : [baseYaw - deg, baseYaw + deg + 0.7, baseYaw - deg - 0.7, ...wide];
       let bestAngle = angle;
       let bestClear = clearance(angle);
       for (const c of candidates) {
         const cl = clearance(c);
-        if (cl > bestClear + 0.25) { bestAngle = c; bestClear = cl; }
+        if (cl > bestClear + 0.05) { bestAngle = c; bestClear = cl; }
       }
       angle = bestAngle;
     }

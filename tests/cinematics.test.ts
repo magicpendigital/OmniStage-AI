@@ -106,7 +106,7 @@ test('shots: hard cuts, framing sizes, tracking a walking subject, over-shoulder
   const t2 = resolveShot(spec, 7.8)!;
   assert.ok(t2.target[0] > t1.target[0], 'tracking follows the walking subject');
   const os = resolveShot(spec, 9)!;
-  assert.ok(Math.hypot(os.position[0] - 0, os.position[2] - 4) < 2, 'camera stands at the partner\'s shoulder');
+  assert.ok(Math.hypot(os.position[0] - 0, os.position[2] - 4) < 3.3, 'camera stands at the partner\'s shoulder');
   assert.ok(near(os.target[0], resolvePerformance(hero, 9).position[0], 1e-6), 'looking at the subject');
 });
 
@@ -268,4 +268,40 @@ test('offline films are composed: nobody blocks the subject, over-shoulder sees 
       }
     });
   }
+});
+
+test('shots keep a blocker out of the frame for the whole shot, including talk turns (Phase 10C regression)', () => {
+  // The AI film: the robot talks to the fox (turns to it) and the fox walks in front of the robot during the close-up.
+  const fox = { ...robot('fox'), assetId: 'gltf-fox', position: [3, 0, 3] as [number, number, number],
+    performance: [{ time: 0, moveTo: [0.6, 0, 2.2] as [number, number, number], duration: 2 }] };
+  const hero = robot('hero', { position: [0, 0, 0] });
+  const spec = film([hero, fox], {
+    camera: { ...createBlankSceneSpec('3d').camera, shots: [{ start: 0, type: 'close-up', subject: 'hero', angle: 'front' }] },
+    dialogue: [{ id: 'l', time: 2.5, speaker: 'hero', listener: 'fox', text: 'Thật hả? Mình muốn đi xem lắm!' }],
+  });
+  for (const t of [0.2, 3, 6]) {
+    const shot = resolveShot(spec, t)!;
+    const foxPos = performedActor(fox, spec, t).position;
+    const heroPos = performedActor(hero, spec, t).position;
+    const cx = shot.position[0], cz = shot.position[2];
+    const vx = heroPos[0] - cx, vz = heroPos[2] - cz;
+    const u = Math.max(0, Math.min(1, ((foxPos[0] - cx) * vx + (foxPos[2] - cz) * vz) / (vx * vx + vz * vz)));
+    const gap = Math.hypot(foxPos[0] - (cx + vx * u), foxPos[2] - (cz + vz * u));
+    assert.ok(gap > 0.9, `t=${t}: the fox (footprint ~0.9 m) blocks the close-up, gap ${gap.toFixed(2)}`);
+  }
+});
+
+test('a close-up of a speaker facing its partner keeps the partner out of the middle of the frame (AI film regression)', () => {
+  // From the real AI film: robot and fox 2 m apart, looking at each other; "close-up, front" of the robot.
+  const hero = robot('hero', { position: [-1, 0, 1], performance: [{ time: 0, lookAt: 'fox' }] });
+  const fox = { ...robot('fox'), assetId: 'gltf-fox', position: [1, 0, 1] as [number, number, number], performance: [{ time: 0, lookAt: 'hero' }] };
+  const spec = film([hero, fox], { camera: { ...createBlankSceneSpec('3d').camera, shots: [{ start: 0, type: 'close-up', subject: 'hero', angle: 'front' }] } });
+  const shot = resolveShot(spec, 2)!;
+  const ax = hero.position[0] - shot.position[0], az = hero.position[2] - shot.position[2];
+  const ox = fox.position[0] - shot.position[0], oz = fox.position[2] - shot.position[2];
+  const len = Math.hypot(ax, az);
+  const depth = (ox * ax + oz * az) / len;
+  const offAxis = Math.atan2(Math.abs(ox * az - oz * ax) / len, depth) * 180 / Math.PI;
+  const radius = Math.atan2(0.9, Math.hypot(ox, oz)) * 180 / Math.PI;
+  assert.ok(depth > len || offAxis - radius > 12, `fox edge ${(offAxis - radius).toFixed(1)}° from the centre (depth ${depth.toFixed(2)} vs ${len.toFixed(2)})`);
 });

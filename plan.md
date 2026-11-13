@@ -263,6 +263,13 @@ the verifier only checks playability. Fix in layers: contract → production too
   - MP4 capture fix: the hidden Player iframe is kept in the viewport (scaled) and laid out explicitly — off-screen iframes did not
     run layout, which squeezed frames in small windows.
   - Tests: `tests/dialogue.test.ts`, E2E dialogue in the exported Player.
+  - Real AI run (Claude Code CLI, 2026-11-13): 3-scene robot + fox film in ~3 min, verifier clean on the first pass; the AI used
+    biomes (forest, waterfall-valley), a waterfall + pond, a mood arc (calm → happy → epic), 4-5 cues per scene, 10 Vietnamese lines
+    with emotions / listeners and distinct voice pitches. 10 Piper voices in seconds, 34 s MP4 with sound in ~6 s.
+    Fixes from it: pitch shifts keep the tempo (WSOLA; the fox talked 26 % faster), shots avoid blockers for the whole shot and also
+    with authored angles (the AI always sets one), blockers are judged by how much of the frame they fill (a fox beside the sight
+    line still filled half a close-up), the camera follows the talk turn, over-shoulder distance comes from the partner's width and
+    its sight line passes beside the partner's body.
   - Not done: CC0 Quaternius animation library retargeting (gesture clips per emotion); lip-sync visemes (models have no mouth rigs);
     voice clips are per browser (a project opened elsewhere falls back to babble until voices are generated again).
 - [ ] **10D** Paid Production Tools via Settings/Extensions (ElevenLabs voice/music/SFX, Blockade skybox, Meshy animation), licences recorded

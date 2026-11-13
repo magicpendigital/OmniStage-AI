@@ -136,7 +136,7 @@ export async function generateDialogueVoices(
           registerVoiceClip(key, clip);
           next.clip = key;
           // spoken length after the character's pitch shift (the renderer resamples by 2^(pitch/12))
-          next.duration = Math.round((clip.data.length / clip.sampleRate / Math.pow(2, voice.pitch / 12)) * 1000) / 1000;
+          next.duration = Math.round((clip.data.length / clip.sampleRate) * 1000) / 1000;
         } else {
           delete next.clip;
           next.duration = Math.round(estimateLineDuration(line, voice) * 1000) / 1000;

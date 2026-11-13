@@ -311,7 +311,8 @@ export function dialogueTimeline(scene: DialogueScene): TimedLine[] {
       const speaker = scene.actors.find((a) => a.id === line.speaker);
       const voice = voiceFor(speaker, line.text);
       const clip = getVoiceClip(line.clip);
-      const spoken = clip ? clip.data.length / clip.sampleRate / Math.pow(2, voice.pitch / 12) : num(line.duration, estimateLineDuration(line, voice));
+      // Pitch shifts keep the tempo (WSOLA), so a clip lasts as long as it was spoken.
+      const spoken = clip ? clip.data.length / clip.sampleRate : num(line.duration, estimateLineDuration(line, voice));
       return { line, start: line.time, end: Math.min(duration, line.time + spoken), speaker, voice };
     })
     .sort((a, b) => a.start - b.start);
@@ -364,6 +365,10 @@ export function sceneCaptions(scene: DialogueScene): CaptionCue[] {
 // =====================================================================================================================
 function resampleTo(clip: VoiceClip, sampleRate: number, pitch: number): Float32Array {
   const step = (clip.sampleRate / sampleRate) * Math.pow(2, pitch / 12);
+  return resampleRaw(clip, step);
+}
+
+function resampleRaw(clip: VoiceClip, step: number): Float32Array {
   const n = Math.max(1, Math.floor(clip.data.length / step));
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {
@@ -376,6 +381,66 @@ function resampleTo(clip: VoiceClip, sampleRate: number, pitch: number): Float32
   return out;
 }
 
+/**
+ * WSOLA time-stretch: plays `data` `factor` times longer (factor > 1 = slower) without changing its pitch. Overlap-adds
+ * Hann-windowed 30 ms frames, each shifted (±7 ms) to line up with the previous one, so speech stays smooth.
+ */
+export function timeStretch(data: Float32Array, sampleRate: number, factor: number): Float32Array {
+  if (Math.abs(factor - 1) < 1e-3 || data.length < 64) return data.slice();
+  const N = Math.max(64, Math.round(0.03 * sampleRate));
+  const Hs = Math.floor(N / 2);
+  const Ha = Hs / factor;
+  const tol = Math.round(0.007 * sampleRate);
+  const outLen = Math.round(data.length * factor);
+  const out = new Float32Array(outLen + N);
+  const norm = new Float32Array(outLen + N);
+  const win = new Float32Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
+  let prevIn = 0;
+  for (let k = 0; k * Hs < outLen; k++) {
+    const nominal = Math.round(k * Ha);
+    let best = nominal;
+    if (k > 0) {
+      // the natural continuation of the previous frame
+      const want = prevIn + Hs;
+      let bestScore = -Infinity;
+      for (let d = -tol; d <= tol; d += 2) {
+        const pos = nominal + d;
+        if (pos < 0 || pos + N > data.length) continue;
+        let score = 0;
+        for (let i = 0; i < N; i += 4) score += data[pos + i] * (data[want + i] || 0);
+        if (score > bestScore) { bestScore = score; best = pos; }
+      }
+    }
+    best = Math.max(0, Math.min(data.length - 1, best));
+    const o = k * Hs;
+    for (let i = 0; i < N && best + i < data.length; i++) {
+      out[o + i] += data[best + i] * win[i];
+      norm[o + i] += win[i];
+    }
+    prevIn = best;
+  }
+  const res = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) res[i] = norm[i] > 1e-3 ? out[i] / norm[i] : 0;
+  return res;
+}
+
+const pitched = new Map<string, Float32Array>();
+/** A generated clip at `sampleRate`, shifted by `semitones` with its tempo kept (cached). */
+export function pitchedClip(key: string, clip: VoiceClip, sampleRate: number, semitones: number): Float32Array {
+  const id = `${key}|${sampleRate}|${semitones}`;
+  let pcm = pitched.get(id);
+  if (!pcm) {
+    const ratio = Math.pow(2, semitones / 12);
+    // resample: higher and shorter by `ratio`, then stretch back to the spoken length
+    const raw = resampleRaw(clip, (clip.sampleRate / sampleRate) * ratio);
+    pcm = semitones ? timeStretch(raw, sampleRate, ratio) : raw;
+    if (pitched.size > 64) pitched.clear();
+    pitched.set(id, pcm);
+  }
+  return pcm;
+}
+
 /** Mono voice track of a scene at `sampleRate` plus a 0..1 "someone is talking" envelope (for music ducking). */
 export function renderDialogueTrack(scene: DialogueScene, samples: number, sampleRate: number): { voice: Float32Array; duck: Float32Array; pans: Array<{ from: number; to: number; pan: number }> } | null {
   const timeline = dialogueTimeline(scene);
@@ -386,7 +451,7 @@ export function renderDialogueTrack(scene: DialogueScene, samples: number, sampl
   for (const tl of timeline) {
     const clip = getVoiceClip(tl.line.clip);
     const robotic = /robot|droid|mech/i.test(tl.speaker?.assetId || '');
-    const pcm = clip ? resampleTo(clip, sampleRate, tl.voice.pitch) : renderBabble(tl.line, tl.voice, sampleRate, robotic);
+    const pcm = clip ? pitchedClip(tl.line.clip!, clip, sampleRate, tl.voice.pitch) : renderBabble(tl.line, tl.voice, sampleRate, robotic);
     const start = Math.round(tl.start * sampleRate);
     // Dialogue sits on top of the mix: every line is levelled to the same loudness (RMS of its voiced part).
     let e = 0;
