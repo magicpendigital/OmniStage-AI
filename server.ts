@@ -67,7 +67,7 @@ Return a JSON object with:
         },
         model
       );
-      res.json({ ...data, provider: meta.provider, model: meta.model });
+      res.json({ ...data, provider: meta.provider, model: meta.model, fallbackNote: meta.fallbackNote });
     } catch (error: any) {
       fail(res, '/api/agent/mutate', error);
     }
@@ -92,7 +92,7 @@ Return a JSON object with:
         },
         model
       );
-      res.json({ ...data, provider: meta.provider, model: meta.model });
+      res.json({ ...data, provider: meta.provider, model: meta.model, fallbackNote: meta.fallbackNote });
     } catch (error: any) {
       fail(res, '/api/agent/patch', error);
     }

@@ -12,6 +12,8 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   aiModels: {},
   aiApiKeys: {},
   aiBaseUrl: 'https://api.openai.com/v1',
+  aiFallbackEnabled: true,
+  aiFallbackOrder: [],
   aiEditMode: 'patch',
   disabledSkills: [],
   geminiModel: 'gemini-3.8-flash',

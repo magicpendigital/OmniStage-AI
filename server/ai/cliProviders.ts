@@ -92,6 +92,10 @@ export function composeCliPrompt(req: GenerateRequest): string {
 
 function fail(label: string, r: RunResult): never {
   if (r.timedOut) throw new Error(`${label} timed out`);
+  // Through cmd.exe a missing CLI is not ENOENT but "'x' is not recognized..." (exit 1) / "command not found" (127).
+  if (r.code === 127 || /is not recognized as an internal or external command|command not found/i.test(r.stderr)) {
+    throw new ProviderUnavailableError(`${label} is not installed on this computer.`);
+  }
   const detail = (r.stderr || r.stdout).trim().split('\n').slice(-3).join(' ').slice(0, 300);
   throw new Error(`${label} exited with code ${r.code}: ${detail}`);
 }

@@ -1036,7 +1036,7 @@ async function polishFilmShot(
   spec: SceneSpec,
   prompt: string,
   beat: StoryboardBeat,
-  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'aiFallbackEnabled' | 'aiFallbackOrder'>,
   signal?: AbortSignal
 ): Promise<SceneSpec> {
   const check = (s: SceneSpec) => autoFixSceneSpec(s);
@@ -1074,7 +1074,7 @@ ${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`;
 export async function generateStoryboardWithAgent(
   prompt: string,
   intent: StoryboardIntent,
-  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'aiFallbackEnabled' | 'aiFallbackOrder'>,
   callbacks: StoryboardGenerationCallbacks = {},
   signal?: AbortSignal
 ): Promise<StoryboardGenerationResult> {

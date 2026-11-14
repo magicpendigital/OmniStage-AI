@@ -2,8 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractJSON, sanitizeModelId } from '../server/ai/types';
 import { antigravityStdin, composeCliPrompt, parseAntigravityEvents, parseClaudeOutput, parseOpenCodeEvents, shellArg } from '../server/ai/cliProviders';
-import { isLoopbackRequest, resolveProviderConfig, generate } from '../server/ai/index';
-import { aiHeaders, effectiveModel } from '../src/agent/aiClient';
+import { isLoopbackRequest, resolveProviderConfig, generate, generateJSON, aiErrorStatus } from '../server/ai/index';
+import { aiHeaders, effectiveModel, fallbackChain } from '../src/agent/aiClient';
+import { ProviderUnavailableError } from '../server/ai/types';
+import {
+  AllProvidersFailedError,
+  buildChain,
+  classifyFailure,
+  COOLDOWN_MS,
+  encodeFallbackHeader,
+  fallbackNote,
+  parseFallbackHeader,
+  ProviderHealth,
+  providerHealth,
+  runWithFallback,
+} from '../server/ai/fallback';
 
 test('extractJSON tolerates fences, prose and braces inside strings', () => {
   assert.deepEqual(extractJSON('```json\n{"a":1}\n```'), { a: 1 });
@@ -81,4 +94,140 @@ test('client headers follow Settings → AI', () => {
   assert.equal(effectiveModel(gem), 'gemini-3.8-flash');
   assert.equal(aiHeaders(gem)['x-ai-key'], 'secret');
   assert.equal(aiHeaders(gem)['x-ai-base-url'], undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: connection fallback chain
+// ---------------------------------------------------------------------------
+
+test('fallback header round-trips and drops invalid entries', () => {
+  const list = [{ provider: 'cli-claude', model: 'sonnet' }, { provider: 'evil' }, { provider: 'openrouter', apiKey: 'k' }] as any[];
+  const parsed = parseFallbackHeader(encodeFallbackHeader(list));
+  assert.deepEqual(parsed.map((c) => c.provider), ['cli-claude', 'openrouter']);
+  assert.equal(parsed[0].model, 'sonnet');
+  assert.deepEqual(parseFallbackHeader('not base64 json'), []);
+  assert.deepEqual(parseFallbackHeader(undefined), []);
+  // Duplicates of the primary are removed.
+  const chain = buildChain({ provider: 'gemini' }, [{ provider: 'gemini' }, { provider: 'cli-codex' }]);
+  assert.deepEqual(chain.map((c) => c.provider), ['gemini', 'cli-codex']);
+});
+
+test('failures are classified for cooldowns', () => {
+  assert.equal(classifyFailure(new ProviderUnavailableError('no key')), 'unavailable');
+  assert.equal(classifyFailure(new Error('https://x returned 429: Too Many Requests')), 'rate-limit');
+  assert.equal(classifyFailure(new Error('RESOURCE_EXHAUSTED: quota exceeded')), 'rate-limit');
+  assert.equal(classifyFailure(new Error('Claude Code: Not logged in')), 'auth');
+  assert.equal(classifyFailure(new Error('Codex CLI timed out')), 'timeout');
+  assert.equal(classifyFailure(new Error('Model response contains no JSON object')), 'bad-output');
+  assert.equal(classifyFailure(new Error('boom')), 'error');
+});
+
+test('runWithFallback moves to the next connection and records every attempt', async () => {
+  const health = new ProviderHealth();
+  let t = 1000;
+  const now = () => t;
+  const calls: string[] = [];
+  const outcome = await runWithFallback(
+    [{ provider: 'gemini' }, { provider: 'anthropic' }, { provider: 'cli-claude' }],
+    async (cfg) => {
+      calls.push(cfg.provider);
+      if (cfg.provider === 'gemini') throw new Error('returned 429: quota');
+      if (cfg.provider === 'anthropic') throw new ProviderUnavailableError('Anthropic API key not configured');
+      return 'ok';
+    },
+    { health, now }
+  );
+  assert.equal(outcome.value, 'ok');
+  assert.equal(outcome.used.provider, 'cli-claude');
+  assert.deepEqual(calls, ['gemini', 'anthropic', 'cli-claude']);
+  assert.deepEqual(
+    outcome.attempts.map((a) => [a.provider, a.ok, a.kind]),
+    [
+      ['gemini', false, 'rate-limit'],
+      ['anthropic', false, 'unavailable'],
+      ['cli-claude', true, undefined],
+    ]
+  );
+  assert.match(fallbackNote(outcome) || '', /gemini failed \(rate-limit\).*→ used cli-claude/);
+
+  const okOnly = async (cfg: { provider: string }) => {
+    calls.push(cfg.provider);
+    return 'ok';
+  };
+  // Next request: the rate-limited connection is cooling down and is tried last; the unconfigured one has no cooldown.
+  calls.length = 0;
+  t += 10_000;
+  await runWithFallback([{ provider: 'gemini' }, { provider: 'cli-claude' }], okOnly, { health, now });
+  assert.deepEqual(calls, ['cli-claude']);
+  assert.equal(health.snapshot(t)[0]?.provider, 'gemini');
+
+  // After the cooldown it is first again.
+  calls.length = 0;
+  t += COOLDOWN_MS['rate-limit'];
+  await runWithFallback([{ provider: 'gemini' }, { provider: 'cli-claude' }], okOnly, { health, now });
+  assert.deepEqual(calls, ['gemini']);
+  assert.equal(fallbackNote({ used: { provider: 'gemini' }, attempts: [{ provider: 'gemini', ok: true, ms: 1 }] }), undefined);
+});
+
+test('runWithFallback: all unconfigured → 503 (offline director), real failures → 500 listing each', async () => {
+  const health = new ProviderHealth();
+  await assert.rejects(
+    runWithFallback(
+      [{ provider: 'gemini' }, { provider: 'anthropic' }],
+      async () => {
+        throw new ProviderUnavailableError('no key');
+      },
+      { health }
+    ),
+    (e: any) => e instanceof ProviderUnavailableError && aiErrorStatus(e) === 503
+  );
+  await assert.rejects(
+    runWithFallback(
+      [{ provider: 'gemini' }, { provider: 'cli-codex' }],
+      async (cfg) => {
+        throw cfg.provider === 'gemini' ? new ProviderUnavailableError('no key') : new Error('Codex CLI exited with code 1: boom');
+      },
+      { health }
+    ),
+    (e: any) => e instanceof AllProvidersFailedError && aiErrorStatus(e) === 500 && /gemini: no key \| cli-codex: Codex CLI exited/.test(e.message)
+  );
+});
+
+test('client sends the fallback chain from Settings → AI', () => {
+  const settings = {
+    aiProvider: 'gemini' as const,
+    aiModels: { 'cli-claude': 'sonnet' },
+    aiApiKeys: { openrouter: 'or-key' },
+    aiBaseUrl: 'http://localhost:11434/v1',
+    geminiModel: 'gemini-3.8-flash' as const,
+    aiFallbackEnabled: true,
+    aiFallbackOrder: ['gemini', 'cli-claude', 'openrouter', 'cli-claude', 'openai-compatible'] as any,
+  };
+  assert.deepEqual(fallbackChain(settings), [
+    { provider: 'cli-claude', model: 'sonnet' },
+    { provider: 'openrouter', apiKey: 'or-key' },
+    { provider: 'openai-compatible', baseUrl: 'http://localhost:11434/v1' },
+  ]);
+  const header = aiHeaders(settings)['x-ai-fallback'];
+  assert.deepEqual(parseFallbackHeader(header).map((c) => c.provider), ['cli-claude', 'openrouter', 'openai-compatible']);
+  assert.equal(aiHeaders({ ...settings, aiFallbackEnabled: false })['x-ai-fallback'], undefined);
+  assert.equal(aiHeaders({ ...settings, aiFallbackOrder: [] })['x-ai-fallback'], undefined);
+});
+
+test('generateJSON walks the whole chain and names every failed connection', async () => {
+  providerHealth.clear();
+  const req: any = fakeReq({
+    'x-ai-provider': 'openai-compatible',
+    'x-ai-base-url': 'http://127.0.0.1:1/v1',
+    'x-ai-fallback': encodeFallbackHeader([{ provider: 'cli-claude', model: 'not valid!' }, { provider: 'anthropic' }]),
+  });
+  const prevKey = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    // Closed port, invalid model id (rejected before any CLI runs), no Anthropic key.
+    await assert.rejects(generateJSON(req, { system: 's', user: 'u', timeoutMs: 3000 }), /All AI connections failed.*openai-compatible.*cli-claude.*Invalid model id.*anthropic/);
+  } finally {
+    if (prevKey !== undefined) process.env.ANTHROPIC_API_KEY = prevKey;
+    providerHealth.clear();
+  }
 });

@@ -916,6 +916,12 @@ export interface SettingsConfig {
   /** Base URL for 'openai-compatible' (OpenAI, Ollama, LM Studio, vLLM, Groq, DeepSeek...). */
   aiBaseUrl: string;
   /**
+   * Phase 6: when the active connection fails (not configured, not signed in, rate limit, timeout, bad answer), try these
+   * connections next, in order. The active provider is skipped if it is listed. Default on with an empty list.
+   */
+  aiFallbackEnabled?: boolean;
+  aiFallbackOrder?: AIProviderId[];
+  /**
    * Phase 7C: how the AI director edits scenes. 'patch' (default) = small JSON Patch edits in a verify loop;
    * 'full' = the model rewrites the whole SceneSpec (for models that cannot follow the patch format).
    */

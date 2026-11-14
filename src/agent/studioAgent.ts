@@ -1454,7 +1454,10 @@ async function fetchAgentMutation(
     if (data && data.updatedSceneSpec && Array.isArray(data.updatedSceneSpec.actors)) {
       return {
         assistantMessage: data.assistantMessage || `Updated SceneSpec via ${data.provider || settings.aiProvider}${data.model ? ` · ${data.model}` : ''}.`,
-        diffSummary: Array.isArray(data.diffSummary) ? data.diffSummary : ['Updated SceneSpec state'],
+        diffSummary: [
+          ...(Array.isArray(data.diffSummary) ? data.diffSummary : ['Updated SceneSpec state']),
+          ...(data.fallbackNote ? [`AI connection fallback: ${data.fallbackNote}`] : []),
+        ],
         updatedSceneSpec: data.updatedSceneSpec,
       };
     }
@@ -1633,6 +1636,7 @@ async function runPatchEdit(
   const customSystemPrompt = mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext);
   let unavailable = false;
   let providerLabel = '';
+  const fallbackNotes = new Set<string>();
   const graphNotes = new Set<string>();
   const presets = new Set<string>();
 
@@ -1652,6 +1656,7 @@ async function runPatchEdit(
         const data = await res.json();
         if (!data || typeof data !== 'object') return null;
         if (!providerLabel && data.provider) providerLabel = `${data.provider}${data.model ? ` · ${data.model}` : ''}`;
+        if (typeof data.fallbackNote === 'string' && data.fallbackNote) fallbackNotes.add(data.fallbackNote);
         return data as PatchProposal;
       } catch {
         return null;
@@ -1675,6 +1680,7 @@ async function runPatchEdit(
     diffSummary: [
       ...loop.diffSummary,
       `AI edit loop: ${loop.rounds.length} round(s), ${ops} patch op(s)${rejected ? `, ${rejected} rejected patch(es) retried` : ''}`,
+      ...[...fallbackNotes].map((n) => `AI connection fallback: ${n}`),
       ...graphNotes,
       ...(presets.size ? [`Embedded extension presets: ${[...presets].join(', ')}`] : []),
       ...verificationNotes(loop.fixes, loop.report),

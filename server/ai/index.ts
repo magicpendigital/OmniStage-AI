@@ -3,11 +3,14 @@
  * providers (which spend the user's own signed-in subscription) are only reachable from this machine, and
  * exposes provider status / connection test endpoints.
  *
- * Headers sent by the studio: x-ai-provider, x-ai-model, x-ai-key, x-ai-base-url.
+ * Headers sent by the studio: x-ai-provider, x-ai-model, x-ai-key, x-ai-base-url, and x-ai-fallback (ordered backup
+ * connections, see ./fallback.ts). Every /api/agent/* response carries x-ai-used-provider / x-ai-used-model and, when a
+ * backup answered, x-ai-fallback-note.
  */
 import type { Express, Request } from 'express';
 import { apiProviderConfigured, callApiProvider, DEFAULT_MODELS } from './apiProviders';
 import { callCliProvider, CLI_BINARIES, detectCliProviders } from './cliProviders';
+import { AllProvidersFailedError, buildChain, fallbackNote, parseFallbackHeader, providerHealth, runWithFallback } from './fallback';
 import {
   API_PROVIDERS,
   extractJSON,
@@ -20,7 +23,7 @@ import {
   ProviderUnavailableError,
 } from './types';
 
-export { extractJSON, ProviderUnavailableError };
+export { extractJSON, ProviderUnavailableError, AllProvidersFailedError };
 
 const LEGACY_GEMINI_MODELS = new Set([
   'gemini-3.8-flash',
@@ -64,11 +67,41 @@ export async function generate(cfg: ProviderConfig, request: GenerateRequest, re
   return callApiProvider(cfg, request);
 }
 
-/** generate() + JSON extraction, as used by every /api/agent/* endpoint. */
-export async function generateJSON(req: Request, request: GenerateRequest, bodyModel?: unknown): Promise<{ data: any; meta: GenerateResult }> {
-  const cfg = resolveProviderConfig(req, bodyModel);
-  const meta = await generate(cfg, request, req);
-  return { data: extractJSON(meta.text), meta };
+/** Backup connections for this request (x-ai-fallback), in the user's order. */
+export function resolveFallbackChain(req: Request, primary: ProviderConfig): ProviderConfig[] {
+  return buildChain(primary, parseFallbackHeader(header(req, 'x-ai-fallback')));
+}
+
+export interface GenerateJSONOptions {
+  /** false = only the primary connection (connection test). Default true. */
+  fallback?: boolean;
+}
+
+/**
+ * generate() + JSON extraction over the fallback chain, as used by every /api/agent/* endpoint. A connection whose answer is
+ * not JSON also counts as failed, so the next connection gets the turn.
+ */
+export async function generateJSON(
+  req: Request,
+  request: GenerateRequest,
+  bodyModel?: unknown,
+  opts: GenerateJSONOptions = {}
+): Promise<{ data: any; meta: GenerateResult & { fallbackNote?: string } }> {
+  const primary = resolveProviderConfig(req, bodyModel);
+  const chain = opts.fallback === false ? [primary] : resolveFallbackChain(req, primary);
+  const outcome = await runWithFallback(chain, async (cfg) => {
+    const meta = await generate(cfg, request, req);
+    return { data: extractJSON(meta.text), meta };
+  });
+  const note = fallbackNote(outcome);
+  const res = req.res;
+  if (res && !res.headersSent) {
+    res.setHeader('x-ai-used-provider', outcome.value.meta.provider);
+    res.setHeader('x-ai-used-model', encodeURIComponent(outcome.value.meta.model));
+    if (note) res.setHeader('x-ai-fallback-note', encodeURIComponent(note));
+  }
+  if (note) console.warn(`[ai] ${note}`);
+  return { data: outcome.value.data, meta: { ...outcome.value.meta, ...(note ? { fallbackNote: note } : {}) } };
 }
 
 /** Maps provider errors to HTTP status: 503 = "not configured" (studio falls back to the offline director). */
@@ -91,6 +124,8 @@ export function registerAiRoutes(app: Express) {
         const status = cli.find((c) => c.id === id);
         return { id, label: CLI_BINARIES[id].label, installed: !!status?.installed, version: status?.version, install: CLI_BINARIES[id].install, available: local };
       }),
+      // Connections that failed recently and are tried last until the cooldown ends (no keys in here).
+      health: providerHealth.snapshot(),
     });
   });
 
@@ -102,7 +137,7 @@ export function registerAiRoutes(app: Express) {
         system: 'You are a connectivity probe for OmniStage. Reply with JSON only.',
         user: 'Return exactly {"ok": true}.',
         timeoutMs: 120_000,
-      });
+      }, undefined, { fallback: false });
       res.json({ ok: data?.ok === true, provider: meta.provider, model: meta.model, ms: Date.now() - started });
     } catch (error: any) {
       res.status(aiErrorStatus(error)).json({ ok: false, error: error?.message || String(error), ms: Date.now() - started });

@@ -84,6 +84,14 @@ Codex / Gemini CLI (later replaced by the Google Antigravity CLI), delivery in b
   Claude Code, Codex, OpenCode and **Google Antigravity CLI** (`agy` 1.5.4, stream-json over stdin) — all verified end-to-end on this machine.
   CLI providers are localhost-only, prompts go via stdin/file, model ids are sanitised; "Test connection" + CLI detection in Settings.
   Fixed: Settings provider/model/key were never sent to the server before.
+- [x] **Connection picker + fallback chain** (2026-11-14, `server/ai/fallback.ts`, `src/components/AIConnectionPicker.tsx`): choose the
+  connection and model right in the chat (CPU button on the prompt bar, and under the drawer prompt; ● = ready, ○ = not set up).
+  Settings → AI → "Fallback connections" holds an ordered backup list; when a connection fails (not configured, CLI missing / not
+  signed in, 429 / quota, timeout, server error, non-JSON answer) the server tries the next one in the same request
+  (`x-ai-fallback` header). A failed connection cools down (rate limit 5 min, auth 2 min, timeout 1 min) and is tried last meanwhile,
+  so later patch-loop rounds don't wait on it. The answering connection comes back in `x-ai-used-provider` / `x-ai-fallback-note` and
+  as an "AI connection fallback" line in the chat reply. All connections unconfigured → 503 → offline director, as before.
+  Connection test checks only the selected connection. Verified live: Gemini without key → Claude Code CLI answered.
 - [x] **Projects** (`server/workspace/*`, Project Hub): `~/OmniStage/projects/<project>/games/*.scenespec.json` (+ shared `assets/`),
   one game or a collection of games sharing assets, autosave (2.5 s debounce, Ctrl+S), deletes go to `.trash`. Game files are MCP-compatible.
 - [x] **Personal library** (`~/OmniStage/library`) + project-shared library, upload/place/delete from the Library tab.

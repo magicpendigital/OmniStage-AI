@@ -24,4 +24,7 @@ paths:
   `applyFix` really repairs it, and check for false positives against `SCENE_TEMPLATES` and the offline storyboard generator.
 - MCP tools (`mcp/projectTools.ts`) must reuse studio contract code (createBlankSceneSpec, autoFixSceneSpec, exporter); never
   write outside `ctx.rootDir`, keep scene ids stable, and keep `tests/mcpServer.test.ts` green.
+- Every AI call goes through `generateJSON` → `runWithFallback` (`server/ai/fallback.ts`): primary connection, then the user's
+  `x-ai-fallback` chain. Keep 503 only for "no connection configured" so the offline director still takes over; keep
+  `/api/ai/test` on `{ fallback: false }`; keep `tests/aiProviders.test.ts` green.
 - API keys arrive via headers (`x-ai-key`, `x-polypizza-key`, ...) or env; never log them or put them in SceneSpec.

@@ -3,6 +3,7 @@ import {
   ArrowUp,
   BookmarkPlus,
   Brain,
+  Cpu,
   Code2,
   Puzzle,
   ShieldAlert,
@@ -35,6 +36,8 @@ import { runGuideAction } from '../guide/guideActions';
 import type { ChatMessage } from '../types/scene.schema';
 import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
 import { Dropdown, IconBtn, Segmented } from './ui';
+import { AIConnectionPicker } from './AIConnectionPicker';
+import { providerLabel } from '../agent/aiClient';
 
 type DrawerTab = 'chat' | 'inspector' | 'json';
 
@@ -569,6 +572,23 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           <Dropdown
             up
             align="right"
+            panelClass="w-96"
+            trigger={({ toggle }) => (
+              <IconBtn label={`AI connection: ${providerLabel(settings)}`} onClick={toggle}>
+                <Cpu size={15} />
+              </IconBtn>
+            )}
+          >
+            {() => (
+              <div className="space-y-1.5 p-2">
+                <div className="menu-h">AI connection · {providerLabel(settings)}</div>
+                <AIConnectionPicker />
+              </div>
+            )}
+          </Dropdown>
+          <Dropdown
+            up
+            align="right"
             panelClass="w-80"
             trigger={({ toggle }) => (
               <IconBtn label="Quick prompts" onClick={toggle}>
@@ -706,6 +726,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
               {intentSeg}
               <span className="truncate text-[10px] text-dim">{INTENT_HELP[intent].title.split(': ')[1]}</span>
             </div>
+            <AIConnectionPicker />
             <div className="flex items-end gap-2">
               <textarea
                 className="field min-w-0 flex-1"

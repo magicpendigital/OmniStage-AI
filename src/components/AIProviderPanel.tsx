@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, KeyRound, Loader2, RefreshCw, Terminal, XCircle } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, KeyRound, Loader2, Plus, RefreshCw, Terminal, X, XCircle } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { AIProviderId, SettingsConfig } from '../types/scene.schema';
 import {
   AI_PROVIDERS,
   fetchProviderStatus,
   providerInfo,
+  providerReady,
   ProviderStatusResponse,
   testProviderConnection,
 } from '../agent/aiClient';
@@ -47,6 +48,18 @@ export const AIProviderPanel: React.FC = () => {
     setTesting(false);
   };
 
+  const fallbackOn = settings.aiFallbackEnabled !== false;
+  const order = (settings.aiFallbackOrder || []).filter((id) => id !== provider);
+  const setOrder = (next: AIProviderId[]) => updateSettings({ aiFallbackOrder: next });
+  const move = (i: number, d: -1 | 1) => {
+    const next = [...order];
+    const j = i + d;
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j], next[i]];
+    setOrder(next);
+  };
+  const candidates = AI_PROVIDERS.filter((p) => p.id !== provider && !order.includes(p.id));
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -64,7 +77,7 @@ export const AIProviderPanel: React.FC = () => {
         {AI_PROVIDERS.map((p) => {
           const cli = p.kind === 'cli' ? cliStatus(p.id) : undefined;
           const api = p.kind === 'api' ? apiStatus(p.id) : undefined;
-          const ready = p.kind === 'cli' ? !!cli?.installed && !!cli?.available : !!api?.serverKeyConfigured || !!settings.aiApiKeys?.[p.id];
+          const ready = providerReady(p.id, settings, status);
           const active = provider === p.id;
           return (
             <button
@@ -199,6 +212,63 @@ export const AIProviderPanel: React.FC = () => {
             </span>
           )}
         </div>
+      </div>
+
+      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2" data-testid="ai-fallback-order">
+        <div className="flex items-center justify-between">
+          <label className="font-semibold text-slate-200">Fallback connections</label>
+          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300">
+            <input type="checkbox" checked={fallbackOn} onChange={(e) => updateSettings({ aiFallbackEnabled: e.target.checked })} />
+            On
+          </label>
+        </div>
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          If <span className="text-slate-200">{info.label}</span> fails (not set up, not signed in, rate limit, timeout or an
+          unusable answer), the director tries these next, in order. A connection that just failed is tried last for a few minutes.
+          The chat shows which connection answered.
+        </p>
+        {order.length === 0 && <p className="text-[11px] text-slate-500">No backups yet — add one below.</p>}
+        <ol className="space-y-1">
+          {order.map((id, i) => {
+            const p = providerInfo(id);
+            const ready = providerReady(id, settings, status);
+            return (
+              <li key={id} className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-800 bg-slate-950 ${fallbackOn ? '' : 'opacity-50'}`}>
+                <span className="w-4 text-[10px] text-slate-500 font-mono">{i + 1}.</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-400' : 'bg-slate-600'}`} title={ready ? 'Ready' : 'Not configured — will be skipped'} />
+                <span className="flex-1 text-[11px] text-slate-100 truncate">
+                  {p.label}
+                  {settings.aiModels?.[id] ? <span className="font-mono text-slate-500"> · {settings.aiModels[id]}</span> : null}
+                </span>
+                <button type="button" aria-label={`Move ${p.label} up`} disabled={i === 0} onClick={() => move(i, -1)} className="text-slate-400 hover:text-cyan-300 disabled:opacity-30">
+                  <ArrowUp className="w-3 h-3" />
+                </button>
+                <button type="button" aria-label={`Move ${p.label} down`} disabled={i === order.length - 1} onClick={() => move(i, 1)} className="text-slate-400 hover:text-cyan-300 disabled:opacity-30">
+                  <ArrowDown className="w-3 h-3" />
+                </button>
+                <button type="button" aria-label={`Remove ${p.label}`} onClick={() => setOrder(order.filter((x) => x !== id))} className="text-slate-400 hover:text-rose-300">
+                  <X className="w-3 h-3" />
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        {candidates.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {candidates.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setOrder([...order, p.id])}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[10px] text-slate-300 hover:border-cyan-500"
+                title={providerReady(p.id, settings, status) ? 'Ready' : 'Not configured yet — set it up above first'}
+              >
+                <Plus className="w-3 h-3" /> {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="text-[10px] text-slate-500">Each backup uses the model, key and base URL you set for it above (select it to edit).</p>
       </div>
     </div>
   );
