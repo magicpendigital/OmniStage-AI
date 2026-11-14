@@ -6,7 +6,7 @@
  * Real voices (Piper, src/audio/piperVoice.ts) are generated in the studio and registered here as PCM clips by key; when a
  * line has no clip yet, the babble voice speaks it (deterministic, no download, works offline in exports).
  */
-import type { ActorNode, ActorVoice, CaptionCue, DialogueEmotion, DialogueLine, SceneSpec } from '../types/scene.schema';
+import type { ActorNode, ActorVoice, CaptionCue, DialogueEmotion, DialogueLine, SceneSpec, VoiceEngine } from '../types/scene.schema';
 
 export const DIALOGUE_EMOTIONS: DialogueEmotion[] = ['neutral', 'happy', 'excited', 'sad', 'angry', 'scared', 'whisper'];
 export const VOICE_CLIP_PREFIX = 'omni-voice:';
@@ -40,14 +40,27 @@ export function lineLanguage(text: string): 'vi' | 'en' {
   return VI_CHARS.test(text) ? 'vi' : 'en';
 }
 
-/** Voice settings of a speaker with defaults: Piper voice by language, a distinct pitch per character. */
-export function voiceFor(actor: Pick<ActorNode, 'id' | 'assetId' | 'voice'> | undefined, text = ''): Required<Pick<ActorVoice, 'engine' | 'voiceId' | 'pitch' | 'rate'>> {
+/** Phase 10D: stock ElevenLabs voice used when a character has no ElevenLabs voice of its own (multilingual). */
+export const DEFAULT_ELEVENLABS_VOICE = 'JBFqnCBsd6RMkjVDRZzb';
+
+/**
+ * Voice settings of a speaker with defaults: Piper voice by language, a distinct pitch per character.
+ * `lineEngine` (DialogueLine.engine) overrides the speaker's engine for one line. ElevenLabs voices are picked per
+ * character, so they are never pitch-shifted.
+ */
+export function voiceFor(actor: Pick<ActorNode, 'id' | 'assetId' | 'voice'> | undefined, text = '', lineEngine?: VoiceEngine): Required<Pick<ActorVoice, 'engine' | 'voiceId' | 'pitch' | 'rate'>> {
   const v = actor?.voice || {};
   const lang = lineLanguage(text);
   const small = /fox|cat|bird|bunny|rabbit|chick|kid|child/i.test(actor?.assetId || '');
   const big = /horse|giant|golem|soldier|monster/i.test(actor?.assetId || '');
+  const wanted = lineEngine || v.engine;
+  const engine: VoiceEngine = wanted === 'babble' ? 'babble' : wanted === 'elevenlabs' ? 'elevenlabs' : 'piper';
+  if (engine === 'elevenlabs') {
+    const id = typeof v.elevenLabsVoiceId === 'string' && /^[A-Za-z0-9]{8,40}$/.test(v.elevenLabsVoiceId) ? v.elevenLabsVoiceId : DEFAULT_ELEVENLABS_VOICE;
+    return { engine, voiceId: id, pitch: 0, rate: clamp(num(v.rate, 1), 0.7, 1.4) };
+  }
   return {
-    engine: v.engine === 'babble' ? 'babble' : 'piper',
+    engine,
     voiceId: v.voiceId || (lang === 'vi' ? 'vi_VN-vais1000-medium' : 'en_US-hfc_female-medium'),
     pitch: clamp(num(v.pitch, small ? 4 : big ? -4 : 0), -8, 8),
     rate: clamp(num(v.rate, 1), 0.7, 1.4),
@@ -309,7 +322,7 @@ export function dialogueTimeline(scene: DialogueScene): TimedLine[] {
     .filter((l) => l && typeof l.text === 'string' && l.text.trim() && Number.isFinite(l.time) && l.time >= 0 && l.time < duration)
     .map((line) => {
       const speaker = scene.actors.find((a) => a.id === line.speaker);
-      const voice = voiceFor(speaker, line.text);
+      const voice = voiceFor(speaker, line.text, line.engine);
       const clip = getVoiceClip(line.clip);
       // Pitch shifts keep the tempo (WSOLA), so a clip lasts as long as it was spoken.
       const spoken = clip ? clip.data.length / clip.sampleRate : num(line.duration, estimateLineDuration(line, voice));

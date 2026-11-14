@@ -570,13 +570,18 @@ export interface ActorNode {
   talkLevel?: number;
 }
 
-/** Phase 10C: 'piper' = real neural voice synthesised in the studio (downloaded once); 'babble' = procedural voice, no download. */
-export type VoiceEngine = 'piper' | 'babble';
+/**
+ * Phase 10C: 'piper' = real neural voice synthesised in the studio (downloaded once); 'babble' = procedural voice, no download.
+ * Phase 10D: 'elevenlabs' = ElevenLabs TTS with the creator's own key (paid tool; licence recorded in the project library).
+ */
+export type VoiceEngine = 'piper' | 'babble' | 'elevenlabs';
 
 export interface ActorVoice {
   engine?: VoiceEngine;
   /** Piper voice id, e.g. 'vi_VN-vais1000-medium' (default picked from the line's language). */
   voiceId?: string;
+  /** Phase 10D: ElevenLabs voice id used when the engine is 'elevenlabs' (default: a stock multilingual voice). */
+  elevenLabsVoiceId?: string;
   /** Semitones, -8..8 (small creatures higher, giants lower). */
   pitch?: number;
   /** Speaking rate 0.7..1.4 (babble only; Piper keeps its natural pace). */
@@ -596,6 +601,8 @@ export interface DialogueLine {
   emotion?: DialogueEmotion;
   /** actorId the speaker turns to while talking (when standing still). */
   listener?: string;
+  /** Phase 10D: voice engine for this line only (overrides the speaker's engine, e.g. one ElevenLabs line among Piper ones). */
+  engine?: VoiceEngine;
   /** Spoken length in seconds — filled in when the voice is generated (else estimated from the text). */
   duration?: number;
   /** Key of the generated voice clip (content hash) — filled in when the voice is generated. */
@@ -933,6 +940,19 @@ export interface SettingsConfig {
   sketchfabApiToken: string;
   /** Phase 6 Batch 3: BYO keys for generation providers (meshy, tripo, fal, replicate); localStorage only, sent as x-generate-key. */
   generationKeys?: Partial<Record<'meshy' | 'tripo' | 'fal' | 'replicate', string>>;
+  /**
+   * Phase 10D: vision-model director QA after AI film shots (needs a vision-capable connection). Default on.
+   * Shots scoring under `directorQAThreshold` (default 70) get one extra patch round driven by the director's notes.
+   */
+  directorQA?: boolean;
+  directorQAThreshold?: number;
+  /**
+   * Phase 10D: paid production tools, bring your own key. Kept in this browser's localStorage, sent only to the local
+   * OmniStage server as a header (x-elevenlabs-key); never written into SceneSpec, projects or logs.
+   */
+  elevenLabsApiKey?: string;
+  /** ElevenLabs TTS model id (default eleven_multilingual_v2). */
+  elevenLabsModel?: string;
   customSystemPrompt: string;
   customAssetManifestUrl: string;
   enableThreeOfficialCdn: boolean;

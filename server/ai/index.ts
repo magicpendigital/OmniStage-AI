@@ -59,6 +59,9 @@ export function resolveProviderConfig(req: Request, bodyModel?: unknown): Provid
 
 export async function generate(cfg: ProviderConfig, request: GenerateRequest, req?: Request): Promise<GenerateResult> {
   if (isCliProvider(cfg.provider)) {
+    if (request.requireVision) {
+      throw new ProviderUnavailableError('This needs a vision-capable AI connection (Gemini, Anthropic, OpenRouter or OpenAI-compatible); CLI providers cannot see images.');
+    }
     if (req && !isLoopbackRequest(req)) {
       throw new ProviderUnavailableError('CLI providers are only available when OmniStage is opened on this computer (localhost).');
     }

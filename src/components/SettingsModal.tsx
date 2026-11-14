@@ -18,11 +18,12 @@ import {
 import { BUILTIN_DIRECTOR_SKILLS } from '../agent/directorSkills';
 import { AIProviderPanel } from './AIProviderPanel';
 import { MemoryPanel } from './MemoryPanel';
+import { ProductionToolsPanel } from './ProductionToolsPanel';
 import { SETTINGS_TAB_EVENT } from '../guide/guideActions';
 import { DEFAULT_SETTINGS, useStudioStore } from '../state/useStudioStore';
 import { EngineType, SettingsConfig } from '../types/scene.schema';
 
-type SettingsTab = 'ai' | 'libraries' | 'engine' | 'memory';
+type SettingsTab = 'ai' | 'libraries' | 'engine' | 'memory' | 'production';
 
 export const SettingsModal: React.FC = () => {
   const isOpen = useStudioStore((s) => s.isSettingsModalOpen);
@@ -86,6 +87,7 @@ export const SettingsModal: React.FC = () => {
             { id: 'libraries', label: '2. External Asset CDNs', icon: <Database className="w-3.5 h-3.5" /> },
             { id: 'engine', label: '3. Engine & Render Quality', icon: <Sliders className="w-3.5 h-3.5" /> },
             { id: 'memory', label: '4. Memory', icon: <Brain className="w-3.5 h-3.5" /> },
+            { id: 'production', label: '5. Production tools', icon: <KeyRound className="w-3.5 h-3.5" /> },
           ].map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -344,6 +346,7 @@ export const SettingsModal: React.FC = () => {
           )}
 
           {activeTab === 'memory' && <MemoryPanel />}
+          {activeTab === 'production' && <ProductionToolsPanel />}
 
           {activeTab === 'engine' && (
             <div className="space-y-4">
