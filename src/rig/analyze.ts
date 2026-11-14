@@ -297,7 +297,7 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
   const warnings: string[] = [];
   const reasons: string[] = [];
   const triangles = mesh.indices.length / 3;
-  if (triangles > MAX_TRIANGLES) warnings.push(`${triangles.toLocaleString()} triangles — above ${MAX_TRIANGLES.toLocaleString()}, the model is simplified before rigging.`);
+  if (triangles > MAX_TRIANGLES) warnings.push(`${triangles.toLocaleString()} triangles — above ${MAX_TRIANGLES.toLocaleString()}, skin weights are computed on a simplified copy (≤ 100,000 triangles) and transferred back; the mesh keeps its detail.`);
   const raw = sampleSurface(mesh, opts.samples ?? 30000);
   const b0 = bounds(raw);
   const size: Vec3 = [b0.max[0] - b0.min[0], b0.max[1] - b0.min[1], b0.max[2] - b0.min[2]];

@@ -223,11 +223,16 @@ vertices, texture size of OmniRig characters).
   rigged GLB (opaque textures as JPEG, ≤ 2048 px) + `rig.json` in the asset meta, and placed with their clips and real size.
 - [x] Checked on real models: Soldier (B, 81), Expressive Robot (C, 65 — big head / thin arms), Fox (B), Horse (B, 2 of 4 feet found
   → warning). Tests: `tests/omnirig.test.ts`.
+- [x] (2026-11-14) Big meshes: rigging runs in a Web Worker (`rig.worker.ts` / `rigJobs.ts`, main-thread fallback); above 300k
+  triangles the mesh is decimated (vertex clustering, ≤ 100k) for skinning + validation and weights are transferred back to every
+  vertex — the mesh keeps its detail (305k-tri test: 99.7 % same dominant bone, ~2× faster).
+- [x] (2026-11-14) Clip library import: "Import clips (Mixamo .glb)" in the OmniRig dialog → bones matched by name (`mixamorig`
+  prefixes stripped), clips retargeted with `retargetClip` (+ rest-direction matching for A-pose vs T-pose), hips motion scaled and
+  kept in place; Walking / Running … replace the generated clips. Checked: Soldier.glb → 22/22 bones, 4 clips.
 
 **Not yet**
-- [ ] Decimation above 300k triangles (now only a warning); rigging runs on the main thread (a worker for big meshes).
 - [ ] Vision-LLM classification / scoring of rendered views; MediaPipe landmarks for arms-down (I-pose) characters.
-- [ ] Clip library import (Mixamo-format GLB → `retargetClip` UI), foot IK on terrain, look-at, spring bones, LLM state machine JSON.
+- [ ] Foot IK on terrain, look-at, spring bones, LLM state machine JSON; FBX clip import (now GLB only).
 - [ ] Weight painting; bird / serpent templates; finger bones.
 - [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
 
