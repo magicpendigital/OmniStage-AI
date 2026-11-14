@@ -1,6 +1,10 @@
 import React, { useRef } from 'react';
 import { AudioLines, Captions, Mic, Plus, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
-import { useStudioStore } from '../../state/useStudioStore';
+import { useStudioStore, withCaptionIds } from '../../state/useStudioStore';
+import { DialoguePanel } from '../DialoguePanel';
+import { SoundtrackPanel } from '../SoundtrackPanel';
+import { AudioCuePanel } from '../AudioCuePanel';
+import { CaptionsPanel } from '../CaptionsPanel';
 import { useShellStore } from '../../state/useShellStore';
 import { AudioTrackKind } from '../../types/scene.schema';
 
@@ -23,7 +27,7 @@ export const AudioPanel: React.FC = () => {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const audioTracks = useStudioStore((s) => s.sceneSpec.audioTracks) || [];
-  const captions = useStudioStore((s) => s.sceneSpec.captions) || [];
+  const captions = withCaptionIds(useStudioStore((s) => s.sceneSpec.captions));
   const libraryAudio = useStudioStore((s) => s.savedExternalAssets).filter((a) => a.kind === 'audio');
 
   const importLocalDirectoryAssets = useStudioStore((s) => s.importLocalDirectoryAssets);
@@ -204,6 +208,14 @@ export const AudioPanel: React.FC = () => {
           </div>
         </div>
       ))}
+
+      {/* Phase 4 / 5 / 10C: dialogue lines, film soundtrack, game SFX cues, caption styling and WebVTT/SRT */}
+      <div className="space-y-4 pt-2 text-xs">
+        <DialoguePanel />
+        <SoundtrackPanel />
+        <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
+        <CaptionsPanel />
+      </div>
     </>
   );
 };

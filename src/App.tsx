@@ -3,13 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { TopNavBar } from './components/TopNavBar';
 import { IconRail, PanelFlyout } from './components/LeftAssetDrawer';
 import { CenterViewport } from './components/CenterViewport';
 import { PublishModal } from './components/PublishModal';
 import { SettingsModal } from './components/SettingsModal';
 import { useShellStore } from './state/useShellStore';
+import { ProjectHubModal } from './components/ProjectHubModal';
+import { ExtensionsModal } from './components/ExtensionsModal';
+import { ExtensionReviewDialog } from './components/ExtensionReviewDialog';
+import { PlayTestModal } from './components/PlayTestModal';
+import { FullPreviewOverlay } from './components/FullPreviewOverlay';
+import { GuideModal } from './components/GuideModal';
+import { WelcomeTour } from './components/WelcomeTour';
+import { useStudioStore } from './state/useStudioStore';
+import { useProjectAutosave } from './workspace/useProjectAutosave';
+import { StaleDraftsDialog } from './components/StaleDraftsDialog';
 
 /**
  * Adaptive Docking Studio shell:
@@ -21,6 +31,12 @@ export default function App() {
   const railPanel = useShellStore((s) => s.railPanel);
   const flyoutPinned = useShellStore((s) => s.flyoutPinned);
   const showFlyout = !focusMode && railPanel !== null;
+
+  // Phase 6: connect to the local workspace (projects, extensions, memory) and autosave the open game.
+  useEffect(() => {
+    useStudioStore.getState().initWorkspace();
+  }, []);
+  useProjectAutosave();
 
   return (
     <div className="flex h-screen w-screen select-none flex-col overflow-hidden bg-bg text-fg">
@@ -41,6 +57,18 @@ export default function App() {
 
       {/* Studio Settings & External Asset Hub Modal */}
       <SettingsModal />
+
+      {/* Phase 6: projects, extensions and the install approval gate */}
+      <ProjectHubModal />
+      <StaleDraftsDialog />
+      <ExtensionsModal />
+      <ExtensionReviewDialog />
+
+      {/* Phase 6 batch 2: play test, full preview, guide + first-run tour */}
+      <PlayTestModal />
+      <FullPreviewOverlay />
+      <GuideModal />
+      <WelcomeTour />
     </div>
   );
 }

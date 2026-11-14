@@ -9,6 +9,12 @@
  *
  * Every generated scene is a declarative SceneSpec; nothing here emits imperative renderer code.
  */
+import { resolvePerformance } from '../runtime/cinematics';
+import { applyBiomeToScene, BIOME_IDS, biomeEnvironmentPatch, expandBiome } from '../runtime/biomes';
+import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
+import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
+import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
+import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
 import {
   ASSET_REGISTRY,
   createBlankSceneSpec,
@@ -17,6 +23,8 @@ import {
 } from '../registry/assetRegistry';
 import {
   ActorNode,
+  BiomeId,
+  DialogueLine,
   CameraMode,
   EngineType,
   LightingPresetId,
@@ -24,6 +32,7 @@ import {
   SceneSpec,
   SettingsConfig,
   SkyboxPreset,
+  SoundtrackSpec,
   StoryboardBeat,
   StoryboardKind,
   StoryboardPlan,
@@ -32,6 +41,8 @@ import {
   WeatherType,
   WorldSpec,
 } from '../types/scene.schema';
+import { autoFixSceneSpec } from '../verification/sceneVerifier';
+import { aiHeaders } from './aiClient';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -181,11 +192,23 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
       ? raw.activeClip
       : entry.defaultClip;
   return {
-    id: uid(`actor-${index}`),
+    // Phase 10A: keep the model's id so camera.shots / performance lookAt references stay valid (duplicates are
+    // renamed by the verifier's ids.duplicate fix).
+    id: typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.id) ? raw.id : uid(`actor-${index}`),
     name: str(raw.name, entry.name),
     assetId: entry.assetId,
+    performance: Array.isArray(raw.performance)
+      ? raw.performance.filter((st: any) => st && typeof st === 'object' && Number.isFinite(Number(st.time))).map((st: any) => ({ ...st, time: Number(st.time) })).slice(0, 24)
+      : undefined,
     modelUrl: raw.customGlbUrl ? str(raw.modelUrl, raw.customGlbUrl) : entry.modelUrl,
     customGlbUrl: typeof raw.customGlbUrl === 'string' ? raw.customGlbUrl : undefined,
+    // Phase 10C: character voice
+    ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
+      ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
+      ...(typeof raw.voice.voiceId === 'string' ? { voiceId: raw.voice.voiceId } : {}),
+      ...(Number.isFinite(raw.voice.pitch) ? { pitch: Math.max(-8, Math.min(8, raw.voice.pitch)) } : {}),
+      ...(Number.isFinite(raw.voice.rate) ? { rate: Math.max(0.7, Math.min(1.4, raw.voice.rate)) } : {}),
+    } } : {}),
     position: isVec3(raw.position) ? [raw.position[0], 0, raw.position[2]] : [index * 1.8 - 1.8, 0, 0],
     rotation: isVec3(raw.rotation) ? raw.rotation : [0, 0, 0],
     scale: isVec3(raw.scale) ? raw.scale : [1, 1, 1],
@@ -230,6 +253,55 @@ function normalizeNode2D(raw: any, index: number): Node2D | null {
   };
 }
 
+/** Natural ground colours per terrain type, used when the AI names a terrain but no colour (the stage default is near-black). */
+export const TERRAIN_COLORS: Partial<Record<TerrainType, string>> = {
+  'grassy-hills': '#5b8a3a',
+  'desert-dunes': '#c8955a',
+  'snow-mountains': '#e2e8f0',
+  'ocean-island': '#b08d57',
+  'city-asphalt': '#374151',
+};
+
+function normalizeTerrain(raw: Partial<WorldSpec['terrain']> | undefined): WorldSpec['terrain'] {
+  const terrain = { ...DEFAULT_WORLD_SPEC.terrain, ...(raw ?? {}) };
+  const hasColor = typeof raw?.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color);
+  if (!hasColor && TERRAIN_COLORS[terrain.type]) terrain.color = TERRAIN_COLORS[terrain.type]!;
+  return terrain;
+}
+
+/** Phase 10C: AI dialogue lines → valid lines (speaker / listener ids are checked by the verifier against the actors). */
+export function normalizeDialogue(raw: any): DialogueLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((l: any) => l && typeof l.text === 'string' && l.text.trim() && typeof l.speaker === 'string' && Number.isFinite(Number(l.time)))
+    .slice(0, 40)
+    .map((l: any, i: number) => ({
+      id: typeof l.id === 'string' && l.id ? l.id : `line-${i + 1}`,
+      time: Math.max(0, Number(l.time)),
+      speaker: l.speaker,
+      text: l.text.trim().slice(0, 240),
+      ...(DIALOGUE_EMOTIONS.includes(l.emotion) ? { emotion: l.emotion } : {}),
+      ...(typeof l.listener === 'string' && l.listener ? { listener: l.listener } : {}),
+    }));
+}
+
+/** Phase 10B: keeps a valid AI soundtrack (unknown moods / ambiences fall back, cues need a time and an sfx id). */
+export function normalizeSoundtrack(raw: any): SoundtrackSpec | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: SoundtrackSpec = {};
+  const mood = typeof raw.music === 'string' ? raw.music : raw.music?.mood;
+  if (mood) out.music = { mood: MUSIC_MOODS.includes(mood) ? mood : 'calm', ...(Number.isFinite(raw.music?.volume) ? { volume: raw.music.volume } : {}) };
+  const amb = typeof raw.ambience === 'string' ? raw.ambience : raw.ambience?.type;
+  out.ambience = { type: AMBIENCE_IDS.includes(amb) ? amb : 'auto', ...(Number.isFinite(raw.ambience?.volume) ? { volume: raw.ambience.volume } : {}) };
+  if (Array.isArray(raw.cues)) {
+    out.cues = raw.cues
+      .filter((c: any) => c && Number.isFinite(c.time) && typeof c.sfx === 'string')
+      .map((c: any) => ({ time: Math.max(0, c.time), sfx: c.sfx, ...(Number.isFinite(c.volume) ? { volume: c.volume } : {}) }));
+  }
+  if (Number.isFinite(raw.volume)) out.volume = raw.volume;
+  return out;
+}
+
 export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType): SceneSpec {
   const engineType: EngineType = raw?.engineType === '2d' || raw?.engineType === '3d' ? raw.engineType : fallbackEngine;
   const base = createBlankSceneSpec(engineType);
@@ -242,7 +314,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     ...rawWorld,
     sunPosition: isVec3(rawWorld.sunPosition) ? rawWorld.sunPosition : DEFAULT_WORLD_SPEC.sunPosition,
     clouds: { ...DEFAULT_WORLD_SPEC.clouds, ...(rawWorld.clouds ?? {}) },
-    terrain: { ...DEFAULT_WORLD_SPEC.terrain, ...(rawWorld.terrain ?? {}) },
+    terrain: normalizeTerrain(rawWorld.terrain),
     weather: { ...DEFAULT_WORLD_SPEC.weather, ...(rawWorld.weather ?? {}) },
     scatterObjects: Array.isArray(rawWorld.scatterObjects)
       ? rawWorld.scatterObjects.map((l: any, i: number) => ({
@@ -254,11 +326,29 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
           color: l.color,
         }))
       : [],
+    // Phase 10B: biome preset + water landmarks
+    biome: BIOME_IDS.includes(rawWorld.biome as BiomeId) ? rawWorld.biome : undefined,
+    features: Array.isArray(rawWorld.features)
+      ? rawWorld.features
+          .filter((f: any) => f && ['waterfall', 'river', 'pond'].includes(f.type))
+          .map((f: any, i: number) => ({
+            id: str(f.id, `feature-${i}`),
+            type: f.type,
+            position: isVec3(f.position) ? f.position : [0, 0, -14],
+            ...(Number.isFinite(f.rotationDeg) ? { rotationDeg: f.rotationDeg } : {}),
+            ...(Number.isFinite(f.size) ? { size: Math.min(3, Math.max(0.4, f.size)) } : {}),
+          }))
+      : undefined,
   };
+  if (!world.biome) delete world.biome;
+  if (!world.features) delete world.features;
+  const dressedWorld = world.biome ? expandBiome(world) : world;
 
   const presetId = (raw.environment?.presetId as LightingPresetId) || base.environment.presetId;
   const environment = {
     ...(LIGHTING_PRESETS[presetId] ?? base.environment),
+    // Phase 10B: a biome is outdoors (no studio grid, distant haze); explicit AI values still win.
+    ...(world.biome ? biomeEnvironmentPatch(world.biome) : {}),
     ...(raw.environment ?? {}),
     presetId: LIGHTING_PRESETS[presetId] ? presetId : base.environment.presetId,
   };
@@ -308,7 +398,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     aspectRatio: ['16:9', '9:16', '1:1'].includes(raw.aspectRatio) ? raw.aspectRatio : base.aspectRatio,
     durationSeconds,
     environment,
-    world,
+    world: dressedWorld,
     camera,
     actors: actors as ActorNode[],
     nodes2D: nodes2D as Node2D[],
@@ -316,6 +406,8 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     marketingOverlay: { ...base.marketingOverlay, ...(raw.marketingOverlay ?? {}) },
     gameRules: { ...base.gameRules, ...(raw.gameRules ?? {}) },
     timelineTracks: Array.isArray(raw.timelineTracks) ? raw.timelineTracks : base.timelineTracks,
+    ...(normalizeSoundtrack(raw.soundtrack) ? { soundtrack: normalizeSoundtrack(raw.soundtrack) } : {}),
+    ...(normalizeDialogue(raw.dialogue).length ? { dialogue: normalizeDialogue(raw.dialogue) } : {}),
   };
 }
 
@@ -603,6 +695,19 @@ function buildActor(assetId: string, clip: string | undefined, position: [number
 const FILM_CAMERAS: CameraMode[] = ['crane-reveal', 'dolly-zoom-in', 'orbit-360', 'cinematic-flythrough', 'first-person-follow'];
 const FILM_LIGHTING: LightingPresetId[] = ['clean-apple-studio', 'sunset-cinematic', 'cyberpunk-neon', 'arcade-vibrant'];
 
+/** Offline director: a biome that matches the film theme (and a waterfall when the prompt asks for one). */
+function offlineBiome(terrain: TerrainType, foldedPrompt: string, progress: number): BiomeId | null {
+  if (/waterfall|thac nuoc|thac/.test(foldedPrompt)) return 'waterfall-valley';
+  switch (terrain) {
+    case 'grassy-hills': return /night|dem/.test(foldedPrompt) && progress > 0.5 ? 'night-forest' : /meadow|dong co|canh dong/.test(foldedPrompt) ? 'meadow' : 'forest';
+    case 'desert-dunes': return 'desert';
+    case 'snow-mountains': return 'snowy-peaks';
+    case 'ocean-island': return 'beach';
+    case 'city-asphalt': return 'city-night';
+    default: return null;
+  }
+}
+
 function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: number, total: number): SceneSpec {
   const spec = createBlankSceneSpec('3d', beat.title);
   const theme = pickFilmTheme(prompt);
@@ -610,7 +715,7 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
   const progress = total <= 1 ? 0 : index / (total - 1); // 0 = opening, 1 = finale
   const isClimax = /climax|showdown|conflict/i.test(beat.beat) || (total >= 3 && index === total - 2);
   const isFinale = index === total - 1;
-  const duration = 8;
+  const duration = 10;
 
   const characters = CHARACTER_KEYWORDS.filter((c) => c.kw.test(t));
   if (characters.length === 0) characters.push(CHARACTER_KEYWORDS[0], CHARACTER_KEYWORDS[2]);
@@ -635,6 +740,20 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
   };
   const lighting = isClimax ? 'cyberpunk-neon' : progress > 0.5 ? 'sunset-cinematic' : FILM_LIGHTING[index % 2];
   spec.environment = { ...LIGHTING_PRESETS[lighting] };
+  // Phase 10B: dress the set from a biome (fills the frame, water landmarks), keep the arc's sky and weather.
+  const biome = offlineBiome(theme.terrain, t, progress);
+  if (biome) {
+    const arcSky = spec.world.skybox;
+    const arcWeather = spec.world.weather;
+    const dressed = applyBiomeToScene(spec, biome);
+    spec.world = { ...dressed.world, skybox: biome === 'night-forest' || biome === 'city-night' ? dressed.world.skybox : arcSky, weather: isClimax ? arcWeather : dressed.world.weather };
+    spec.environment = { ...spec.environment, ...biomeEnvironmentPatch(biome), groundColor: dressed.environment.groundColor } as typeof spec.environment;
+  }
+  spec.soundtrack = {
+    music: { mood: isFinale ? 'happy' : isClimax ? 'tense' : index === 0 ? 'calm' : 'adventure' },
+    ambience: { type: 'auto' },
+    cues: isFinale ? [{ time: 1.2, sfx: 'chime' }] : isClimax ? [{ time: 2, sfx: 'whoosh' }] : [],
+  };
 
   const cameraMode = isFinale ? 'orbit-360' : FILM_CAMERAS[index % FILM_CAMERAS.length];
   spec.camera = {
@@ -657,6 +776,24 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
     if (hazard) actors.push(hazard);
   }
   spec.actors = actors;
+  // Phase 10A: offline acting + shot list so even keyless films have movement and cuts.
+  const performers = actors.filter((a) => a.availableClips?.length);
+  directOfflineShot(spec, performers, characters, { index, isClimax, isFinale, duration });
+  // Phase 10C: a short exchange in the prompt's language (voice, captions and talk motion follow from it).
+  const [speakerA, speakerB] = performers;
+  if (speakerA) {
+    const vi = lineLanguage(prompt) === 'vi';
+    const pick = isFinale ? 2 : isClimax ? 1 : 0;
+    const LINES = vi
+      ? [['Ồ, nơi này đẹp quá!', 'Mình đi xem phía trước nhé!'], ['Cẩn thận! Có gì đó đang đến!', 'Đừng sợ, có mình ở đây.'], ['Chúng ta làm được rồi!', 'Hành trình tuyệt vời nhất!']]
+      : [['Wow, this place is beautiful!', "Let's see what's ahead!"], ['Watch out! Something is coming!', "Don't worry, I'm right here."], ['We did it!', 'Best adventure ever!']];
+    spec.dialogue = [
+      { id: 'line-1', time: 1.2, speaker: speakerA.id, text: LINES[pick][0], emotion: isClimax ? 'scared' : 'excited', ...(speakerB ? { listener: speakerB.id } : {}) },
+      ...(speakerB ? [{ id: 'line-2', time: 5.4, speaker: speakerB.id, text: LINES[pick][1], emotion: (isFinale ? 'happy' : 'neutral') as DialogueLine['emotion'], listener: speakerA.id }] : []),
+    ];
+  }
+  spec.environment.groundGrid = false;
+  spec.environment.reflectivePedestal = false;
 
   spec.vfx = [];
   if (isClimax) {
@@ -681,6 +818,56 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
     { id: uid('track'), label: 'Character Action', type: 'actor-anim', startTime: 0, endTime: duration, color: '#F59E0B' },
   ];
   return spec;
+}
+
+/** Phase 10A: a small acting arc + shot list for an offline film shot. */
+function directOfflineShot(
+  spec: SceneSpec,
+  performers: ActorNode[],
+  characters: Array<{ walk: string; run: string; hero: string }>,
+  o: { index: number; isClimax: boolean; isFinale: boolean; duration: number }
+) {
+  const [hero, partner] = performers;
+  let heroDest: [number, number, number] | undefined;
+  let heroAway = 1;
+  const has = (a: ActorNode, clip: string) => !!a.availableClips?.includes(clip);
+  const pick = (a: ActorNode, ...clips: string[]) => clips.find((c) => has(a, c));
+  const d = o.duration;
+  if (hero) {
+    const c = characters[0];
+    const startClip = o.index === 0 ? pick(hero, 'Sitting', 'Survey', 'Idle') : pick(hero, 'Idle', 'Survey');
+    const react = o.isFinale ? pick(hero, 'Dance', c.hero) : o.isClimax ? pick(hero, 'Jump', 'Punch', c.hero) : pick(hero, 'Wave', 'Yes', c.hero);
+    const [hx, , hz] = hero.position;
+    // Walk away from the partner (never through it), towards the camera side.
+    const away = partner ? Math.sign(hx - partner.position[0]) || -1 : o.index % 2 ? -1 : 1;
+    const dest: [number, number, number] = [Number((hx + away * 2.2).toFixed(2)), 0, Number((hz + 1.6).toFixed(2))];
+    heroDest = dest;
+    heroAway = away;
+    hero.activeClip = startClip || hero.activeClip;
+    hero.performance = [
+      { time: 0, clip: startClip, label: 'opening pose' },
+      ...(o.index === 0 && has(hero, 'Standing') ? [{ time: d * 0.2, clip: 'Standing', label: 'gets up' }] : []),
+      { time: d * 0.3, moveTo: dest, duration: d * 0.28, clip: o.isClimax ? pick(hero, c.run, 'Running', 'Run') : undefined, label: 'sets off' },
+      // Turn to the partner as the walk ends, before the over-shoulder shot cuts in at 0.66·d.
+      { time: d * 0.6, ...(partner ? { lookAt: partner.id } : { faceDeg: 0 }), clip: react, label: 'reacts' },
+      { time: d * 0.88, clip: o.isFinale ? react : pick(hero, 'ThumbsUp', 'Yes', 'Idle', 'Survey'), label: 'beat ends' },
+    ];
+  }
+  if (partner && hero) {
+    partner.performance = [
+      { time: 0, lookAt: hero.id, label: 'watches' },
+      // Follow the hero and stop 2.4 m beside where it arrives (on the side the partner came from).
+      ...(heroDest ? [{ time: d * 0.45, moveTo: [Number((heroDest[0] - heroAway * 2.4).toFixed(2)), 0, Number((heroDest[2] - 0.4).toFixed(2))] as [number, number, number], duration: d * 0.25, label: 'follows' }] : []),
+      { time: d * 0.75, lookAt: hero.id, clip: pick(partner, 'Survey', 'Idle', 'Wave'), label: 'answers' },
+    ];
+  }
+  const subject = hero?.id;
+  spec.camera.shots = [
+    { start: 0, type: o.index === 0 ? 'establishing' : 'wide', subject, move: o.index === 0 ? 'crane-up' : 'pull-out', label: 'open' },
+    { start: d * 0.3, type: 'tracking', subject, move: 'static', label: 'journey' },
+    { start: d * 0.66, type: partner ? 'over-shoulder' : 'medium', subject, partner: partner?.id, angle: 'three-quarter-left', label: 'meeting' },
+    { start: d * 0.8, type: o.isClimax ? 'low-angle' : 'close-up', subject, move: o.isFinale ? 'pull-out' : 'push-in', label: 'reaction' },
+  ];
 }
 
 function buildLocal3DGameLevel(beat: StoryboardBeat, index: number, total: number): SceneSpec {
@@ -782,10 +969,16 @@ function summarizeSceneForContinuity(spec: SceneSpec) {
     title: spec.title,
     engineType: spec.engineType,
     mode: spec.mode,
-    camera: spec.camera.mode,
+    camera: spec.camera.shots?.length ? spec.camera.shots.map((sh) => sh.type).join(' → ') : spec.camera.mode,
     world: spec.engineType === '3d' ? { skybox: spec.world.skybox, terrain: spec.world.terrain.type, weather: spec.world.weather.type } : undefined,
     lighting: spec.environment.presetId,
-    actors: spec.actors.map((a) => ({ name: a.name, assetId: a.assetId, primaryColor: a.primaryColor, activeClip: a.activeClip })),
+    // Phase 10A: where each character ends up and what it last did, so the next scene continues the action.
+    actors: spec.actors.map((a) => {
+      const last = a.performance?.length ? resolvePerformance(a, spec.durationSeconds || 8, spec.actors) : undefined;
+      return { id: a.id, name: a.name, assetId: a.assetId, primaryColor: a.primaryColor, activeClip: a.activeClip,
+        endsAt: last?.position.map((v) => Number(v.toFixed(1))), endsDoing: last?.clip };
+    }),
+    script: spec.sequence?.script,
     nodes2D: spec.engineType === '2d' ? { count: spec.nodes2D.length, palette: Array.from(new Set(spec.nodes2D.map((n) => n.stroke))).slice(0, 4) } : undefined,
     gameRules: spec.mode === 'game' ? { targetScore: spec.gameRules.targetScore, timeLimitSeconds: spec.gameRules.timeLimitSeconds } : undefined,
   };
@@ -812,6 +1005,8 @@ function sanitizePlan(raw: StoryboardPlan, intent: StoryboardIntent, fallback: S
       mode: b.mode === 'game' || b.mode === 'media' ? b.mode : intent.kind === 'game-levels' ? 'game' : 'media',
       beat: str(b.beat, fallback.beats[i].beat),
       difficulty: num(b.difficulty, i + 1),
+      script: typeof b.script === 'string' && b.script.trim() ? b.script.trim().slice(0, 1200) : fallback.beats[i].script,
+      transition: ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'].includes(b.transition) ? b.transition : i === 0 ? undefined : 'fade',
     });
   }
   return {
@@ -822,10 +1017,10 @@ function sanitizePlan(raw: StoryboardPlan, intent: StoryboardIntent, fallback: S
   };
 }
 
-async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promise<any> {
+async function postJSON(url: string, body: unknown, signal?: AbortSignal, headers?: Record<string, string>): Promise<any> {
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers || { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   });
@@ -833,10 +1028,53 @@ async function postJSON(url: string, body: unknown, signal?: AbortSignal): Promi
   return response.json();
 }
 
+/**
+ * Phase 10A: one or two JSON Patch rounds that add acting, shots and a place when the verifier's craft hints fire.
+ * Never makes the scene worse (the loop discards rounds that raise errors or craft issues).
+ */
+async function polishFilmShot(
+  spec: SceneSpec,
+  prompt: string,
+  beat: StoryboardBeat,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
+  signal?: AbortSignal
+): Promise<SceneSpec> {
+  const check = (s: SceneSpec) => autoFixSceneSpec(s);
+  const first = check(spec);
+  if (mediaQualityPenalty(first.report) === 0 && first.report.ok) return spec;
+  const ask = `Polish this film shot so it plays like a real scene (do not change the story).
+Shot: "${beat.title}" — ${beat.beat}${beat.script ? `\nScript:\n${beat.script}` : ''}
+Original request: "${prompt.slice(0, 400)}"
+${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`;
+  const loop = await runPatchLoop({
+    prompt: ask,
+    spec: first.spec,
+    maxRounds: 2,
+    check,
+    qualityPenalty: mediaQualityPenalty,
+    qualityCodes: MEDIA_CRAFT_CODES,
+    propose: async (turn) => {
+      try {
+        return (await postJSON(
+          '/api/agent/patch',
+          { prompt: turn.prompt, sceneSpec: turn.spec, round: turn.round, toolResults: turn.toolResults, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+          signal,
+          aiHeaders(settings)
+        )) as PatchProposal;
+      } catch {
+        return null;
+      }
+    },
+  });
+  if (!loop?.changed) return first.spec;
+  // Keep the storyboard identity the loop must not change.
+  return { ...loop.spec, id: spec.id, title: spec.title, sequence: spec.sequence, mode: spec.mode, engineType: spec.engineType };
+}
+
 export async function generateStoryboardWithAgent(
   prompt: string,
   intent: StoryboardIntent,
-  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt'>,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
   callbacks: StoryboardGenerationCallbacks = {},
   signal?: AbortSignal
 ): Promise<StoryboardGenerationResult> {
@@ -851,7 +1089,8 @@ export async function generateStoryboardWithAgent(
     const data = await postJSON(
       '/api/agent/storyboard/plan',
       { prompt, intent, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
-      signal
+      signal,
+      aiHeaders(settings)
     );
     if (isValidPlan(data, intent.sceneCount)) {
       plan = sanitizePlan(data, intent, localPlan);
@@ -888,7 +1127,8 @@ export async function generateStoryboardWithAgent(
             model: settings.geminiModel,
             customSystemPrompt: settings.customSystemPrompt,
           },
-          signal
+          signal,
+          aiHeaders(settings)
         );
         if (data && data.sceneSpec && typeof data.sceneSpec === 'object') {
           spec = normalizeGeneratedSceneSpec(data.sceneSpec, beat.engineType);
@@ -900,6 +1140,8 @@ export async function generateStoryboardWithAgent(
       }
     }
     if (!spec) spec = buildLocalSceneForBeat(prompt, plan, i);
+    // Phase 4 verification loop: every generated level/shot must pass the deterministic verifier.
+    spec = autoFixSceneSpec(spec).spec;
 
     spec.id = uid(`scene-${i + 1}`);
     spec.title = beat.title;
@@ -912,7 +1154,14 @@ export async function generateStoryboardWithAgent(
       index: i,
       total: plan.beats.length,
       beat: beat.beat,
+      ...(beat.transition && i > 0 ? { transition: beat.transition } : {}),
+      ...(beat.script ? { script: beat.script } : {}),
     };
+    // Phase 10A: AI film shots that still look static / empty get up to 2 polish rounds through the patch loop.
+    if (source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && !signal?.aborted) {
+      callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Polishing ${beat.title}` });
+      spec = await polishFilmShot(spec, prompt, beat, settings, signal);
+    }
     scenes.push(spec);
     sources.add(source);
     callbacks.onScene?.(spec, i, source);
@@ -926,7 +1175,7 @@ export async function generateStoryboardWithAgent(
     scenes,
     source,
     assistantMessage: `Generated storyboard "${plan.storyboardTitle}" with ${scenes.length} ${unit}s (${
-      source === 'local' ? 'offline studio generator' : source === 'gemini' ? settings.geminiModel : `${settings.geminiModel} + offline fallback`
+      source === 'local' ? 'offline studio generator' : source === 'gemini' ? settings.aiProvider : `${settings.aiProvider} + offline fallback`
     }). ${
       plan.kind === 'game-levels'
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'

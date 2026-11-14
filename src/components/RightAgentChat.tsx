@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
+  BookmarkPlus,
+  Brain,
   Code2,
+  Puzzle,
+  ShieldAlert,
+  ShieldCheck,
   MessageSquare,
   PanelBottom,
   PanelRightOpen,
@@ -20,6 +25,14 @@ import {
   runVisionQAInspection,
 } from '../agent/studioAgent';
 import { createBlankSceneSpec } from '../registry/assetRegistry';
+import { BUILTIN_DIRECTOR_SKILLS, mergeSystemPrompt } from '../agent/directorSkills';
+import { buildDirectorContext } from '../agent/studioAgent';
+import { parseExplicitMemory, suggestMemory } from '../agent/memory';
+import { recommendExtensions } from '../extensions/registry';
+import { EXTENSION_CATALOG } from '../extensions/catalog';
+import { formatGuideAnswer, guideLangFor, guideTopic, matchGuideQuestion } from '../guide/guideContent';
+import { runGuideAction } from '../guide/guideActions';
+import type { ChatMessage } from '../types/scene.schema';
 import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
 import { Dropdown, IconBtn, Segmented } from './ui';
 
@@ -32,6 +45,7 @@ const QUICK_PROMPTS = [
   'Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)',
   'Làm một bộ phim 3D gồm 3 cảnh về chú robot phiêu lưu trong rừng',
   'Tạo game 2D vượt chướng ngại vật 3 màn',
+  'Make it a playable ad with a strong hook, CTA and juicy sound effects',
 ];
 
 const INTENT_HELP: Record<AgentIntentMode, { label: string; title: string; placeholder: string }> = {
@@ -53,6 +67,121 @@ const INTENT_HELP: Record<AgentIntentMode, { label: string; title: string; place
 };
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+/** Phase 4 / 6 extras under an assistant reply: verification + Director Skills, guide links, memory and extension suggestions. */
+const MessageExtras: React.FC<{ msg: ChatMessage }> = ({ msg }) => {
+  const learnedSkills = useStudioStore((s) => s.learnedSkills);
+  const saveLearnedSkill = useStudioStore((s) => s.saveLearnedSkill);
+  const addMemoryEntry = useStudioStore((s) => s.addMemoryEntry);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const openExtensionReview = useStudioStore((s) => s.openExtensionReview);
+  const appendLog = useStudioStore((s) => s.appendLog);
+  const [skillSaved, setSkillSaved] = useState(false);
+  const [memorySaved, setMemorySaved] = useState(false);
+
+  if (msg.role !== 'assistant') return null;
+  const skillTitle = (id: string) => [...BUILTIN_DIRECTOR_SKILLS, ...learnedSkills].find((sk) => sk.id === id)?.title || id;
+  const topic = msg.guideTopicId ? guideTopic(msg.guideTopicId) : undefined;
+
+  return (
+    <>
+      {(msg.skillsUsed?.length || msg.verification) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {msg.verification && (
+            <span
+              title={msg.verification.issues.map((i) => `${i.code}: ${i.message}`).join(' | ') || 'No issues'}
+              className={`chip font-mono text-[10px] ${msg.verification.ok ? 'text-ok' : 'text-err'}`}
+            >
+              {msg.verification.ok ? <ShieldCheck size={11} /> : <ShieldAlert size={11} />}
+              {msg.verification.ok
+                ? `VERIFIED${msg.verification.warnings ? ` · ${msg.verification.warnings} warn` : ''}`
+                : `${msg.verification.errors} ERROR(S)`}
+            </span>
+          )}
+          {msg.skillsUsed?.map((id) => (
+            <span key={id} className="chip font-mono text-[10px] text-media">
+              {skillTitle(id)}
+            </span>
+          ))}
+          {msg.sourcePrompt && msg.updatedSpecSnapshot && (
+            <button
+              type="button"
+              className="chip ml-auto font-mono text-[10px]"
+              disabled={skillSaved}
+              title="Save this result as a learned Director Skill reused for similar prompts"
+              onClick={() => {
+                const skill = saveLearnedSkill(msg.sourcePrompt!, msg.updatedSpecSnapshot!);
+                setSkillSaved(true);
+                appendLog({ level: 'info', message: `Saved learned Director Skill "${skill.title}" (triggers: ${skill.triggers.join(', ')}).` });
+              }}
+            >
+              <BookmarkPlus size={11} />
+              {skillSaved ? 'Skill saved' : 'Save as skill'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {msg.guideTopicId && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <button type="button" className="btn sm" onClick={() => useStudioStore.getState().openGuide(msg.guideTopicId)}>
+            Open in Guide
+          </button>
+          {topic?.action && (
+            <button type="button" className="btn sm" onClick={() => runGuideAction(topic.action!.id)}>
+              {topic.action.label[guideLangFor(msg.content)]}
+            </button>
+          )}
+        </div>
+      )}
+
+      {msg.memorySuggestion && (
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-line p-2">
+          <Brain size={13} className="mt-0.5 shrink-0 text-media" />
+          <div className="flex-1 text-[11px]">
+            Remember this for next time? <span className="italic">"{msg.memorySuggestion.text}"</span>
+          </div>
+          <button
+            type="button"
+            className="btn sm"
+            disabled={memorySaved}
+            onClick={async () => {
+              await addMemoryEntry(msg.memorySuggestion!.text, msg.memorySuggestion!.kind, 'confirmed-suggestion', 'global');
+              setMemorySaved(true);
+            }}
+          >
+            {memorySaved ? 'Remembered' : 'Remember'}
+          </button>
+        </div>
+      )}
+
+      {msg.extensionSuggestions?.map((sug) => {
+        const manifest = EXTENSION_CATALOG.find((m) => m.id === sug.id);
+        if (!manifest) return null;
+        const installed = installedExtensions.some((e) => e.manifest.id === sug.id);
+        return (
+          <div key={sug.id} className="mt-2 flex items-start gap-2 rounded-md border border-line p-2">
+            <Puzzle size={13} className="mt-0.5 shrink-0 text-accent" />
+            <div className="flex-1 text-[11px]">
+              Suggested extension: <span className="font-semibold">{sug.name}</span>
+              <div className="text-[10px] text-dim">
+                {manifest.description} {sug.reason ? `(${sug.reason})` : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={installed}
+              onClick={() => openExtensionReview({ manifest, source: 'builtin-catalog', reason: sug.reason })}
+            >
+              {installed ? 'Installed' : 'Review'}
+            </button>
+          </div>
+        );
+      })}
+    </>
+  );
+};
 
 /**
  * AI Director in two interchangeable shells: a compact floating command bar docked to the
@@ -89,6 +218,29 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
   const setLatestVisionReport = useStudioStore((s) => s.setLatestVisionReport);
   const clearPendingAgentFixPrompt = useStudioStore((s) => s.clearPendingAgentFixPrompt);
   const appendLog = useStudioStore((s) => s.appendLog);
+  const workspaceAvailable = useStudioStore((s) => s.workspaceAvailable);
+  const addMemoryEntry = useStudioStore((s) => s.addMemoryEntry);
+  const memories = useStudioStore((s) => s.memories);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProject = useStudioStore((s) => s.activeProject);
+
+  /** Phase 6: memory + extension suggestions attached to the assistant reply for this prompt. */
+  const suggestionsFor = (query: string, engineType: string, mode: string) => {
+    const memorySuggestion = workspaceAvailable ? suggestMemory(query) : null;
+    const known = memorySuggestion && memories.some((m) => m.text.toLowerCase() === memorySuggestion.text.toLowerCase());
+    const extensionSuggestions = workspaceAvailable
+      ? recommendExtensions(
+          query,
+          { engineType, mode, projectTags: activeProject?.tags },
+          EXTENSION_CATALOG,
+          installedExtensions.map((e) => e.manifest.id)
+        ).map((r) => ({ id: r.manifest.id, name: r.manifest.name, reason: r.reason }))
+      : [];
+    return {
+      memorySuggestion: known ? undefined : memorySuggestion || undefined,
+      extensionSuggestions: extensionSuggestions.length ? extensionSuggestions : undefined,
+    };
+  };
 
   const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent) => {
     setAgentThinking(true);
@@ -108,7 +260,13 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     };
 
     try {
-      const result = await generateStoryboardWithAgent(query, storyboardIntent, settings, {
+      // Director Skills + extension context also steer every storyboard beat.
+      const director = buildDirectorContext(query, { engineType: storyboardIntent.engineType, mode: sceneSpec.mode });
+      const skilledSettings = {
+        ...settings,
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, director.skills, director.extraContext),
+      };
+      const result = await generateStoryboardWithAgent(query, storyboardIntent, skilledSettings, {
         onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
         onProgress: (p) =>
           patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
@@ -162,6 +320,34 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
       content: mode === 'patch' ? query : `[${INTENT_HELP[mode].label}] ${query}`,
       timestamp: now(),
     });
+
+    // Phase 6 batch 2: "làm sao…?" / "how do I…?" about the app is answered from the Guide (no AI call).
+    const helpTopic = isAutoFix ? null : matchGuideQuestion(query);
+    if (helpTopic) {
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: formatGuideAnswer(helpTopic, guideLangFor(query)),
+        timestamp: now(),
+        guideTopicId: helpTopic.id,
+      });
+      return;
+    }
+
+    // Phase 6: "nhớ rằng …" / "remember …" goes straight to memory (no AI call).
+    const explicitMemory = isAutoFix ? null : parseExplicitMemory(query);
+    if (explicitMemory) {
+      const entry = workspaceAvailable ? await addMemoryEntry(explicitMemory, 'preference', 'explicit', 'global') : null;
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: entry
+          ? `Đã ghi nhớ: "${entry.text}". I'll use this in future requests (Settings → Memory to edit or remove).`
+          : 'Memory needs the local workspace (run OmniStage on this computer).',
+        timestamp: now(),
+      });
+      return;
+    }
 
     // Multi-step storyboard: forced by Storyboard mode, or detected from the wording in Patch mode
     // ("phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...).
@@ -228,6 +414,10 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
         diffSummary: result.diffSummary,
         previousSpecSnapshot: prevSnapshot,
         updatedSpecSnapshot: nextSpec,
+        sourcePrompt: isAutoFix ? undefined : query,
+        skillsUsed: result.skillsUsed,
+        verification: result.verification,
+        ...(isAutoFix ? {} : suggestionsFor(query, nextSpec.engineType, nextSpec.mode)),
       });
     } finally {
       setAgentThinking(false);
@@ -360,6 +550,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
         )}
 
         <form
+          data-tour="chat"
           className="aibar glass pointer-events-auto"
           onSubmit={(e) => {
             e.preventDefault();
@@ -481,6 +672,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
                     ))}
                   </div>
                 )}
+                <MessageExtras msg={msg} />
                 {msg.visionReport && <VisionReportCard report={msg.visionReport} />}
               </div>
             ))}
@@ -503,6 +695,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           </div>
 
           <form
+            data-tour="chat"
             onSubmit={(e) => {
               e.preventDefault();
               handleSendPrompt();

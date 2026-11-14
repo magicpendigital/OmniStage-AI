@@ -269,6 +269,8 @@
 .btn.ghost { background: transparent; border-color: rgb(var(--line)); color: rgb(var(--mute)); }
 .btn.ghost:hover:not(:disabled) { color: rgb(var(--fg)); background: rgb(var(--hover)); }
 .btn.warn { background: rgb(var(--warn)); color: #1a1204; border-color: transparent; font-weight: 600; }
+.btn.ok { background: rgb(var(--ok)); color: #06130b; border-color: transparent; font-weight: 600; }
+.btn.ok:hover:not(:disabled) { filter: brightness(1.1); }
 
 .ibtn {
   display: grid;

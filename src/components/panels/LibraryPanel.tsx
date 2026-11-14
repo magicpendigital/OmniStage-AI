@@ -11,6 +11,8 @@ import {
   useLibraryFilterPredicate,
   useSpawnSavedAsset,
 } from '../AssetLibrary';
+import { OmniRigModal } from '../OmniRigModal';
+import { PersonalLibraryPanel } from '../PersonalLibraryPanel';
 
 type KindFilter = 'all' | 'rigged' | 'procedural' | '2d' | 'audio';
 
@@ -56,6 +58,7 @@ export const LibraryPanel: React.FC = () => {
   const [remoteUrl, setRemoteUrl] = useState('');
   const [remoteName, setRemoteName] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [omniRigOpen, setOmniRigOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -241,6 +244,18 @@ export const LibraryPanel: React.FC = () => {
 
   return (
     <>
+      {/* Phase 9: OmniRig — auto-rig a character model */}
+      <button
+        type="button"
+        className="btn"
+        onClick={() => setOmniRigOpen(true)}
+        title="Skeleton, skin weights and animations for a humanoid, four-legged or prop model"
+      >
+        🦴 Auto-rig a character (OmniRig)
+      </button>
+      {omniRigOpen && <OmniRigModal onClose={() => setOmniRigOpen(false)} />}
+      {/* Phase 6: personal + project-shared library on this computer */}
+      <PersonalLibraryPanel />
       <div className="grid grid-cols-2 gap-1.5">
         <button type="button" className="btn" onClick={handleLoadFolder} title="Mount every asset inside a folder on this computer">
           <FolderOpen size={14} className="text-warn" /> Load Local Folder

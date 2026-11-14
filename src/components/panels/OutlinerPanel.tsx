@@ -1,12 +1,19 @@
 import React from 'react';
 import { Copy, Eye, EyeOff, Lock, Plus, Sparkles as SparklesIcon, Trash2, Unlock } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
+import { PARTICLE_2D_PRESETS } from '../../vfx/particles2D';
+import { enabledContributions } from '../../extensions/registry';
+import { Particle2DPreset } from '../../types/scene.schema';
 
 /** Scene Graph: from-scratch spawner plus the 3D actor / VFX and 2D layer outliner. */
 export const OutlinerPanel: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
   const selectedNode2DId = useStudioStore((s) => s.selectedNode2DId);
+  const addParticleEmitter2D = useStudioStore((s) => s.addParticleEmitter2D);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProjectForExt = useStudioStore((s) => s.activeProject);
+  const extensionParticles = enabledContributions(installedExtensions, activeProjectForExt?.extensions).particlePresets;
 
   const selectActor = useStudioStore((s) => s.selectActor);
   const updateActorProperty = useStudioStore((s) => s.updateActorProperty);
@@ -98,6 +105,28 @@ export const OutlinerPanel: React.FC = () => {
               <Plus className="w-3 h-3" />
               <span>Kinetic Text</span>
             </button>
+            <select
+              value=""
+              onChange={(e) => {
+                const id = e.target.value;
+                if (!id) return;
+                addParticleEmitter2D(id as Particle2DPreset, extensionParticles[id]);
+              }}
+              aria-label="Add 2D particle emitter"
+              className="col-span-2 px-2.5 py-1.5 rounded-lg bg-violet-500/15 border border-violet-500/40 text-[11px] font-medium text-violet-200"
+            >
+              <option value="">+ Particle FX emitter…</option>
+              {PARTICLE_2D_PRESETS.map((preset) => (
+                <option key={preset} value={preset}>
+                  {preset}
+                </option>
+              ))}
+              {Object.keys(extensionParticles).map((preset) => (
+                <option key={`ext-${preset}`} value={preset}>
+                  {preset} (extension)
+                </option>
+              ))}
+            </select>
           </div>
         )}
       </div>

@@ -20,7 +20,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { useStudioStore } from '../state/useStudioStore';
+import { useStudioStore, withCaptionIds } from '../state/useStudioStore';
 import { DockTabId, useShellStore } from '../state/useShellStore';
 import { ExecutionConsole, useLogIssueCounts } from './ExecutionConsole';
 import { AUDIO_KIND_COLOR, canSpeak, speakText } from './panels/AudioPanel';
@@ -301,7 +301,7 @@ const CaptionsAudioTab: React.FC = () => {
   const railPanel = useShellStore((s) => s.railPanel);
 
   const duration = Math.max(2, sceneSpec.durationSeconds || 8);
-  const captions = sceneSpec.captions || [];
+  const captions = withCaptionIds(sceneSpec.captions);
   const tracks = sceneSpec.audioTracks || [];
   const scrub = useScrub(duration);
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / duration) * 100))}%`;

@@ -1,7 +1,11 @@
 import React, { useRef } from 'react';
 import {
+  BookOpen,
   Box,
   Check,
+  FolderKanban,
+  Play,
+  Puzzle,
   ChevronDown,
   Clapperboard,
   Columns2,
@@ -29,6 +33,8 @@ import {
   WorkspaceViewMode,
 } from '../types/scene.schema';
 import { slugifyTitle } from '../exporter/mediaExporter';
+import { workspacePath } from '../workspace/workspaceClient';
+import { startPreview } from '../guide/guideActions';
 import { Dropdown, IconBtn, Segmented } from './ui';
 
 const PROJECT_FORMAT = 'omnistage-project';
@@ -65,6 +71,25 @@ export const TopNavBar: React.FC = () => {
   const setPublishModalOpen = useStudioStore((s) => s.setPublishModalOpen);
   const setSettingsModalOpen = useStudioStore((s) => s.setSettingsModalOpen);
   const appendLog = useStudioStore((s) => s.appendLog);
+
+  // Workspace projects (Phase 6): hub, autosave state, drafts; play test, guide and extensions.
+  const activeProject = useStudioStore((s) => s.activeProject);
+  const activeGameId = useStudioStore((s) => s.activeGameId);
+  const projectSaveState = useStudioStore((s) => s.projectSaveState);
+  const activeDraftId = useStudioStore((s) => s.activeDraftId);
+  const draftSaveState = useStudioStore((s) => s.draftSaveState);
+  const draftSavedAt = useStudioStore((s) => s.draftSavedAt);
+  const workspaceHome = useStudioStore((s) => s.workspaceHome);
+  const setProjectHubOpen = useStudioStore((s) => s.setProjectHubOpen);
+  const setExtensionsOpen = useStudioStore((s) => s.setExtensionsOpen);
+  const saveActiveGame = useStudioStore((s) => s.saveActiveGame);
+  const openPlayTest = useStudioStore((s) => s.openPlayTest);
+  const openGuide = useStudioStore((s) => s.openGuide);
+  const activeGame = activeProject?.games.find((g) => g.id === activeGameId);
+  const isGameMode = sceneSpec.mode === 'game';
+  const projectLabel = activeProject ? activeProject.name + (activeGame ? ' / ' + activeGame.name : '') : 'Projects';
+  const saveLabel = { saving: 'Saving…', dirty: 'Unsaved', error: 'Save failed', saved: 'Saved', idle: 'Saved' }[projectSaveState];
+  const saveTone = projectSaveState === 'error' ? 'text-err' : projectSaveState === 'saved' || projectSaveState === 'idle' ? 'text-ok' : 'text-mute';
 
   const engine: EngineType = sceneSpec.engineType || '3d';
   const activeIndex = Math.max(0, scenes.findIndex((s) => s.id === activeSceneId));
@@ -118,14 +143,45 @@ export const TopNavBar: React.FC = () => {
       {/* ZONE 1 · Project & Scene */}
       <div className="topbar-zone shrink-0">
         <span className="brand" title="OmniStage AI">OS</span>
-        <input
-          className="proj hidden xl:block"
-          aria-label="Project name"
-          value={projectName}
-          onChange={(e) => setProjectName(e.target.value)}
-          onBlur={(e) => !e.target.value.trim() && setProjectName('Untitled Project')}
-          spellCheck={false}
-        />
+        <button
+          type="button"
+          className="btn"
+          data-tour="projects"
+          onClick={() => setProjectHubOpen(true)}
+          title="Projects: create, open and organise your games"
+        >
+          <FolderKanban size={14} className="text-accent" />
+          <span className="max-w-[160px] truncate">{projectLabel}</span>
+        </button>
+        {!activeProject && (
+          <input
+            className="proj hidden xl:block"
+            aria-label="Project name"
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            onBlur={(e) => !e.target.value.trim() && setProjectName('Untitled Project')}
+            spellCheck={false}
+          />
+        )}
+        {!activeGameId && activeDraftId && (
+          <button
+            type="button"
+            className={`chip font-mono ${draftSaveState === 'error' ? 'text-err' : 'text-warn'}`}
+            onClick={() => setProjectHubOpen(true)}
+            title={`Not in a project yet: autosaved as a draft in ${workspacePath(workspaceHome, 'drafts')}. Open Projects to save it into a project.`}
+          >
+            {draftSaveState === 'saving'
+              ? 'Saving draft…'
+              : draftSaveState === 'error'
+                ? 'Draft save failed'
+                : `Draft · ${draftSavedAt ? new Date(draftSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'autosave'}`}
+          </button>
+        )}
+        {activeGameId && (
+          <button type="button" className={`chip font-mono ${saveTone}`} onClick={() => saveActiveGame()} title="Save now (autosaves a few seconds after each change)">
+            {saveLabel}
+          </button>
+        )}
 
         <Dropdown
           panelClass="w-72"
@@ -213,10 +269,10 @@ export const TopNavBar: React.FC = () => {
           )}
         </Dropdown>
 
-        <IconBtn label="Save project (.omnistage)" onClick={handleSaveProject}>
+        <IconBtn label="Export project file (.omnistage)" onClick={handleSaveProject}>
           <Save size={15} />
         </IconBtn>
-        <IconBtn label="Load project (.omnistage / .json)" onClick={() => loadInputRef.current?.click()}>
+        <IconBtn label="Import project file (.omnistage / .json)" onClick={() => loadInputRef.current?.click()}>
           <FolderOpen size={15} />
         </IconBtn>
         <input
@@ -234,30 +290,32 @@ export const TopNavBar: React.FC = () => {
       <span className="topbar-sep" />
 
       {/* ZONE 2 · Primary production mode */}
-      <Segmented<StudioMode>
-        label="Production mode"
-        className="mode-seg"
-        value={sceneSpec.mode}
-        onChange={setMode}
-        options={[
-          {
-            value: 'game',
-            label: 'Game Mode',
-            title: 'Game Mode: score target, timer, player physics, win / lose triggers, playable CTA',
-            icon: <Gamepad2 size={15} />,
-            className: 'game',
-            labelClass: 'hidden lg:inline',
-          },
-          {
-            value: 'media',
-            label: 'Media Mode',
-            title: 'Media Mode: cinematic camera tracks, keyframe sequencer, post-processing, captions',
-            icon: <Clapperboard size={15} />,
-            className: 'media',
-            labelClass: 'hidden lg:inline',
-          },
-        ]}
-      />
+      <span data-tour="engine-mode" className="inline-flex">
+        <Segmented<StudioMode>
+          label="Production mode"
+          className="mode-seg"
+          value={sceneSpec.mode}
+          onChange={setMode}
+          options={[
+            {
+              value: 'game',
+              label: 'Game Mode',
+              title: 'Game Mode: score target, timer, player physics, win / lose triggers, playable CTA',
+              icon: <Gamepad2 size={15} />,
+              className: 'game',
+              labelClass: 'hidden lg:inline',
+            },
+            {
+              value: 'media',
+              label: 'Media Mode',
+              title: 'Media Mode: cinematic camera tracks, keyframe sequencer, post-processing, captions',
+              icon: <Clapperboard size={15} />,
+              className: 'media',
+              labelClass: 'hidden lg:inline',
+            },
+          ]}
+        />
+      </span>
 
       <div className="flex-1" />
 
@@ -308,6 +366,24 @@ export const TopNavBar: React.FC = () => {
             <Redo2 size={15} />
           </IconBtn>
         </div>
+        <button
+          type="button"
+          className="btn ok"
+          data-tour="play"
+          onClick={() => (isGameMode ? openPlayTest() : startPreview())}
+          title={isGameMode ? 'Play Test: run the exact build you publish (also on your phone)' : 'Preview: play every scene from start to end'}
+        >
+          <Play size={14} />
+          <span className="hidden lg:inline">{isGameMode ? 'Play Test' : 'Preview'}</span>
+        </button>
+        <span data-tour="guide" className="inline-flex">
+          <IconBtn label="Guide: how OmniStage works" onClick={() => openGuide()}>
+            <BookOpen size={15} />
+          </IconBtn>
+        </span>
+        <IconBtn label="Extensions: skills, VFX/SFX packs, asset libraries and tools" onClick={() => setExtensionsOpen(true)}>
+          <Puzzle size={15} />
+        </IconBtn>
         <IconBtn
           label="Settings: AI model, asset hub API keys, CDN manifest, render quality"
           onClick={() => setSettingsModalOpen(true)}

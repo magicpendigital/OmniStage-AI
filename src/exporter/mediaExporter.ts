@@ -1,4 +1,8 @@
 import { SceneSpec } from '../types/scene.schema';
+import { renderFilmSoundtrack } from '../audio/soundtrack';
+import { voiceClipAssets } from '../audio/voices';
+import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
+import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML } from './playerHtml';
 
 /**
  * Utility: Trigger browser file download via temporary anchor element.
@@ -149,6 +153,74 @@ export interface MultiSceneRecordingProgress {
   phase: 'preparing' | 'recording' | 'transitioning' | 'finalizing' | 'completed';
 }
 
+export type CompositorTransition = 'none' | 'crossfade' | 'fade-to-black' | 'fade-white' | 'wipe';
+
+/** A scene's own transition (Phase 10A `sequence.transition`) mapped to the compositor's names; falls back to `fallback`. */
+export function compositorTransition(scene: SceneSpec, fallback: string): CompositorTransition {
+  const own = scene.sequence?.transition;
+  const t = own === 'cut' ? 'none' : own === 'fade' ? 'fade-to-black' : own || fallback;
+  return (['none', 'crossfade', 'fade-to-black', 'fade-white', 'wipe'].includes(t) ? t : 'fade-to-black') as CompositorTransition;
+}
+
+/** Draws the transition from the previous scene's last frame over the current frame. `progress` 0..1. */
+export function drawSceneTransition(
+  ctx: CanvasRenderingContext2D,
+  previous: CanvasImageSource,
+  kind: CompositorTransition,
+  progress: number,
+  width: number,
+  height: number
+) {
+  if (kind === 'fade-white' || kind === 'fade-to-black') {
+    const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
+    if (alpha > 0) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(previous, 0, 0, width, height);
+      ctx.restore();
+    }
+    const veil = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
+    ctx.fillStyle = kind === 'fade-white' ? `rgba(255, 255, 255, ${veil})` : `rgba(0, 0, 0, ${veil})`;
+    ctx.fillRect(0, 0, width, height);
+  } else if (kind === 'wipe') {
+    const edge = Math.round(width * progress);
+    if (width - edge > 0) ctx.drawImage(previous, edge, 0, width - edge, height, edge, 0, width - edge, height);
+  } else if (kind === 'crossfade') {
+    ctx.save();
+    ctx.globalAlpha = 1 - progress;
+    ctx.drawImage(previous, 0, 0, width, height);
+    ctx.restore();
+  }
+}
+
+/** OmniStage badge in the top-left corner of exported videos (optional). */
+export function drawWatermark(ctx: CanvasRenderingContext2D, scene: SceneSpec, sceneIdx: number, total: number) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
+  ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
+  ctx.lineWidth = 1.5;
+  const padX = 24;
+  const padY = 24;
+  ctx.beginPath();
+  ctx.roundRect(padX, padY, 340, 46, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#06B6D4';
+  ctx.fillText(`OMNISTAGE · SCENE ${sceneIdx + 1}/${total} [${(scene.engineType || '3d').toUpperCase()}]`, padX + 16, padY + 20);
+  ctx.font = '500 12px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillText(scene.title.slice(0, 28), padX + 16, padY + 36);
+  ctx.restore();
+}
+
+/** Downloads a finished blob under `filename`. */
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, filename);
+  setTimeout(() => URL.revokeObjectURL(url), 12000);
+}
+
 /**
  * Options for the Multi-Scene Video Sequencer.
  */
@@ -167,6 +239,8 @@ export interface MultiSceneSequenceOptions {
   watermarkBadge?: boolean;
   onProgress?: (progress: MultiSceneRecordingProgress) => void;
   abortSignal?: AbortSignal;
+  /** Phase 10B: mix the scenes' procedural soundtrack into the recording (default true). */
+  withSound?: boolean;
 }
 
 /**
@@ -240,6 +314,25 @@ export async function recordMultiSceneSequence(
 
   // Master Capture Stream & MediaRecorder
   const stream = compositorCanvas.captureStream(fps);
+  // Phase 10B: the film soundtrack as an audio track (rendered up front, played in real time with the recording).
+  let audio: { ctx: AudioContext; source: AudioBufferSourceNode } | null = null;
+  if (options.withSound !== false && scenes.some((s) => s.soundtrack) && typeof AudioContext !== 'undefined') {
+    try {
+      const pcm = renderFilmSoundtrack(scenes.map((s, i) => ({ ...s, durationSeconds: sceneDurations[i] })), 48000);
+      const actx = new AudioContext({ sampleRate: 48000 });
+      const buffer = actx.createBuffer(2, pcm.left.length, pcm.sampleRate);
+      buffer.copyToChannel(pcm.left as Float32Array<ArrayBuffer>, 0);
+      buffer.copyToChannel(pcm.right as Float32Array<ArrayBuffer>, 1);
+      const dest = actx.createMediaStreamDestination();
+      const source = actx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(dest);
+      for (const track of dest.stream.getAudioTracks()) stream.addTrack(track);
+      audio = { ctx: actx, source };
+    } catch {
+      audio = null; // never block the video on audio
+    }
+  }
   const chunks: BlobPart[] = [];
   const recorder = new MediaRecorder(stream, {
     mimeType: selectedMime,
@@ -251,6 +344,20 @@ export async function recordMultiSceneSequence(
   };
 
   recorder.start(100);
+  if (audio) {
+    await audio.ctx.resume().catch(() => undefined);
+    audio.source.start();
+  }
+  const stopAudio = () => {
+    if (!audio) return;
+    try {
+      audio.source.stop();
+    } catch {
+      /* not started */
+    }
+    void audio.ctx.close().catch(() => undefined);
+    audio = null;
+  };
 
   const startClock = performance.now();
   let previousSceneSnapshot: HTMLCanvasElement | null = null;
@@ -318,59 +425,15 @@ export async function recordMultiSceneSequence(
 
           // 3. Handle inter-scene transitions
           let phase: MultiSceneRecordingProgress['phase'] = 'recording';
-          if (sceneIdx > 0 && sceneElapsed < transitionMs && previousSceneSnapshot) {
+          // Phase 10A: a scene's own transition (sequence.transition) overrides the dialog default.
+          const sceneTransition = compositorTransition(currentScene, transition);
+          if (sceneIdx > 0 && sceneTransition !== 'none' && sceneElapsed < transitionMs && previousSceneSnapshot) {
             phase = 'transitioning';
-            const progress = sceneElapsed / transitionMs;
-
-            if (transition === 'crossfade') {
-              ctx.save();
-              ctx.globalAlpha = 1 - progress;
-              ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
-              ctx.restore();
-            } else if (transition === 'fade-to-black') {
-              const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
-              if (alpha > 0) {
-                ctx.save();
-                ctx.globalAlpha = alpha;
-                ctx.drawImage(previousSceneSnapshot, 0, 0, targetWidth, targetHeight);
-                ctx.restore();
-              }
-              const blackAlpha = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
-              ctx.fillStyle = `rgba(0, 0, 0, ${blackAlpha})`;
-              ctx.fillRect(0, 0, targetWidth, targetHeight);
-            }
+            drawSceneTransition(ctx, previousSceneSnapshot, sceneTransition, sceneElapsed / transitionMs, targetWidth, targetHeight);
           }
 
           // 4. Sleek HUD watermark overlay (optional)
-          if (watermarkBadge) {
-            ctx.save();
-            ctx.fillStyle = 'rgba(9, 13, 22, 0.82)';
-            ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
-            ctx.lineWidth = 1.5;
-            const padX = 24;
-            const padY = 24;
-            const badgeW = 340;
-            const badgeH = 46;
-
-            ctx.beginPath();
-            ctx.roundRect(padX, padY, badgeW, badgeH, 10);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = '#06B6D4';
-            ctx.fillText(
-              `OMNISTAGE · SCENE ${sceneIdx + 1}/${scenes.length} [${(currentScene.engineType || '3d').toUpperCase()}]`,
-              padX + 16,
-              padY + 20
-            );
-
-            ctx.font = '500 12px system-ui, -apple-system, sans-serif';
-            ctx.fillStyle = '#F8FAFC';
-            const titleSnippet = currentScene.title.slice(0, 28);
-            ctx.fillText(titleSnippet, padX + 16, padY + 36);
-            ctx.restore();
-          }
+          if (watermarkBadge) drawWatermark(ctx, currentScene, sceneIdx, scenes.length);
 
           // Report progress callback
           onProgress?.({
@@ -395,7 +458,7 @@ export async function recordMultiSceneSequence(
       });
 
       // Save a snapshot of the current frame for smooth transition into next scene
-      if (sceneIdx < scenes.length - 1 && transition !== 'none') {
+      if (sceneIdx < scenes.length - 1) {
         const snap = document.createElement('canvas');
         snap.width = targetWidth;
         snap.height = targetHeight;
@@ -408,6 +471,7 @@ export async function recordMultiSceneSequence(
     }
 
     if (isAborted) {
+      stopAudio();
       if (recorder.state === 'recording') recorder.stop();
       if (initialActiveSceneId) switchScene(initialActiveSceneId);
       return { ok: false, error: 'Multi-scene sequence recording was aborted by user' };
@@ -427,6 +491,7 @@ export async function recordMultiSceneSequence(
     // Finalize recording
     return await new Promise<{ ok: boolean; filename: string }>((resolve) => {
       recorder.onstop = () => {
+        stopAudio();
         const blob = new Blob(chunks, { type: selectedMime });
         const url = URL.createObjectURL(blob);
         const slug = slugifyTitle(scenes[0]?.title || 'omnistage-storyboard', 'storyboard');
@@ -455,6 +520,7 @@ export async function recordMultiSceneSequence(
       }
     });
   } catch (err: any) {
+    stopAudio();
     if (recorder.state === 'recording') recorder.stop();
     if (initialActiveSceneId) switchScene(initialActiveSceneId);
     return { ok: false, error: err?.message || 'Sequencer recording encountered an error' };
@@ -495,6 +561,22 @@ export interface StandalonePlayerOptions {
   enableMobileTouchControls?: boolean;
   enableProceduralAudio?: boolean;
   responsiveScaling?: boolean;
+  /** Phase 7: OmniStage Player runtime source (loaded lazily by buildStandalonePlayable when omitted). */
+  playerRuntimeSource?: string;
+  /** Phase 7: asset URL → data URI map embedded in the HTML. */
+  assets?: Record<string, string>;
+  /** Phase 6 batch 2: show an FPS / frame-time meter (Play Test). */
+  showFps?: boolean;
+  quality?: 'auto' | 'low' | 'high';
+  /** Phase 7: renderer of the exported Player ('webgl' = smallest file; 'auto' / 'webgpu' embed the WebGPU build). */
+  renderer?: 'webgl' | 'webgpu' | 'auto';
+}
+
+export interface PlayableBuildResult {
+  html: string;
+  budget: PlayableBudgetReport;
+  /** Phase 7: which models / images were embedded for offline play. */
+  embed?: EmbedResult;
 }
 
 /**
@@ -604,9 +686,8 @@ export function createZipBlob(files: ZipFileEntry[]): Blob {
 }
 
 /**
- * 5. Generate Standalone HTML5 Game / Playable Ad String.
- * Self-contained, responsive, multi-scene, dual 3D/2D engines, procedural audio synth,
- * mobile touch controls, level progression, and ad network compliance.
+ * 5. Standalone HTML5 game / playable ad, powered by the OmniStage Player (Phase 7): the same runtime as the
+ * studio's Play Test and phone preview, so what you test is what ships.
  */
 export function generateStandaloneHTMLContent(
   sceneSpec: SceneSpec,
@@ -614,597 +695,64 @@ export function generateStandaloneHTMLContent(
   scenes?: SceneSpec[],
   options?: StandalonePlayerOptions
 ): string {
-  const syncedScenes =
-    scenes && scenes.length > 0
-      ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s))
-      : [sceneSpec];
+  if (!options?.playerRuntimeSource) throw new Error('playerRuntimeSource is required (use buildStandalonePlayable in the browser)');
+  return generatePlayerHTML(sceneSpec, targetNetwork, scenes && scenes.length ? scenes : [sceneSpec], {
+    playerRuntimeSource: options.playerRuntimeSource,
+    assets: options.assets,
+    touchControls: options.enableMobileTouchControls === false ? false : 'auto',
+    sound: options.enableProceduralAudio !== false,
+    showFps: options.showFps,
+    quality: options.quality,
+    renderer: options.renderer,
+  });
+}
 
-  const bundleJson = JSON.stringify(syncedScenes);
-  const activeIdJson = JSON.stringify(sceneSpec.id);
-  const autoProgress = options?.autoProgressScenes ?? true;
-  const mobileControls = options?.enableMobileTouchControls ?? true;
-  const proceduralAudio = options?.enableProceduralAudio ?? true;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>${sceneSpec.title} — OmniStage Standalone Game (${targetNetwork.toUpperCase()})</title>
-  ${targetNetwork === 'telegram' ? '<script src="https://telegram.org/js/telegram-web-app.js"></script>' : ''}
-  ${targetNetwork === 'tiktok' ? '<script src="mraid.js"></script>' : ''}
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
-    body, html { width: 100%; height: 100%; overflow: hidden; background: ${sceneSpec.environment?.backgroundColor || '#0B101B'}; font-family: system-ui, -apple-system, sans-serif; color: #F8FAFC; }
-    .stage-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
-    .hud-top { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; z-index: 20; }
-    .hud-left, .hud-right { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
-    .pill { background: rgba(9, 13, 22, 0.9); border: 1px solid rgba(6, 182, 212, 0.45); padding: 6px 12px; border-radius: 8px; font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-    .engine-badge { background: rgba(6, 182, 212, 0.2); border: 1px solid rgba(6, 182, 212, 0.55); color: #67E8F9; padding: 5px 9px; border-radius: 7px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-    .scene-select { background: rgba(9, 13, 22, 0.92); border: 1px solid rgba(148, 163, 184, 0.4); color: #F8FAFC; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; outline: none; }
-    .icon-btn { background: rgba(9, 13, 22, 0.9); border: 1px solid rgba(148, 163, 184, 0.4); color: #F8FAFC; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; }
-    .cta-bar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); width: min(440px, 92vw); background: rgba(9, 13, 22, 0.94); border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; z-index: 25; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
-    .cta-btn { background: ${sceneSpec.marketingOverlay?.brandColor || '#F59E0B'}; color: #090D16; font-weight: 800; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 12px; text-transform: uppercase; white-space: nowrap; transition: transform 0.1s; }
-    .cta-btn:active { transform: scale(0.96); }
-    .toast-banner { position: fixed; top: 62px; left: 50%; transform: translateX(-50%); background: rgba(16, 185, 129, 0.95); color: #052E16; font-weight: 800; font-size: 13px; padding: 8px 18px; border-radius: 999px; z-index: 30; display: none; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
-    .overlay-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.82); display: none; align-items: center; justify-content: center; z-index: 50; p: 16px; }
-    .overlay-card { background: #0F172A; border: 1px solid #334155; border-radius: 16px; padding: 24px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 24px 48px rgba(0,0,0,0.7); }
-    .modal-btn { padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 13px; border: none; cursor: pointer; margin-top: 14px; text-transform: uppercase; }
-    /* Mobile Virtual Controls */
-    .mobile-controls { position: fixed; bottom: 84px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: center; pointer-events: none; z-index: 24; }
-    .dpad-btn { width: 56px; height: 56px; border-radius: 28px; background: rgba(15, 23, 42, 0.85); border: 2px solid rgba(6, 182, 212, 0.6); color: #67E8F9; font-size: 22px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
-    .dpad-btn:active { background: rgba(6, 182, 212, 0.4); transform: scale(0.92); }
-    .jump-btn { width: 68px; height: 68px; border-radius: 34px; background: rgba(245, 158, 11, 0.88); border: 2px solid #F59E0B; color: #090D16; font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center; pointer-events: auto; touch-action: none; box-shadow: 0 6px 16px rgba(0,0,0,0.5); }
-    .jump-btn:active { background: #FCD34D; transform: scale(0.92); }
-  </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-</head>
-<body>
-  <div class="hud-top">
-    <div class="hud-left">
-      <span class="engine-badge" id="engineBadge">${(sceneSpec.engineType || '3d').toUpperCase()}</span>
-      <div class="pill" id="scoreDisplay">SCORE: 0 / ${sceneSpec.gameRules?.targetScore || 100}</div>
-      <div class="pill" id="timerDisplay">${Math.ceil(sceneSpec.gameRules?.timeLimitSeconds || 60)}s</div>
-    </div>
-    <div class="hud-right">
-      <select class="scene-select" id="sceneSelect" style="display:none;"></select>
-      <button class="icon-btn" id="audioToggleBtn" title="Toggle Sound">🔊</button>
-      <button class="icon-btn" id="fsToggleBtn" title="Toggle Fullscreen">⛶</button>
-      <div class="pill" id="badgeText">${sceneSpec.marketingOverlay?.badgeText || 'PLAYABLE GAME'}</div>
-    </div>
-  </div>
-
-  <div class="toast-banner" id="toastBanner"></div>
-
-  <canvas id="stage3d" class="stage-canvas"></canvas>
-  <canvas id="stage2d" class="stage-canvas" style="display:none;"></canvas>
-
-  <!-- Mobile Virtual Controls -->
-  <div class="mobile-controls" id="mobileControls" style="${mobileControls ? '' : 'display:none;'}">
-    <div style="display:flex;gap:12px;">
-      <div class="dpad-btn" id="btnLeft">◄</div>
-      <div class="dpad-btn" id="btnRight">►</div>
-    </div>
-    <div class="jump-btn" id="btnJump">JUMP</div>
-  </div>
-
-  <!-- Marketing CTA Bar -->
-  <div class="cta-bar" id="ctaBar">
-    <div style="min-width:0;">
-      <div id="headlineText" style="font-weight:800;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sceneSpec.marketingOverlay?.headline || sceneSpec.title}</div>
-      <div id="subheadlineText" style="font-size:11px;color:#94A3B8;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${sceneSpec.marketingOverlay?.subheadline || ''}</div>
-    </div>
-    <button class="cta-btn" id="ctaBtn">${sceneSpec.marketingOverlay?.ctaText || 'Play Now'}</button>
-  </div>
-
-  <!-- Victory / Level Complete Modal -->
-  <div class="overlay-modal" id="levelModal">
-    <div class="overlay-card">
-      <div style="font-size:36px;margin-bottom:8px;" id="modalIcon">🏆</div>
-      <h2 style="font-size:20px;font-weight:800;color:#F8FAFC;" id="modalTitle">LEVEL COMPLETED!</h2>
-      <p style="font-size:13px;color:#94A3B8;margin-top:6px;" id="modalSubtitle">You reached the target score!</p>
-      <div style="margin-top:16px;background:#1E293B;padding:12px;border-radius:10px;font-weight:700;font-size:14px;color:#38BDF8;" id="modalScore">Score: 100 PTS</div>
-      <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;">
-        <button class="modal-btn" id="modalNextBtn" style="background:#06B6D4;color:#090D16;flex:1;">Next Scene ⏩</button>
-        <button class="modal-btn" id="modalReplayBtn" style="background:#334155;color:#F8FAFC;">Replay</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // Embedded Storyboard Scenes Bundle
-    const SCENES_BUNDLE = ${bundleJson};
-    let activeSceneId = ${activeIdJson};
-    let SCENE_SPEC = SCENES_BUNDLE.find((s) => s.id === activeSceneId) || SCENES_BUNDLE[0];
-    const AUTO_PROGRESS = ${autoProgress ? 'true' : 'false'};
-
-    let score = 0;
-    let timeRemaining = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.timeLimitSeconds) || 60;
-    let isGameOver = false;
-    let isSoundMuted = false;
-
-    // --- PROCEDURAL 8-BIT AUDIO SYNTH (Web Audio API) ---
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    let audioCtx = null;
-
-    function initAudio() {
-      if (!audioCtx && AudioCtx) {
-        audioCtx = new AudioCtx();
-      }
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume();
-      }
-    }
-
-    function playSynthSound(type) {
-      if (isSoundMuted || !${proceduralAudio ? 'true' : 'false'}) return;
-      initAudio();
-      if (!audioCtx) return;
-      try {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        const t = audioCtx.currentTime;
-
-        if (type === 'coin') {
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(587.33, t); // D5
-          osc.frequency.setValueAtTime(880.00, t + 0.08); // A5
-          gain.gain.setValueAtTime(0.25, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
-          osc.start(t);
-          osc.stop(t + 0.3);
-        } else if (type === 'jump') {
-          osc.type = 'triangle';
-          osc.frequency.setValueAtTime(160, t);
-          osc.frequency.exponentialRampToValueAtTime(420, t + 0.16);
-          gain.gain.setValueAtTime(0.3, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-          osc.start(t);
-          osc.stop(t + 0.22);
-        } else if (type === 'win') {
-          const notes = [523.25, 659.25, 783.99, 1046.50];
-          notes.forEach((freq, idx) => {
-            const o = audioCtx.createOscillator();
-            const g = audioCtx.createGain();
-            o.connect(g);
-            g.connect(audioCtx.destination);
-            o.type = 'square';
-            o.frequency.setValueAtTime(freq, t + idx * 0.1);
-            g.gain.setValueAtTime(0.18, t + idx * 0.1);
-            g.gain.exponentialRampToValueAtTime(0.001, t + idx * 0.1 + 0.22);
-            o.start(t + idx * 0.1);
-            o.stop(t + idx * 0.1 + 0.24);
-          });
-        }
-      } catch (e) {}
-    }
-
-    // Audio & Fullscreen Buttons
-    document.getElementById('audioToggleBtn').addEventListener('click', () => {
-      initAudio();
-      isSoundMuted = !isSoundMuted;
-      document.getElementById('audioToggleBtn').textContent = isSoundMuted ? '🔇' : '🔊';
-    });
-
-    document.getElementById('fsToggleBtn').addEventListener('click', () => {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen?.();
-      } else {
-        document.exitFullscreen?.();
-      }
-    });
-
-    function showNotice(msg) {
-      const el = document.getElementById('toastBanner');
-      el.textContent = msg;
-      el.style.display = 'block';
-      clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);
-    }
-
-    // Storyboard Scene Selector
-    const sceneSelect = document.getElementById('sceneSelect');
-    if (SCENES_BUNDLE.length > 1) {
-      sceneSelect.style.display = 'block';
-      SCENES_BUNDLE.forEach((sc, idx) => {
-        const opt = document.createElement('option');
-        opt.value = sc.id;
-        opt.textContent = (idx + 1) + '. ' + sc.title + ' [' + (sc.engineType || '3d').toUpperCase() + ']';
-        if (sc.id === SCENE_SPEC.id) opt.selected = true;
-        sceneSelect.appendChild(opt);
-      });
-      sceneSelect.addEventListener('change', (e) => {
-        switchActiveScene(e.target.value);
-      });
-    }
-
-    function switchActiveScene(sceneId) {
-      const found = SCENES_BUNDLE.find((s) => s.id === sceneId);
-      if (found) {
-        SCENE_SPEC = JSON.parse(JSON.stringify(found));
-        activeSceneId = SCENE_SPEC.id;
-        score = 0;
-        timeRemaining = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.timeLimitSeconds) || 60;
-        isGameOver = false;
-        document.getElementById('levelModal').style.display = 'none';
-        sceneSelect.value = SCENE_SPEC.id;
-        syncHudAndEngine();
-      }
-    }
-
-    // Ad Network CTA Trigger Hooks
-    document.getElementById('ctaBtn').addEventListener('click', () => {
-      const targetUrl = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.ctaUrl) || 'https://example.com';
-      if (window.Telegram && window.Telegram.WebApp) {
-        window.Telegram.WebApp.HapticFeedback?.impactOccurred('medium');
-        window.Telegram.WebApp.openLink?.(targetUrl);
-      } else if (window.mraid && window.mraid.open) {
-        window.mraid.open(targetUrl);
-      } else if (window.FbPlayableAd && window.FbPlayableAd.onCTAClick) {
-        window.FbPlayableAd.onCTAClick();
-      } else {
-        showNotice('CTA Triggered: ' + (SCENE_SPEC.marketingOverlay?.ctaText || 'Action') + ' -> ' + targetUrl);
-      }
-    });
-
-    // Keyboard state
-    const keys = {};
-    window.addEventListener('keydown', (e) => { initAudio(); keys[e.key.toLowerCase()] = true; });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
-
-    // Touch D-Pad bindings
-    const bindTouch = (elId, keyName) => {
-      const el = document.getElementById(elId);
-      if (!el) return;
-      el.addEventListener('pointerdown', (e) => { e.preventDefault(); initAudio(); keys[keyName] = true; });
-      el.addEventListener('pointerup', (e) => { e.preventDefault(); keys[keyName] = false; });
-      el.addEventListener('pointerleave', (e) => { e.preventDefault(); keys[keyName] = false; });
-    };
-    bindTouch('btnLeft', 'arrowleft');
-    bindTouch('btnRight', 'arrowright');
-    bindTouch('btnJump', 'arrowup');
-
-    // --- 3D ENGINE ---
-    const canvas3d = document.getElementById('stage3d');
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas3d, antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-    let scene3d = new THREE.Scene();
-    let camera3d = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 160);
-    let actorMeshes = [];
-
-    function build3DScene() {
-      scene3d = new THREE.Scene();
-      scene3d.background = new THREE.Color((SCENE_SPEC.environment && SCENE_SPEC.environment.backgroundColor) || '#0B101B');
-      camera3d = new THREE.PerspectiveCamera((SCENE_SPEC.camera && SCENE_SPEC.camera.fov) || 45, window.innerWidth / window.innerHeight, 0.1, 160);
-      camera3d.position.set(...((SCENE_SPEC.camera && SCENE_SPEC.camera.position) || [0, 3.2, 7.5]));
-      camera3d.lookAt(...((SCENE_SPEC.camera && SCENE_SPEC.camera.target) || [0, 0.9, 0]));
-
-      scene3d.add(new THREE.HemisphereLight(SCENE_SPEC.environment?.keyLightColor || '#38BDF8', SCENE_SPEC.environment?.groundColor || '#0F172A', 0.9));
-      const dirLight = new THREE.DirectionalLight(SCENE_SPEC.environment?.keyLightColor || '#ffffff', 2.0);
-      dirLight.position.set(5, 9, 6);
-      scene3d.add(dirLight);
-
-      // Procedural Terrain
-      const terrainCfg = SCENE_SPEC.world && SCENE_SPEC.world.terrain;
-      const groundGeo = new THREE.PlaneGeometry(36, 36, 32, 32);
-      if (terrainCfg && terrainCfg.type && terrainCfg.type !== 'flat' && terrainCfg.type !== 'none') {
-        const pos = groundGeo.attributes.position;
-        const hScale = terrainCfg.heightScale || 2.5;
-        for (let i = 0; i < pos.count; i++) {
-          const x = pos.getX(i);
-          const y = pos.getY(i);
-          const d = Math.sqrt(x * x + y * y);
-          const edge = Math.min(1, Math.max(0, (d - 3.0) / 5.0));
-          pos.setZ(i, (Math.sin(x * 0.25) * Math.cos(y * 0.25)) * hScale * edge);
-        }
-        groundGeo.computeVertexNormals();
-      }
-      const groundMat = new THREE.MeshStandardMaterial({
-        color: (terrainCfg && terrainCfg.primaryColor) || SCENE_SPEC.environment?.groundColor || '#1E293B',
-        roughness: 0.85,
-        metalness: 0.12
-      });
-      const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-      groundMesh.rotation.x = -Math.PI / 2;
-      scene3d.add(groundMesh);
-
-      const grid = new THREE.GridHelper(28, 28, SCENE_SPEC.environment?.rimLightColor || '#06B6D4', '#1E293B');
-      grid.position.y = 0.02;
-      scene3d.add(grid);
-
-      actorMeshes = [];
-      (SCENE_SPEC.actors || []).forEach((a) => {
-        const group = new THREE.Group();
-        const mat = new THREE.MeshStandardMaterial({ color: a.primaryColor || '#06B6D4', metalness: a.metalness ?? 0.65, roughness: a.roughness ?? 0.28 });
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.65, 0.22, 24), new THREE.MeshStandardMaterial({ color: '#1E293B' }));
-        base.position.y = 0.11;
-        const body = new THREE.Mesh(new THREE.OctahedronGeometry(0.55, 1), mat);
-        body.position.y = 0.95;
-        group.add(base, body);
-        group.position.set(...(a.position || [0, 0, 0]));
-        group.scale.set(...(a.scale || [1, 1, 1]));
-        group.userData = { actor: a, baseScale: [...(a.scale || [1, 1, 1])] };
-        scene3d.add(group);
-        actorMeshes.push(group);
-      });
-    }
-
-    // --- 2D ENGINE ---
-    const canvas2d = document.getElementById('stage2d');
-    const ctx2d = canvas2d.getContext('2d');
-    let nodes2D = [];
-    let player2dVelY = 0;
-    let player2dGrounded = false;
-
-    function build2DScene() {
-      canvas2d.width = 1000;
-      canvas2d.height = 600;
-      nodes2D = JSON.parse(JSON.stringify(SCENE_SPEC.nodes2D || []));
-      player2dVelY = 0;
-      player2dGrounded = false;
-    }
-
-    function checkLevelProgression() {
-      const targetScore = (SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.targetScore) || 100;
-      if (score >= targetScore && !isGameOver) {
-        isGameOver = true;
-        playSynthSound('win');
-        if (window.Telegram?.WebApp?.HapticFeedback) {
-          window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
-        }
-
-        const currentIdx = SCENES_BUNDLE.findIndex((s) => s.id === SCENE_SPEC.id);
-        const hasNext = currentIdx >= 0 && currentIdx < SCENES_BUNDLE.length - 1;
-
-        const modal = document.getElementById('levelModal');
-        const modalTitle = document.getElementById('modalTitle');
-        const modalSubtitle = document.getElementById('modalSubtitle');
-        const modalScore = document.getElementById('modalScore');
-        const nextBtn = document.getElementById('modalNextBtn');
-
-        modalScore.textContent = 'Final Score: ' + score + ' PTS';
-
-        if (hasNext) {
-          modalTitle.textContent = 'SCENE CLEARED! 🏆';
-          modalSubtitle.textContent = 'Advancing to Scene ' + (currentIdx + 2) + ': ' + SCENES_BUNDLE[currentIdx + 1].title;
-          nextBtn.textContent = 'Next Scene ⏩';
-          nextBtn.onclick = () => {
-            switchActiveScene(SCENES_BUNDLE[currentIdx + 1].id);
-          };
-          if (AUTO_PROGRESS) {
-            setTimeout(() => {
-              if (isGameOver) switchActiveScene(SCENES_BUNDLE[currentIdx + 1].id);
-            }, 2400);
-          }
-        } else {
-          modalTitle.textContent = 'VICTORY! ALL LEVELS CLEARED 🎉';
-          modalSubtitle.textContent = 'Congratulations! You mastered all storyboard scenes.';
-          nextBtn.textContent = SCENE_SPEC.marketingOverlay?.ctaText || 'Play Again';
-          nextBtn.onclick = () => {
-            document.getElementById('ctaBtn').click();
-          };
-        }
-
-        document.getElementById('modalReplayBtn').onclick = () => {
-          switchActiveScene(SCENE_SPEC.id);
-        };
-
-        modal.style.display = 'flex';
-      }
-    }
-
-    function updateScoreUI() {
-      document.getElementById('scoreDisplay').textContent = 'SCORE: ' + score + ' / ' + ((SCENE_SPEC.gameRules && SCENE_SPEC.gameRules.targetScore) || 100);
-      document.getElementById('timerDisplay').textContent = Math.max(0, Math.ceil(timeRemaining)) + 's';
-      checkLevelProgression();
-    }
-
-    function syncHudAndEngine() {
-      const is2D = SCENE_SPEC.engineType === '2d';
-      document.getElementById('engineBadge').textContent = is2D ? '2D ENGINE' : '3D ENGINE';
-      document.getElementById('badgeText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.badgeText) || 'PLAYABLE GAME';
-      document.getElementById('headlineText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.headline) || SCENE_SPEC.title;
-      document.getElementById('subheadlineText').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.subheadline) || '';
-      document.getElementById('ctaBtn').textContent = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.ctaText) || 'Play Now';
-      document.getElementById('ctaBtn').style.background = (SCENE_SPEC.marketingOverlay && SCENE_SPEC.marketingOverlay.brandColor) || '#F59E0B';
-      updateScoreUI();
-
-      if (is2D) {
-        canvas3d.style.display = 'none';
-        canvas2d.style.display = 'block';
-        build2DScene();
-      } else {
-        canvas2d.style.display = 'none';
-        canvas3d.style.display = 'block';
-        build3DScene();
-      }
-    }
-
-    // Pointer Interaction
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-
-    window.addEventListener('pointerdown', (e) => {
-      initAudio();
-      if (e.target.closest('.cta-bar') || e.target.closest('.hud-top') || e.target.closest('.overlay-modal') || e.target.closest('.mobile-controls')) return;
-
-      if (SCENE_SPEC.engineType === '2d') {
-        const rect = canvas2d.getBoundingClientRect();
-        const px = ((e.clientX - rect.left) / rect.width) * 1000;
-        const py = ((e.clientY - rect.top) / rect.height) * 600;
-        let hitAny = false;
-        nodes2D.forEach((n) => {
-          if (px >= n.x - n.width / 2 && px <= n.x + n.width / 2 && py >= n.y - n.height / 2 && py <= n.y + n.height / 2) {
-            hitAny = true;
-            score += n.scoreValue || 20;
-            playSynthSound('coin');
-            updateScoreUI();
-          }
-        });
-        if (!hitAny && player2dGrounded) {
-          player2dVelY = -460;
-          player2dGrounded = false;
-          playSynthSound('jump');
-        }
-      } else {
-        pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-        pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera3d);
-        const hits = raycaster.intersectObjects(actorMeshes, true);
-        if (hits.length > 0) {
-          let obj = hits[0].object;
-          while (obj.parent && !obj.userData.actor) obj = obj.parent;
-          const actor = obj.userData.actor;
-          if (actor) {
-            score += actor.scoreValue || 15;
-            playSynthSound('coin');
-            updateScoreUI();
-            obj.scale.set(1.3, 1.3, 1.3);
-          }
-        }
-      }
-    });
-
-    window.addEventListener('resize', () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      camera3d.aspect = window.innerWidth / window.innerHeight;
-      camera3d.updateProjectionMatrix();
-    });
-
-    // Telegram Mini App initial handshake
-    if (window.Telegram && window.Telegram.WebApp) {
-      window.Telegram.WebApp.ready();
-      window.Telegram.WebApp.expand?.();
-      if (SCENE_SPEC.environment?.backgroundColor) {
-        window.Telegram.WebApp.setHeaderColor?.(SCENE_SPEC.environment.backgroundColor);
-        window.Telegram.WebApp.setBackgroundColor?.(SCENE_SPEC.environment.backgroundColor);
-      }
-    }
-
-    syncHudAndEngine();
-
-    // Main Game Loop
-    const clock = new THREE.Clock();
-    function animate() {
-      requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.05);
-      const t = clock.getElapsedTime();
-
-      if (!isGameOver && timeRemaining > 0) {
-        timeRemaining -= dt;
-        if (timeRemaining <= 0) {
-          timeRemaining = 0;
-          checkLevelProgression();
-        }
-        document.getElementById('timerDisplay').textContent = Math.max(0, Math.ceil(timeRemaining)) + 's';
-      }
-
-      if (SCENE_SPEC.engineType === '2d') {
-        ctx2d.fillStyle = (SCENE_SPEC.environment && SCENE_SPEC.environment.backgroundColor) || '#0B101B';
-        ctx2d.fillRect(0, 0, 1000, 600);
-
-        const platforms = nodes2D.filter((n) => n.physics2D === 'static-platform');
-        nodes2D.forEach((n) => {
-          if (n.physics2D === 'player-platformer') {
-            if (keys['a'] || keys['arrowleft']) n.x -= 280 * dt;
-            if (keys['d'] || keys['arrowright']) n.x += 280 * dt;
-            if ((keys['w'] || keys['arrowup'] || keys[' ']) && player2dGrounded) {
-              player2dVelY = -480;
-              player2dGrounded = false;
-              playSynthSound('jump');
-            }
-            player2dVelY += 980 * dt;
-            n.y += player2dVelY * dt;
-            player2dGrounded = false;
-
-            platforms.forEach((p) => {
-              const overlapX = Math.abs(n.x - p.x) < (n.width + p.width) / 2;
-              const pTop = p.y - p.height / 2;
-              if (overlapX && player2dVelY >= 0 && n.y + n.height / 2 >= pTop && n.y + n.height / 2 <= pTop + 24) {
-                n.y = pTop - n.height / 2;
-                player2dVelY = 0;
-                player2dGrounded = true;
-              }
-            });
-
-            if (n.y > 550) {
-              n.y = 550;
-              player2dVelY = 0;
-              player2dGrounded = true;
-            }
-          }
-        });
-
-        // Collectibles collision check
-        const player = nodes2D.find((n) => n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown');
-        if (player) {
-          nodes2D = nodes2D.filter((n) => {
-            if (n.physics2D === 'collectible') {
-              const hit = Math.hypot(player.x - n.x, player.y - n.y) < (player.width + n.width) * 0.45;
-              if (hit) {
-                score += n.scoreValue || 25;
-                playSynthSound('coin');
-                updateScoreUI();
-                return false;
-              }
-            }
-            return true;
-          });
-        }
-
-        nodes2D.slice().sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).forEach((n) => {
-          ctx2d.save();
-          ctx2d.translate(n.x, n.y);
-          ctx2d.fillStyle = n.fill || '#06B6D4';
-          if (n.type === 'text-kinetic') {
-            ctx2d.font = '800 ' + (n.fontSize || 36) + 'px system-ui, sans-serif';
-            ctx2d.textAlign = 'center';
-            ctx2d.textBaseline = 'middle';
-            ctx2d.fillText(n.text || n.name, 0, Math.sin(t * 3.5) * 5);
-          } else if (n.type === 'circle' || n.type === 'star') {
-            ctx2d.beginPath();
-            ctx2d.arc(0, 0, Math.min(n.width, n.height) / 2, 0, Math.PI * 2);
-            ctx2d.fill();
-          } else {
-            ctx2d.fillRect(-n.width / 2, -n.height / 2, n.width, n.height);
-          }
-          ctx2d.restore();
-        });
-      } else {
-        actorMeshes.forEach((g) => {
-          g.rotation.y = t * 1.2;
-          const baseScale = g.userData.baseScale || [1, 1, 1];
-          g.scale.lerp(new THREE.Vector3(...baseScale), 0.08);
-        });
-        renderer.render(scene3d, camera3d);
-      }
-    }
-    animate();
-  </script>
-</body>
-</html>`;
+/** The Player runtime for a renderer choice: the WebGPU build (bigger) only when WebGPU may be used. */
+export async function loadPlayerRuntime(renderer: 'webgl' | 'webgpu' | 'auto' = 'webgl'): Promise<string> {
+  if (renderer !== 'webgl') return (await import('./generated/playerRuntimeWebgpu')).PLAYER_RUNTIME_WEBGPU;
+  const mod = await import('./generated/playerRuntime');
+  return mod.PLAYER_RUNTIME;
 }
 
 /**
  * 6. Export Standalone Single-File HTML5 Playable Ad
  */
-export function exportStandalonePlayableHTML(
+export async function buildStandalonePlayable(
   sceneSpec: SceneSpec,
   targetNetwork: StandaloneAdNetwork = 'universal',
   scenes?: SceneSpec[],
-  options?: StandalonePlayerOptions
-): string {
-  const htmlContent = generateStandaloneHTMLContent(sceneSpec, targetNetwork, scenes, options);
-  const blob = new Blob([htmlContent], { type: 'text/html' });
+  options?: StandalonePlayerOptions & { offline?: boolean; fetcher?: typeof defaultFetcher }
+): Promise<PlayableBuildResult> {
+  const playerRuntimeSource = options?.playerRuntimeSource ?? (await loadPlayerRuntime(options?.renderer));
+  const all = scenes && scenes.length ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s)) : [sceneSpec];
+  let embed: EmbedResult | undefined;
+  let assets = options?.assets;
+  if (!assets && options?.offline !== false) {
+    const shell = generateStandaloneHTMLContent(sceneSpec, targetNetwork, all, { ...options, playerRuntimeSource });
+    embed = await embedAssets(collectAssetUrls(all), assetBudgetFor(targetNetwork, new TextEncoder().encode(shell).length), options?.fetcher ?? defaultFetcher);
+    assets = embed.assets;
+  }
+  // Phase 10C: generated voice clips always travel inside the file (they exist only in this browser).
+  const voices = voiceClipAssets(all);
+  if (Object.keys(voices).length) assets = { ...voices, ...(assets || {}) };
+  const html = generateStandaloneHTMLContent(sceneSpec, targetNetwork, all, { ...options, playerRuntimeSource, assets });
+  const remote = options?.offline === false ? collectAssetUrls(all) : embed?.skipped.map((s) => s.url) || [];
+  return { html, budget: analyzePlayableBudget(html, targetNetwork, undefined, remote), embed };
+}
+
+export async function exportStandalonePlayableHTML(
+  sceneSpec: SceneSpec,
+  targetNetwork: StandaloneAdNetwork = 'universal',
+  scenes?: SceneSpec[],
+  options?: StandalonePlayerOptions & { offline?: boolean }
+): Promise<PlayableBuildResult> {
+  const result = await buildStandalonePlayable(sceneSpec, targetNetwork, scenes, options);
+  const blob = new Blob([result.html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const slug = slugifyTitle(sceneSpec.title, 'omnistage-game');
   triggerDownload(url, `${slug}-${targetNetwork}-playable.html`);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  return htmlContent;
+  return result;
 }
 
 /**
@@ -1214,14 +762,14 @@ export async function exportStandaloneGameZIP(
   sceneSpec: SceneSpec,
   targetNetwork: StandaloneAdNetwork = 'itch',
   scenes?: SceneSpec[],
-  options?: StandalonePlayerOptions
-): Promise<void> {
+  options?: StandalonePlayerOptions & { offline?: boolean }
+): Promise<PlayableBuildResult> {
   const syncedScenes =
     scenes && scenes.length > 0
       ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s))
       : [sceneSpec];
 
-  const htmlContent = generateStandaloneHTMLContent(sceneSpec, targetNetwork, syncedScenes, options);
+  const { html: htmlContent } = await buildStandalonePlayable(sceneSpec, targetNetwork, syncedScenes, options);
 
   const manifest = {
     name: slugifyTitle(sceneSpec.title, 'omnistage-game'),
@@ -1269,9 +817,12 @@ Enjoy creating with OmniStage AI!
     { name: 'README.txt', content: readme },
   ];
 
-  const zipBlob = createZipBlob(files);
+  // Phase 5: DEFLATE-compressed archive (falls back to stored entries without CompressionStream).
+  const zipBytes = await buildZip(files, { compress: true });
+  const zipBlob = new Blob([zipBytes as BlobPart], { type: 'application/zip' });
   const url = URL.createObjectURL(zipBlob);
   const slug = slugifyTitle(sceneSpec.title, 'omnistage-game');
   triggerDownload(url, `${slug}-${targetNetwork}-package.zip`);
   setTimeout(() => URL.revokeObjectURL(url), 6000);
+  return { html: htmlContent, budget: analyzePlayableBudget(htmlContent, targetNetwork, zipBytes.length) };
 }

@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
+import { ViewportOverlay } from './ViewportOverlay';
+import { activeCaptions } from '../media/captions';
+import { sceneCaptions } from '../audio/voices';
 import { NodeGraphView } from './NodeGraphView';
 import { BottomDock } from './BottomDock';
 import { RightAgentChat } from './RightAgentChat';
@@ -359,6 +362,7 @@ const StageBody: React.FC<{ compact: boolean; padBottom: number }> = ({ compact,
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
   const selectedNode2DId = useStudioStore((s) => s.selectedNode2DId);
   const currentTime = useStudioStore((s) => s.currentTime);
+  const fullPreviewActive = useStudioStore((s) => !!s.fullPreview);
   const gameScore = useStudioStore((s) => s.gameScore);
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
   const gameEnded = useStudioStore((s) => s.gameEnded);
@@ -380,16 +384,25 @@ const StageBody: React.FC<{ compact: boolean; padBottom: number }> = ({ compact,
   const frameX = pad + (availW - frameW) / 2;
   const frameY = pad + (availH - frameH) / 2;
 
-  const caption = (sceneSpec.captions || []).find((c) => currentTime >= c.start && currentTime <= c.end);
+  // Authored captions + dialogue lines (Phase 10C); one cue at a time keeps the docking overlay layout.
+  const caption = activeCaptions(sceneCaptions(sceneSpec), currentTime)[0];
 
   return (
     <div ref={boxRef} className="stage-bg absolute inset-0 overflow-hidden">
       <div
         className="stage-frame"
+        data-tour="viewport"
         style={{ left: frameX, top: frameY, width: Math.max(frameW, 1), height: Math.max(frameH, 1), borderRadius: compact ? 0 : 6 }}
       >
         {/* Dual engine rendering: 3D WebGL vs 2D vector / sprite canvas */}
-        {is2D ? <StageCanvas2D /> : <StageCanvas />}
+        {fullPreviewActive ? (
+          <div className="absolute inset-0 grid place-items-center text-[11px] text-dim">Playing in full preview…</div>
+        ) : is2D ? (
+          <StageCanvas2D />
+        ) : (
+          <StageCanvas />
+        )}
+        {!fullPreviewActive && !compact && <ViewportOverlay />}
 
         {!compact && (
           <div className="pointer-events-none absolute left-2.5 top-2.5 z-10 flex max-w-[60%] items-center gap-2">
@@ -436,8 +449,20 @@ const StageBody: React.FC<{ compact: boolean; padBottom: number }> = ({ compact,
         </div>
 
         {caption && (
-          <div className="pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4" style={{ bottom: compact ? '5%' : '9%' }}>
-            <span className="cap" style={{ fontSize: clamp(frameW * 0.022, 10, 22) }}>
+          <div
+            className="pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4"
+            style={
+              caption.position === 'top'
+                ? { top: compact ? '5%' : '9%' }
+                : caption.position === 'center'
+                  ? { top: '50%', transform: 'translateY(-50%)' }
+                  : { bottom: compact ? '5%' : '9%' }
+            }
+          >
+            <span
+              className="cap"
+              style={{ fontSize: clamp(frameW * (caption.style === 'title' ? 0.04 : 0.022), 10, caption.style === 'title' ? 36 : 22), fontWeight: caption.style === 'title' ? 700 : undefined }}
+            >
               {caption.text}
             </span>
           </div>
