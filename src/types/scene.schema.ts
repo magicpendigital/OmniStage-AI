@@ -931,6 +931,8 @@ export interface SettingsConfig {
   geminiModel: 'gemini-3.8-flash' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';
   polyPizzaApiKey: string;
   sketchfabApiToken: string;
+  /** Phase 6 Batch 3: BYO keys for generation providers (meshy, tripo, fal, replicate); localStorage only, sent as x-generate-key. */
+  generationKeys?: Partial<Record<'meshy' | 'tripo' | 'fal' | 'replicate', string>>;
   customSystemPrompt: string;
   customAssetManifestUrl: string;
   enableThreeOfficialCdn: boolean;

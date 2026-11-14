@@ -321,8 +321,16 @@ the verifier only checks playability. Fix in layers: contract → production too
   in the project library; vision-model "director QA" scoring rendered keyframes → extra patch round.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
-- [ ] Asset-generation providers as Extensions (BYO key, server proxy, results saved to the library with license/source):
-  3D (Meshy, Tripo, Rodin), 2D sprites (image models via fal.ai / Replicate / OpenRouter), audio (ElevenLabs SFX / music / TTS).
+- [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`
+  (text → GLB; Meshy preview → PBR refine), `fal-sprite-generator` (FLUX schnell + background cut-out → transparent PNG) and
+  `replicate-sprite-generator`. New `generate` permission + `contributes.generators`; adapters in `server/generate/providers.ts`
+  (API/result hosts fixed server-side, https-only downloads, magic-byte check), jobs in `server/generate/jobs.ts`, routes
+  `/api/generate/*` on the localhost-only workspace router. BYO key from Settings → Generation keys (localStorage, sent as
+  `x-generate-key`, or env `MESHY_API_KEY` / `TRIPO_API_KEY` / `FAL_KEY` / `REPLICATE_API_TOKEN`), never stored or logged.
+  Results land in My Library (personal or project) with source, licence and prompt; "Generate with AI" in My Library → Place.
+  Tests: `tests/generate.test.ts`.
+- [ ] Remaining generators: Rodin (3D), OpenRouter images, audio (ElevenLabs SFX / music / TTS); image-to-3D; sprite sheets
+  (multi-frame) and rigging generated characters with OmniRig.
 - [ ] VFX & animation by code as AI skills: AI-authored particle/SFX recipes (available now via extensions), GLSL shader effects in a
   validated sandbox, procedural tween/sprite animation, all reviewable and installable.
 

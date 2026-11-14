@@ -15,7 +15,8 @@ export type ExtensionPermission =
   | 'scene:write'
   | 'library:read'
   | 'network'
-  | 'ui:notify';
+  | 'ui:notify'
+  | 'generate';
 
 export const PERMISSION_INFO: Record<ExtensionPermission, { label: string; risk: 'low' | 'medium' | 'high' }> = {
   'scene:read': { label: 'Read the open scene (SceneSpec JSON)', risk: 'low' },
@@ -23,7 +24,37 @@ export const PERMISSION_INFO: Record<ExtensionPermission, { label: string; risk:
   'library:read': { label: 'List assets in your personal library', risk: 'medium' },
   network: { label: 'Fetch from the declared hosts via OmniStage', risk: 'high' },
   'ui:notify': { label: 'Show notifications in the studio', risk: 'low' },
+  generate: { label: 'Generate assets with your own provider API key (uses your credits) and save them to your library', risk: 'medium' },
 };
+
+/**
+ * Phase 6 Batch 3 — asset-generation providers. The provider's API hosts, auth scheme and result hosts live in
+ * the server (server/generate/providers.ts), never in the manifest, so an extension cannot point a key elsewhere.
+ */
+export type GenerationProviderId = 'meshy' | 'tripo' | 'fal' | 'replicate';
+
+export const GENERATION_PROVIDERS: Record<GenerationProviderId, { label: string; output: 'model' | 'image'; keyUrl: string; keyLabel: string }> = {
+  meshy: { label: 'Meshy', output: 'model', keyUrl: 'https://www.meshy.ai/settings/api', keyLabel: 'Meshy API key (msy_…)' },
+  tripo: { label: 'Tripo', output: 'model', keyUrl: 'https://platform.tripo3d.ai/api-keys', keyLabel: 'Tripo API key (tsk_…)' },
+  fal: { label: 'fal.ai', output: 'image', keyUrl: 'https://fal.ai/dashboard/keys', keyLabel: 'fal.ai key (id:secret)' },
+  replicate: { label: 'Replicate', output: 'image', keyUrl: 'https://replicate.com/account/api-tokens', keyLabel: 'Replicate API token (r8_…)' },
+};
+
+/** A text-to-asset generator contributed by an extension (needs the `generate` permission). */
+export interface ExtensionGenerator {
+  id: string;
+  title: string;
+  description?: string;
+  provider: GenerationProviderId;
+  output: 'model' | 'image';
+  /** Image models only (fal / Replicate), e.g. "fal-ai/flux/schnell" or "black-forest-labs/flux-schnell". */
+  model?: string;
+  /** Meshy: run the texture (refine) stage after the mesh; fal: cut the background out for sprites. */
+  texture?: boolean;
+  removeBackground?: boolean;
+  /** Add sprite framing words to the prompt (single centred subject, plain background). */
+  sprite?: boolean;
+}
 
 /** Particle recipe — same fields the built-in presets use (see src/vfx/particles2D.ts). */
 export interface ParticleRecipe {
@@ -95,6 +126,7 @@ export interface ExtensionManifest {
     sfxPresets?: Record<string, SfxRecipe>;
     assetLibraries?: Array<{ id: string; name: string; items: ExtensionAssetItem[] }>;
     commands?: ExtensionCommand[];
+    generators?: ExtensionGenerator[];
   };
   /** Inline JS source of the sandboxed plugin (filled from main.js at install time). */
   mainSource?: string;

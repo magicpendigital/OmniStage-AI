@@ -3,7 +3,31 @@
  * All endpoints only answer requests from this computer; when OmniStage runs in the cloud they return 403 and
  * the studio falls back to in-browser state.
  */
-import type { ExtensionManifest, ExtensionPermission, ExtensionReview, InstalledExtension } from '../extensions/types';
+import type { ExtensionGenerator, ExtensionManifest, ExtensionPermission, ExtensionReview, GenerationProviderId, InstalledExtension } from '../extensions/types';
+
+/** A generator offered by an enabled extension that was granted `generate` (see server/generate/routes.ts). */
+export interface AvailableGenerator extends ExtensionGenerator {
+  extensionId: string;
+  extensionName: string;
+  serverKey: boolean;
+}
+
+export interface GenerationJob {
+  id: string;
+  provider: GenerationProviderId;
+  extensionId: string;
+  generatorId: string;
+  prompt: string;
+  scope: string;
+  stage: string;
+  status: 'running' | 'succeeded' | 'failed';
+  progress: number;
+  error?: string;
+  asset?: LibraryAsset;
+  createdAt: string;
+}
+
+const keyHeader = (key?: string): Record<string, string> => (key?.trim() ? { 'x-generate-key': key.trim() } : {});
 
 export interface ProjectGameEntry {
   id: string;
@@ -136,6 +160,11 @@ export const workspaceApi = {
     api<InstalledExtension>('/extensions/install', { method: 'POST', body: body(input) }),
   setExtensionEnabled: (id: string, enabled: boolean) => api(`/extensions/${id}`, { method: 'PATCH', body: body({ enabled }) }),
   uninstallExtension: (id: string) => api(`/extensions/${id}`, { method: 'DELETE' }),
+
+  listGenerators: () => api<AvailableGenerator[]>('/generate/generators'),
+  startGeneration: (input: { extensionId: string; generatorId: string; prompt: string; scope: string }, key?: string) =>
+    api<GenerationJob>('/generate/jobs', { method: 'POST', body: body(input), headers: keyHeader(key) }),
+  pollGeneration: (id: string, key?: string) => api<GenerationJob>(`/generate/jobs/${encodeURIComponent(id)}`, { headers: keyHeader(key) }),
 
   readMemory: () => api<{ enabled: boolean; entries: MemoryEntry[] }>('/memory'),
   addMemory: (entry: Partial<MemoryEntry>) => api<MemoryEntry>('/memory', { method: 'POST', body: body(entry) }),

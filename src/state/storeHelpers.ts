@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   geminiModel: 'gemini-3.8-flash',
   polyPizzaApiKey: '',
   sketchfabApiToken: '',
+  generationKeys: {},
   customSystemPrompt: '',
   customAssetManifestUrl: '',
   enableThreeOfficialCdn: true,
