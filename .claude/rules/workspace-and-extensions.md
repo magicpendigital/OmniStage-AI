@@ -29,6 +29,9 @@ paths:
   manifest; extensions only pick a provider + a `GENERATION_MODEL_RE` model id and need the approved `generate` permission. Keys
   come per request (`x-generate-key`) or env, are never stored in jobs, logged or echoed (`upstreamErrorMessage` scrubs them), and
   never go to result hosts. Downloads: `safeUrl` (https, provider hosts, no IPs/ports) + `sniffResult` before `AssetStore.add`.
+  `ANY_PUBLIC_HOST` ('*') is only for a provider whose download CDN is undocumented (Rodin): still https, no IPs / ports /
+  private names, and no key. Image-to-3D pictures come only from the user's library (`readSourceImage`, sniffed, ≤ 15 MB) and are
+  dropped from the job after the create call; never accept a picture URL from the client.
   Keep `tests/generate.test.ts` green; re-check the upstream API comments in `providers.ts` when a provider changes its API.
 - CLI providers: prompts via stdin or a temp file, never argv; model ids through `sanitizeModelId`; run in a temp cwd with tools disabled
   where the CLI allows. Re-verify flags with `<cli> --help` after CLI upgrades and update `server/ai/cliProviders.ts` comments.

@@ -200,8 +200,8 @@ export const EXTENSION_CATALOG: ExtensionManifest[] = [
   {
     id: 'meshy-3d-generator',
     name: 'Meshy 3D Generator',
-    version: '1.0.0',
-    description: 'Text to 3D model (GLB) with Meshy: a mesh preview, then PBR textures. Uses your own Meshy API key; results land in My Library.',
+    version: '1.1.0',
+    description: 'Text or picture to 3D model (GLB) with Meshy: a mesh preview, then PBR textures. Uses your own Meshy API key; results land in My Library.',
     author: 'OmniStage',
     homepage: 'https://www.meshy.ai',
     kind: 'tool',
@@ -212,6 +212,7 @@ export const EXTENSION_CATALOG: ExtensionManifest[] = [
       generators: [
         { id: 'meshy-text-to-3d', title: 'Meshy · text → textured 3D', description: 'About 2–4 minutes. Mesh preview + PBR texture stage.', provider: 'meshy', output: 'model', texture: true },
         { id: 'meshy-text-to-mesh', title: 'Meshy · text → untextured mesh (fast)', description: 'About 1 minute, fewer credits. Grey mesh only.', provider: 'meshy', output: 'model', texture: false },
+        { id: 'meshy-image-to-3d', title: 'Meshy · picture → textured 3D', description: 'Pick a picture from your library (one subject, plain background works best). About 2–4 minutes.', provider: 'meshy', output: 'model', input: 'image', texture: true },
       ],
     },
   },
@@ -233,8 +234,8 @@ export const EXTENSION_CATALOG: ExtensionManifest[] = [
   {
     id: 'fal-sprite-generator',
     name: 'fal.ai Sprite Generator',
-    version: '1.0.0',
-    description: '2D game sprites from a prompt with FLUX on fal.ai, background removed to a transparent PNG. Uses your own fal.ai key.',
+    version: '1.1.0',
+    description: '2D game sprites and animated sprite sheets from a prompt with FLUX on fal.ai, background removed to a transparent PNG. Uses your own fal.ai key.',
     author: 'OmniStage',
     homepage: 'https://fal.ai',
     kind: 'tool',
@@ -244,6 +245,7 @@ export const EXTENSION_CATALOG: ExtensionManifest[] = [
     contributes: {
       generators: [
         { id: 'fal-sprite', title: 'fal.ai · sprite (transparent PNG)', description: 'FLUX schnell + background removal, ~10 s.', provider: 'fal', output: 'image', model: 'fal-ai/flux/schnell', sprite: true, removeBackground: true },
+        { id: 'fal-sprite-sheet', title: 'fal.ai · animated sprite sheet (4 frames)', description: 'One row of 4 frames (walk / idle loop), transparent PNG, plays as an animation when placed. Check the frames before use.', provider: 'fal', output: 'image', model: 'fal-ai/flux/schnell', frames: 4, removeBackground: true },
         { id: 'fal-image', title: 'fal.ai · image / backdrop', description: 'FLUX schnell, full frame (backgrounds, textures, cards).', provider: 'fal', output: 'image', model: 'fal-ai/flux/schnell', sprite: false, removeBackground: false },
       ],
     },
@@ -261,6 +263,61 @@ export const EXTENSION_CATALOG: ExtensionManifest[] = [
     permissions: ['generate'],
     contributes: {
       generators: [{ id: 'replicate-sprite', title: 'Replicate · sprite on plain background', description: 'FLUX schnell, ~5 s. Plain background (no cut-out).', provider: 'replicate', output: 'image', model: 'black-forest-labs/flux-schnell', sprite: true }],
+    },
+  },
+  {
+    id: 'rodin-3d-generator',
+    name: 'Rodin 3D Generator',
+    version: '1.0.0',
+    description: 'Text or picture to 3D model (GLB, PBR) with Hyper3D Rodin Gen-2.5. Uses your own Rodin API key; results land in My Library.',
+    author: 'OmniStage',
+    homepage: 'https://hyper3d.ai',
+    kind: 'tool',
+    tags: ['3d', 'model', 'generate', 'rodin', 'hyper3d', 'glb', 'prop', 'character', 'image-to-3d'],
+    targets: { engines: ['3d'] },
+    permissions: ['generate'],
+    contributes: {
+      generators: [
+        { id: 'rodin-text-to-3d', title: 'Rodin · text → PBR 3D', description: 'Gen-2.5 Low tier, about 1–3 minutes.', provider: 'rodin', output: 'model', texture: true },
+        { id: 'rodin-image-to-3d', title: 'Rodin · picture → PBR 3D', description: 'Pick a picture from your library; the prompt (optional) guides the result.', provider: 'rodin', output: 'model', input: 'image', texture: true },
+      ],
+    },
+  },
+  {
+    id: 'openrouter-image-generator',
+    name: 'OpenRouter Image Generator',
+    version: '1.0.0',
+    description: 'Sprites, sprite sheets and images from image models on OpenRouter (Gemini image by default). Uses your OpenRouter key.',
+    author: 'OmniStage',
+    homepage: 'https://openrouter.ai',
+    kind: 'tool',
+    tags: ['2d', 'sprite', 'image', 'generate', 'openrouter', 'gemini', 'png', 'spritesheet'],
+    targets: { engines: ['2d', '3d'] },
+    permissions: ['generate'],
+    contributes: {
+      generators: [
+        { id: 'openrouter-sprite', title: 'OpenRouter · sprite on plain background', description: 'google/gemini-2.5-flash-image, ~10 s.', provider: 'openrouter', output: 'image', model: 'google/gemini-2.5-flash-image', sprite: true },
+        { id: 'openrouter-sprite-sheet', title: 'OpenRouter · animated sprite sheet (4 frames)', description: 'One row of 4 frames on a plain background; plays as an animation when placed.', provider: 'openrouter', output: 'image', model: 'google/gemini-2.5-flash-image', frames: 4 },
+        { id: 'openrouter-image', title: 'OpenRouter · image / backdrop', description: 'Full-frame picture (backgrounds, cards, textures).', provider: 'openrouter', output: 'image', model: 'google/gemini-2.5-flash-image' },
+      ],
+    },
+  },
+  {
+    id: 'elevenlabs-audio-generator',
+    name: 'ElevenLabs Sound Generator',
+    version: '1.0.0',
+    description: 'Sound effects and music from a prompt with ElevenLabs. Uses your ElevenLabs key; MP3 files land in My Library.',
+    author: 'OmniStage',
+    homepage: 'https://elevenlabs.io',
+    kind: 'tool',
+    tags: ['audio', 'sfx', 'music', 'generate', 'elevenlabs', 'mp3'],
+    targets: { engines: ['2d', '3d'] },
+    permissions: ['generate'],
+    contributes: {
+      generators: [
+        { id: 'elevenlabs-sfx', title: 'ElevenLabs · sound effect', description: 'About 2 s; say e.g. "coin pickup, bright arcade chime".', provider: 'elevenlabs', output: 'audio', audio: 'sfx', durationSeconds: 2 },
+        { id: 'elevenlabs-music', title: 'ElevenLabs · music loop (30 s)', description: 'Describe genre, mood and tempo. Takes up to a minute.', provider: 'elevenlabs', output: 'audio', audio: 'music', durationSeconds: 30 },
+      ],
     },
   },
 ];

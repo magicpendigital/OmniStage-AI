@@ -188,6 +188,12 @@ AUTHORING & SPATIAL DESIGN RULES:
 8. 2D Spritesheets & Particles: a Node2D with imageUrl may add spriteSheet { frameWidth, frameHeight, columns, frameCount, fps, clips?: { idle|run|jump: { start, end } } }.
    Node2D type 'particle-emitter' needs emitter { preset: 'sparkle' | 'confetti' | 'fire' | 'smoke' | 'rain' | 'snow' | 'pixel-burst' | 'magic-trail', seed?, rate?, color? };
    width/height is the emission area (use 1000x600 centred at 500,300 for rain/snow).
+   Custom recipes (data only, optional): when no built-in fits, add sceneSpec.particleLibrary = { "slug-id": { rate 0.1-400, life 0.1-10,
+   speed [min,max], angle [deg,deg], gravity, size [min,max], shape 'circle'|'rect'|'line'|'pixel'|'star', colors ['#hex', ≤8],
+   alpha?, fade?, shrink?, grow?, additive?, spread? 0-1, area?, drift?, spin?, burst? seconds } } and/or sceneSpec.sfxLibrary =
+   { "slug-id": { wave 'square'|'sine'|'triangle'|'sawtooth'|'noise', dur 0.05-4, vol 0-1, f0?, f1? Hz, notes? [≤16 Hz], step?, lp0?, lp1?, attack? 0-4 } }.
+   Ids are lower-case slugs that differ from every built-in preset name; at most 24 per library. Reference them by id
+   (emitter.preset: "slug-id", sound cues sfx: "slug-id"). Out-of-range values are clamped by the verifier.
 9. Captions: sceneSpec.captions = [{ start, end, text, position: 'bottom'|'top'|'center', style: 'subtitle'|'title' }] inside 0..durationSeconds, ≤ 12 words each.
 10. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
    every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.

@@ -62,7 +62,7 @@ const GRADE_COLOR: Record<string, string> = { A: 'text-emerald-300', B: 'text-li
  * Phase 9 — OmniRig: auto-rig a character model (humanoid / quadruped / prop), check it with stress poses, fix joints by
  * dragging them, preview the generated clips, then save the rigged GLB (+ rig.json) to My Library and place it.
  */
-export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name: string; url: string } }> = ({ onClose, initialModel }) => {
   const registerAndSpawnCustomAsset = useStudioStore((s) => s.registerAndSpawnCustomAsset);
   const workspaceAvailable = useStudioStore((s) => s.workspaceAvailable);
   const [source, setSource] = useState<Source | null>(null);
@@ -291,6 +291,32 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
       setError(`Could not read ${file.name}: ${(e as Error).message}`);
     }
   };
+
+  // A model handed in from My Library (e.g. a freshly generated Meshy / Tripo / Rodin GLB): rig it straight away.
+  useEffect(() => {
+    if (!initialModel) return;
+    let cancelled = false;
+    setBusy('Loading model…');
+    new GLTFLoader()
+      .loadAsync(initialModel.url)
+      .then((gltf) => {
+        if (cancelled) return;
+        const src = { name: initialModel.name, root: gltf.scene };
+        setName(`${initialModel.name} (OmniRig)`);
+        setSource(src);
+        setResult(null);
+        run(src);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setBusy(null);
+        setError(`Could not load ${initialModel.name}: ${(e as Error).message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialModel?.url]);
 
   const loadUrl = async (assetId: string) => {
     const entry = ASSET_REGISTRY[assetId];

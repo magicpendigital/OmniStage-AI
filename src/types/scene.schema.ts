@@ -939,7 +939,7 @@ export interface SettingsConfig {
   polyPizzaApiKey: string;
   sketchfabApiToken: string;
   /** Phase 6 Batch 3: BYO keys for generation providers (meshy, tripo, fal, replicate); localStorage only, sent as x-generate-key. */
-  generationKeys?: Partial<Record<'meshy' | 'tripo' | 'fal' | 'replicate', string>>;
+  generationKeys?: Partial<Record<'meshy' | 'tripo' | 'rodin' | 'fal' | 'replicate' | 'openrouter' | 'elevenlabs', string>>;
   /**
    * Phase 10D: vision-model director QA after AI film shots (needs a vision-capable connection). Default on.
    * Shots scoring under `directorQAThreshold` (default 70) get one extra patch round driven by the director's notes.

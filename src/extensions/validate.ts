@@ -9,7 +9,7 @@ import type {
   ParticleRecipe,
   SfxRecipe,
 } from './types';
-import { GENERATION_PROVIDERS, PERMISSION_INFO } from './types';
+import { GENERATION_PROVIDERS, PERMISSION_INFO, SPRITE_SHEET_FRAMES } from './types';
 
 /** owner/name model ids for fal.ai and Replicate (no traversal, no versions, no query strings). */
 export const GENERATION_MODEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63}){1,3}$/;
@@ -43,6 +43,76 @@ export function validateSfxRecipe(r: any): r is SfxRecipe {
     typeof r.vol === 'number' && r.vol > 0 && r.vol <= 1 &&
     (r.notes === undefined || (Array.isArray(r.notes) && r.notes.length <= 16 && r.notes.every((n: unknown) => typeof n === 'number' && n > 20 && n < 20000)))
   );
+}
+
+// ------------------------------------------------------------------ recipe sanitizer (manifests + AI-authored recipes)
+/** Recipe ids an AI / extension may add to a scene's particleLibrary / sfxLibrary. */
+export const RECIPE_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** Most custom recipes one scene may carry per library. */
+export const MAX_SCENE_RECIPES = 24;
+
+const num = (v: unknown, lo: number, hi: number): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : undefined;
+const range = (v: unknown, lo: number, hi: number): [number, number] | undefined => {
+  if (!isRange(v)) return undefined;
+  const a = Math.max(lo, Math.min(hi, v[0]));
+  const b = Math.max(lo, Math.min(hi, v[1]));
+  return a <= b ? [a, b] : [b, a];
+};
+function put<T extends object>(out: T, key: keyof T, value: unknown) {
+  if (value !== undefined) (out as any)[key] = value;
+}
+
+/**
+ * Clean copy of a particle recipe: only known fields, numbers clamped into the ranges the runtime handles, no extra
+ * keys (so nothing executable rides along). Null when the required fields are missing or unusable.
+ */
+export function sanitizeParticleRecipe(r: any): ParticleRecipe | null {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const rate = num(r.rate, 0.1, 400);
+  const life = num(r.life, 0.05, 10);
+  const speed = range(r.speed, 0, 2000);
+  const angle = range(r.angle, -720, 720);
+  const size = range(r.size, 0.5, 200);
+  const colors = Array.isArray(r.colors) ? r.colors.filter((c: unknown) => typeof c === 'string' && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [];
+  if (rate === undefined || life === undefined || !speed || !angle || !size || !SHAPES.includes(r.shape) || !colors.length) return null;
+  const out: ParticleRecipe = { rate, life, speed, angle, size, shape: r.shape, colors };
+  put(out, 'gravity', num(r.gravity, -3000, 3000));
+  put(out, 'alpha', num(r.alpha, 0, 1));
+  put(out, 'spread', num(r.spread, 0, 1000));
+  put(out, 'drift', num(r.drift, -1000, 1000));
+  put(out, 'orbit', num(r.orbit, -50, 50));
+  put(out, 'spin', num(r.spin, -50, 50));
+  put(out, 'burst', num(r.burst, 0, 400));
+  for (const flag of ['fade', 'shrink', 'grow', 'additive', 'area'] as const) if (typeof r[flag] === 'boolean') out[flag] = r[flag];
+  return out;
+}
+
+/** Clean copy of an SFX synth recipe (same rules as `sanitizeParticleRecipe`). */
+export function sanitizeSfxRecipe(r: any): SfxRecipe | null {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const dur = num(r.dur, 0.01, 4);
+  const vol = num(r.vol, 0.01, 1);
+  if (!WAVES.includes(r.wave) || dur === undefined || vol === undefined) return null;
+  const out: SfxRecipe = { wave: r.wave, dur, vol };
+  put(out, 'f0', num(r.f0, 21, 19999));
+  put(out, 'f1', num(r.f1, 21, 19999));
+  if (Array.isArray(r.notes)) {
+    const notes = r.notes.filter((n: unknown) => typeof n === 'number' && n > 20 && n < 20000).slice(0, 16);
+    if (notes.length) out.notes = notes;
+  }
+  put(out, 'step', num(r.step, 0.01, 1));
+  put(out, 'lp0', num(r.lp0, 50, 20000));
+  put(out, 'lp1', num(r.lp1, 50, 20000));
+  put(out, 'attack', num(r.attack, 0, 4));
+  return out;
+}
+
+/** Order-independent comparison of a recipe with its sanitized copy (true = nothing was dropped or clamped). */
+export function sameRecipe(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, canon((v as any)[k])])) : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
 }
 
 /** Returns a list of problems; empty = valid. */
@@ -85,6 +155,20 @@ export function validateManifest(m: any): string[] {
     if (!info) errors.push(`${label} has unknown provider "${g?.provider}" (use ${Object.keys(GENERATION_PROVIDERS).join(', ')})`);
     else if (g.output !== info.output) errors.push(`${label}: ${info.label} generates ${info.output}s`);
     if (g?.model !== undefined && (typeof g.model !== 'string' || !GENERATION_MODEL_RE.test(g.model) || g.model.includes('..'))) errors.push(`${label} has an invalid model id`);
+    if (g?.input !== undefined && g.input !== 'text' && g.input !== 'image') errors.push(`${label}: input must be "text" or "image"`);
+    if (g?.input === 'image' && info && !info.imageInput) errors.push(`${label}: ${info.label} cannot start from a picture`);
+    if (g?.frames !== undefined) {
+      const okFrames = Number.isInteger(g.frames) && g.frames >= SPRITE_SHEET_FRAMES.min && g.frames <= SPRITE_SHEET_FRAMES.max;
+      if (!okFrames) errors.push(`${label}: frames must be a whole number from ${SPRITE_SHEET_FRAMES.min} to ${SPRITE_SHEET_FRAMES.max}`);
+      if (info && info.output !== 'image') errors.push(`${label}: sprite-sheet frames only apply to image generators`);
+    }
+    if (g?.audio !== undefined) {
+      if (g.audio !== 'sfx' && g.audio !== 'music') errors.push(`${label}: audio must be "sfx" or "music"`);
+      if (info && info.output !== 'audio') errors.push(`${label}: audio only applies to audio generators`);
+    }
+    if (g?.durationSeconds !== undefined && !(typeof g.durationSeconds === 'number' && g.durationSeconds >= 0.5 && g.durationSeconds <= 300)) {
+      errors.push(`${label}: durationSeconds must be between 0.5 and 300`);
+    }
   }
   if (c.generators?.length && !(m.permissions || []).includes('generate')) errors.push('generators need the "generate" permission');
   if (c.commands?.length && !m.mainSource) errors.push('commands need a main script');

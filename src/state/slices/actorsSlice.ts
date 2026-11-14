@@ -199,7 +199,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       };
     }),
 
-  registerAndSpawnCustomAsset: (name, url, fileType, entryPatch) => {
+  registerAndSpawnCustomAsset: (name, url, fileType, entryPatch, node2DPatch) => {
     const state = get();
     if (fileType === 'glb') {
       const customId = `custom-glb-${Date.now().toString(36)}`;
@@ -246,6 +246,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         imageUrl: url,
         physics2D: 'bouncing',
         scoreValue: 25,
+        ...(node2DPatch || {}),
       };
       nextSpec.nodes2D.push(newNode);
       set((s) => ({
