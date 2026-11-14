@@ -3,15 +3,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { TopNavBar } from './components/TopNavBar';
 import { LeftAssetDrawer } from './components/LeftAssetDrawer';
 import { CenterViewport } from './components/CenterViewport';
 import { RightAgentChat } from './components/RightAgentChat';
 import { PublishModal } from './components/PublishModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ProjectHubModal } from './components/ProjectHubModal';
+import { ExtensionsModal } from './components/ExtensionsModal';
+import { ExtensionReviewDialog } from './components/ExtensionReviewDialog';
+import { PlayTestModal } from './components/PlayTestModal';
+import { FullPreviewOverlay } from './components/FullPreviewOverlay';
+import { GuideModal } from './components/GuideModal';
+import { WelcomeTour } from './components/WelcomeTour';
+import { useStudioStore } from './state/useStudioStore';
+import { useProjectAutosave } from './workspace/useProjectAutosave';
+import { StaleDraftsDialog } from './components/StaleDraftsDialog';
 
 export default function App() {
+  // Phase 6: connect to the local workspace (projects, extensions, memory) and autosave the open game.
+  useEffect(() => {
+    useStudioStore.getState().initWorkspace();
+  }, []);
+  useProjectAutosave();
+
   return (
     <div className="w-screen h-screen overflow-hidden bg-[#090D16] text-slate-100 flex flex-col select-none">
       {/* Top Studio Bar */}
@@ -29,6 +45,18 @@ export default function App() {
 
       {/* Studio Settings & External Asset Hub Modal */}
       <SettingsModal />
+
+      {/* Phase 6: projects, extensions and the install approval gate */}
+      <ProjectHubModal />
+      <StaleDraftsDialog />
+      <ExtensionsModal />
+      <ExtensionReviewDialog />
+
+      {/* Phase 6 batch 2: play test, full preview, guide + first-run tour */}
+      <PlayTestModal />
+      <FullPreviewOverlay />
+      <GuideModal />
+      <WelcomeTour />
     </div>
   );
 }

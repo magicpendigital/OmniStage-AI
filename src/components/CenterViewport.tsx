@@ -1,3 +1,4 @@
+import { sceneCaptions } from '../audio/voices';
 import React from 'react';
 import {
   Box,
@@ -22,6 +23,8 @@ import {
 } from 'lucide-react';
 import { StageCanvas } from '../renderer/StageCanvas';
 import { StageCanvas2D } from '../renderer/StageCanvas2D';
+import { ViewportOverlay } from './ViewportOverlay';
+import { activeCaptions } from '../media/captions';
 import { NodeGraphView } from './NodeGraphView';
 import { ExecutionConsole } from './ExecutionConsole';
 import { useStudioStore } from '../state/useStudioStore';
@@ -44,6 +47,7 @@ export const CenterViewport: React.FC = () => {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const isLooping = useStudioStore((s) => s.isLooping);
   const currentTime = useStudioStore((s) => s.currentTime);
+  const fullPreviewActive = useStudioStore((s) => !!s.fullPreview);
   const gameScore = useStudioStore((s) => s.gameScore);
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
   const gameWon = useStudioStore((s) => s.gameWon);
@@ -204,10 +208,38 @@ export const CenterViewport: React.FC = () => {
             } h-full flex items-center justify-center overflow-hidden relative`}
           >
             <div
+              data-tour="viewport"
               className={`relative rounded-xl overflow-hidden border border-slate-800/90 shadow-2xl bg-[#0B101B] transition-all duration-300 ${getStageFrameClass()}`}
             >
-              {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas */}
-              {is2D ? <StageCanvas2D /> : <StageCanvas />}
+              {/* Dual Engine Rendering: 3D WebGL vs 2D Vector/Sprite Canvas (the full preview mounts its own) */}
+              {fullPreviewActive ? (
+                <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs">Playing in full preview…</div>
+              ) : is2D ? (
+                <StageCanvas2D />
+              ) : (
+                <StageCanvas />
+              )}
+              {!fullPreviewActive && <ViewportOverlay />}
+              {/* Phase 5: 3D caption overlay (2D draws captions into its canvas). */}
+              {!is2D &&
+                activeCaptions(sceneCaptions(sceneSpec), currentTime).map((cue, i) => (
+                  <div
+                    key={cue.id || i}
+                    className={`pointer-events-none absolute inset-x-0 flex justify-center px-6 ${
+                      cue.position === 'top' ? 'top-[8%]' : cue.position === 'center' ? 'top-1/2 -translate-y-1/2' : 'bottom-[9%]'
+                    }`}
+                  >
+                    <span
+                      className={
+                        cue.style === 'title'
+                          ? 'text-3xl font-extrabold text-white text-center [text-shadow:0_2px_8px_rgba(0,0,0,0.85)]'
+                          : 'px-3 py-1.5 rounded bg-slate-950/75 text-sm font-semibold text-slate-50 text-center'
+                      }
+                    >
+                      {cue.text}
+                    </span>
+                  </div>
+                ))}
 
               {/* Top Bar Inside Viewport: Scene Info + Playable Score/Timer */}
               <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between pointer-events-none z-10 gap-2">

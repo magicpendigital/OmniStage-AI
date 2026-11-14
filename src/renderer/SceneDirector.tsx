@@ -1,13 +1,17 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { ContactShadows, Grid, OrbitControls, Sparkles } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { useStudioStore } from '../state/useStudioStore';
+import { easedSplineProgress } from '../animation/easing';
 import { ActorRenderer } from './ActorRenderer';
 import { CollisionBurstRenderer, VFXRenderer } from './VFXRenderer';
 import { WorldRenderer } from './WorldRenderer';
+import { Built } from './Built';
+import { applyBackgroundAndFog, applyStudioEnvironment, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
+import { createContactShadows } from '../render3d/contactShadows';
 import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
+import { resolveShot } from '../runtime/cinematics';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -21,6 +25,8 @@ export const SceneDirector: React.FC = () => {
 
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const selectedActorId = useStudioStore((s) => s.selectedActorId);
+  // Phase 10A: Preview shows the film, not editor helpers (gizmo, selection ring, coordinate badge).
+  const previewing = useStudioStore((s) => !!s.fullPreview);
   const isDraggingGizmo = useStudioStore((s) => s.isDraggingGizmo);
   const selectActor = useStudioStore((s) => s.selectActor);
   const setTransformMode = useStudioStore((s) => s.setTransformMode);
@@ -30,17 +36,8 @@ export const SceneDirector: React.FC = () => {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const burstEffects = useStudioStore((s) => s.burstEffects);
 
-  // Initialize procedural studio PMREM environment reflection once
-  useEffect(() => {
-    const pmremGenerator = new THREE.PMREMGenerator(gl);
-    const envScene = new RoomEnvironment();
-    const envTexture = pmremGenerator.fromScene(envScene, 0.04).texture;
-    scene.environment = envTexture;
-    pmremGenerator.dispose();
-    return () => {
-      envTexture.dispose();
-    };
-  }, [gl, scene]);
+  // Procedural studio reflections (shared with the OmniStage Player)
+  useEffect(() => applyStudioEnvironment(gl, scene), [gl, scene]);
 
   // Keyboard Listeners: WASD / Arrows for Playable Game Player + W/E/R for 3D Gizmo Modes
   useEffect(() => {
@@ -75,16 +72,12 @@ export const SceneDirector: React.FC = () => {
     };
   }, [setTransformMode, logicRuntime]);
 
-  // Sync background color & horizon fog with SceneSpec
+  // Background colour & horizon fog (shared with the OmniStage Player)
   useEffect(() => {
-    scene.background = new THREE.Color(sceneSpec.environment.backgroundColor || '#0B101B');
-    scene.fog = new THREE.Fog(
-      sceneSpec.environment.fogColor || sceneSpec.environment.backgroundColor || '#0B101B',
-      sceneSpec.environment.fogNear || 14,
-      sceneSpec.environment.fogFar || 45
-    );
+    applyBackgroundAndFog(scene, sceneSpec.environment, sceneSpec.world);
   }, [
     scene,
+    sceneSpec.world?.skybox,
     sceneSpec.environment.backgroundColor,
     sceneSpec.environment.fogColor,
     sceneSpec.environment.fogNear,
@@ -160,7 +153,24 @@ export const SceneDirector: React.FC = () => {
     }
 
     // 2. CINEMATIC CAMERA SEQUENCER (Media Mode or Active Camera Tracks)
-    if (isPlaying && !isDraggingGizmo && (sceneSpec.mode === 'media' || logicRuntime.controlsCamera)) {
+    // Phase 10A: a shot list drives the camera in media scenes (cuts, framing on the performers). Deterministic in time,
+    // so the camera is set exactly (no smoothing) — the same frame the Player and video export render.
+    // In Preview the shot also holds while paused / scrubbing (it is the film); in the editor a paused camera is free to orbit.
+    const inPreview = !!useStudioStore.getState().fullPreview;
+    const shotFrame = (isPlaying || inPreview) && !isDraggingGizmo && sceneSpec.mode === 'media' ? resolveShot(sceneSpec, currentTime) : null;
+    const persp = camera as THREE.PerspectiveCamera;
+    const wantFov = shotFrame ? shotFrame.fov : sceneSpec.camera.fov || 45;
+    if (persp.isPerspectiveCamera && Math.abs(persp.fov - wantFov) > 0.01 && (shotFrame || isPlaying)) {
+      persp.fov = wantFov;
+      persp.updateProjectionMatrix();
+    }
+    if (shotFrame) {
+      camera.position.set(...shotFrame.position);
+      if (controlsRef.current) {
+        controlsRef.current.target.set(...shotFrame.target);
+        controlsRef.current.update();
+      } else camera.lookAt(...shotFrame.target);
+    } else if (isPlaying && !isDraggingGizmo && (sceneSpec.mode === 'media' || logicRuntime.controlsCamera)) {
       if (camMode === 'orbit') {
         camera.position.set(...sceneSpec.camera.position);
         if (controlsRef.current) {
@@ -227,8 +237,10 @@ export const SceneDirector: React.FC = () => {
           controlsRef.current.update();
         }
       } else if (camMode === 'cinematic-flythrough' && keyframeCurves) {
-        keyframeCurves.posCurve.getPointAt(progress, _camPosVec);
-        keyframeCurves.targetCurve.getPointAt(progress, _targetVec);
+        // Phase 4: honour keyframe times + per-keyframe easing (getPoint maps u evenly across control points).
+        const u = easedSplineProgress(sceneSpec.camera.keyframes, currentTime);
+        keyframeCurves.posCurve.getPoint(u, _camPosVec);
+        keyframeCurves.targetCurve.getPoint(u, _targetVec);
         camera.position.lerp(_camPosVec, 0.1);
         if (controlsRef.current) {
           controlsRef.current.target.lerp(_targetVec, 0.1);
@@ -242,51 +254,12 @@ export const SceneDirector: React.FC = () => {
 
   return (
     <group onPointerMissed={() => selectActor(null)}>
-      {/* 3-Point Calibrated Studio Lighting Rig */}
-      <hemisphereLight
-        color={env.keyLightColor || '#FFFBEB'}
-        groundColor={env.groundColor || '#0F172A'}
-        intensity={env.ambientIntensity ?? 0.75}
-      />
+      {/* 3-point studio lighting rig (src/render3d/stage3d — identical in the OmniStage Player) */}
+      <Built factory={() => createLightingRig(env, gl.shadowMap.enabled)}
+        deps={[env.keyLightColor, env.groundColor, env.ambientIntensity, env.keyLightIntensity, env.rimLightColor, gl.shadowMap.enabled]} />
 
-      {/* Warm Key Light with Shadow Mapping */}
-      <directionalLight
-        position={[5.5, 8.5, 6.0]}
-        color={env.keyLightColor || '#FFFBEB'}
-        intensity={env.keyLightIntensity ?? 2.2}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-        shadow-camera-near={0.5}
-        shadow-camera-far={25}
-        shadow-camera-left={-7}
-        shadow-camera-right={7}
-        shadow-camera-top={7}
-        shadow-camera-bottom={-7}
-        shadow-bias={-0.0005}
-      />
-
-      {/* Cool Fill Light */}
-      <directionalLight position={[-5.0, 4.0, 3.5]} color="#93C5FD" intensity={0.9} />
-
-      {/* High-Contrast Rim / Backlight */}
-      <spotLight
-        position={[0, 6.5, -6.5]}
-        color={env.rimLightColor || '#38BDF8'}
-        intensity={3.4}
-        angle={0.65}
-        penumbra={0.8}
-      />
-
-      {/* Subtle Ambient Studio Sparkle Dust */}
-      <Sparkles
-        count={24}
-        scale={10}
-        size={1.6}
-        speed={0.25}
-        opacity={0.35}
-        color={env.rimLightColor || '#38BDF8'}
-      />
+      {/* Subtle Ambient Studio Sparkle Dust (shared builder, also in the Player) */}
+      <Built factory={() => createAmbientDust(env)} deps={[env.rimLightColor]} />
 
       {/* Rich 3D World Environment (Terrains, Skybox, Clouds, Weather, Scatter Props) */}
       <WorldRenderer />
@@ -313,60 +286,19 @@ export const SceneDirector: React.FC = () => {
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* Optional Commercial Reflective Studio Pedestal Disc */}
-      {env.reflectivePedestal && (
-        <group position={[0, 0.005, 0]}>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <circleGeometry args={[3.2, 64]} />
-            <meshPhysicalMaterial
-              color={env.groundColor || '#0F172A'}
-              metalness={0.85}
-              roughness={0.12}
-              clearcoat={1}
-              reflectivity={0.9}
-            />
-          </mesh>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
-            <ringGeometry args={[3.14, 3.22, 64]} />
-            <meshBasicMaterial
-              color={env.rimLightColor || '#38BDF8'}
-              transparent
-              opacity={0.65}
-            />
-          </mesh>
-        </group>
-      )}
+      {env.reflectivePedestal && <Built factory={() => createPedestal(env)} deps={[env.groundColor, env.rimLightColor]} />}
 
-      {env.groundGrid && (
-        <Grid
-          position={[0, 0.008, 0]}
-          args={[30, 30]}
-          cellSize={1}
-          cellThickness={0.6}
-          cellColor="#1E293B"
-          sectionSize={5}
-          sectionThickness={1.1}
-          sectionColor={env.rimLightColor || '#06B6D4'}
-          fadeDistance={24}
-          fadeStrength={1.2}
-        />
-      )}
+      {env.groundGrid && <Built factory={() => createGroundGrid(env)} deps={[env.rimLightColor]} />}
 
-      <ContactShadows
-        position={[0, 0.012, 0]}
-        opacity={0.55}
-        scale={16}
-        blur={2.0}
-        far={5}
-        color="#000000"
-      />
+      {/* Phase 7C: shared builder (also used by the Player) instead of drei's <ContactShadows> */}
+      <Built factory={() => createContactShadows({ scale: 16, far: 5, opacity: 0.55, blur: 2 })} deps={[]} />
 
       {/* Declarative 3D Actors from SceneSpec */}
       {sceneSpec.actors.map((actor) => (
         <ActorRenderer
           key={actor.id}
           actor={actor}
-          isSelected={actor.id === selectedActorId}
+          isSelected={actor.id === selectedActorId && !previewing}
           onRuntimeClick={(actorId) => logicRuntime.emit('actor-click', { actorId })}
         />
       ))}

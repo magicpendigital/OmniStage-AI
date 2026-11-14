@@ -8,3 +8,4 @@ coverage/
 !.env.example
 .playwright-cli/
 output/playwright/
+output/e2e-results/

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  Brain,
   CheckCircle2,
   Cpu,
   Database,
@@ -10,20 +11,36 @@ import {
   ShieldCheck,
   Sliders,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
+import { BUILTIN_DIRECTOR_SKILLS } from '../agent/directorSkills';
+import { AIProviderPanel } from './AIProviderPanel';
+import { MemoryPanel } from './MemoryPanel';
+import { SETTINGS_TAB_EVENT } from '../guide/guideActions';
 import { DEFAULT_SETTINGS, useStudioStore } from '../state/useStudioStore';
 import { EngineType, SettingsConfig } from '../types/scene.schema';
 
-type SettingsTab = 'ai' | 'libraries' | 'engine';
+type SettingsTab = 'ai' | 'libraries' | 'engine' | 'memory';
 
 export const SettingsModal: React.FC = () => {
   const isOpen = useStudioStore((s) => s.isSettingsModalOpen);
   const setOpen = useStudioStore((s) => s.setSettingsModalOpen);
   const settings = useStudioStore((s) => s.settings);
   const updateSettings = useStudioStore((s) => s.updateSettings);
+  const learnedSkills = useStudioStore((s) => s.learnedSkills);
+  const removeLearnedSkill = useStudioStore((s) => s.removeLearnedSkill);
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
+  // Guide "Try it" buttons can open a specific tab.
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const tab = (e as CustomEvent<SettingsTab>).detail;
+      if (tab) setActiveTab(tab);
+    };
+    window.addEventListener(SETTINGS_TAB_EVENT, onTab);
+    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onTab);
+  }, []);
   const [savedNotice, setSavedNotice] = useState(false);
 
   if (!isOpen) return null;
@@ -67,6 +84,7 @@ export const SettingsModal: React.FC = () => {
             { id: 'ai', label: '1. AI Director & Prompts', icon: <Sparkles className="w-3.5 h-3.5" /> },
             { id: 'libraries', label: '2. External Asset CDNs', icon: <Database className="w-3.5 h-3.5" /> },
             { id: 'engine', label: '3. Engine & Render Quality', icon: <Sliders className="w-3.5 h-3.5" /> },
+            { id: 'memory', label: '4. Memory', icon: <Brain className="w-3.5 h-3.5" /> },
           ].map((tab) => {
             const active = activeTab === tab.id;
             return (
@@ -90,45 +108,24 @@ export const SettingsModal: React.FC = () => {
         <div className="p-6 overflow-y-auto space-y-5 flex-1 text-xs">
           {activeTab === 'ai' && (
             <div className="space-y-4">
-              {/* Server-Side API Key Security Badge */}
-              <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-start gap-3">
-                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <div className="font-semibold text-emerald-300">
-                    Server-Side Gemini API Key Active (GEMINI_API_KEY)
-                  </div>
-                  <p className="text-slate-300 leading-relaxed">
-                    Credentials are securely injected via the backend Express proxy (
-                    <code className="text-emerald-300 font-mono">/api/agent/mutate</code> &{' '}
-                    <code className="text-emerald-300 font-mono">/api/agent/vision-qa</code>) so keys are never exposed in client bundles.
-                  </p>
-                </div>
-              </div>
+              {/* Phase 6: provider picker (API keys, OpenRouter, OpenAI-compatible, local coding-agent CLIs) */}
+              <AIProviderPanel />
 
-              {/* Gemini Model Selector */}
+              {/* Phase 7C: patch edits vs full rewrites */}
               <div className="space-y-1.5">
-                <label className="block font-semibold text-slate-200">
-                  Gemini Reasoning & Spatial Authoring Model
-                </label>
+                <label className="block font-semibold text-slate-200">How the AI edits your scene</label>
                 <select
-                  value={settings.geminiModel}
-                  onChange={(e) =>
-                    updateSettings({
-                      geminiModel: e.target.value as SettingsConfig['geminiModel'],
-                    })
-                  }
-                  className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs focus:outline-none focus:border-cyan-500"
+                  value={settings.aiEditMode || 'patch'}
+                  onChange={(e) => updateSettings({ aiEditMode: e.target.value as 'patch' | 'full' })}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-cyan-500"
                 >
-                  <option value="gemini-3.8-flash">
-                    gemini-3.8-flash (Recommended · Fast Spatial & World Authoring)
-                  </option>
-                  <option value="gemini-3.1-flash-lite">
-                    gemini-3.1-flash-lite (Ultra-Fast Interactive Turnaround)
-                  </option>
-                  <option value="gemini-flash-latest">
-                    gemini-flash-latest (Latest Stable Multimodal Flash)
-                  </option>
+                  <option value="patch">Small edits, checked in a loop (recommended)</option>
+                  <option value="full">Rewrite the whole scene each time</option>
                 </select>
+                <p className="text-[11px] text-slate-400">
+                  Small edits are faster and never drop parts of your scene. OmniStage checks each edit and asks the AI to fix
+                  problems (up to 3 rounds). Use "Rewrite" only if your model can't follow the edit format.
+                </p>
               </div>
 
               {/* Custom System Prompt Extension */}
@@ -146,6 +143,54 @@ export const SettingsModal: React.FC = () => {
                 <p className="text-[11px] text-slate-400">
                   Appended to the AI Director system instructions whenever you generate or mutate a 3D or 2D scene.
                 </p>
+              </div>
+
+              {/* Phase 4: Director Skills */}
+              <div className="space-y-2">
+                <label className="block font-semibold text-slate-200">Director Skills</label>
+                <p className="text-[11px] text-slate-400">
+                  Up to 3 skills matching your prompt are injected automatically. Use
+                  <span className="font-mono text-violet-300"> Save as skill </span>
+                  in the chat to teach the director a reusable recipe.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {BUILTIN_DIRECTOR_SKILLS.map((skill) => (
+                    <span
+                      key={skill.id}
+                      title={skill.description}
+                      className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-700 text-slate-300"
+                    >
+                      {skill.title}
+                    </span>
+                  ))}
+                </div>
+                {learnedSkills.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 italic">No learned skills yet.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {learnedSkills.map((skill) => (
+                      <div
+                        key={skill.id}
+                        className="flex items-start gap-2 p-2 rounded-lg bg-slate-900 border border-violet-500/30"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[11px] font-semibold text-violet-200 truncate">{skill.title}</div>
+                          <div className="text-[10px] font-mono text-slate-400 truncate">
+                            {skill.engine.toUpperCase()} · {skill.mode} · used {skill.uses || 0}× · {skill.triggers.join(', ')}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeLearnedSkill(skill.id)}
+                          title="Forget this skill"
+                          className="p-1 rounded text-slate-400 hover:text-rose-300 hover:bg-rose-950/40"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -269,6 +314,8 @@ export const SettingsModal: React.FC = () => {
               </div>
             </div>
           )}
+
+          {activeTab === 'memory' && <MemoryPanel />}
 
           {activeTab === 'engine' && (
             <div className="space-y-4">

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
+  BookmarkPlus,
   CheckCircle2,
   Code2,
+  ShieldAlert,
+  ShieldCheck,
   Eye,
   MessageSquareCode,
   Send,
@@ -19,6 +22,14 @@ import {
   runVisionQAInspection,
 } from '../agent/studioAgent';
 import { ActorClickAction, AnimationType, EnterEffect } from '../types/scene.schema';
+import { BUILTIN_DIRECTOR_SKILLS, mergeSystemPrompt } from '../agent/directorSkills';
+import { buildDirectorContext } from '../agent/studioAgent';
+import { parseExplicitMemory, suggestMemory } from '../agent/memory';
+import { recommendExtensions } from '../extensions/registry';
+import { formatGuideAnswer, guideLangFor, guideTopic, matchGuideQuestion } from '../guide/guideContent';
+import { runGuideAction } from '../guide/guideActions';
+import { EXTENSION_CATALOG } from '../extensions/catalog';
+import { Brain, Puzzle } from 'lucide-react';
 
 type RightTab = 'chat' | 'inspector' | 'json';
 
@@ -29,6 +40,7 @@ const QUICK_PROMPTS = [
   'Create a Snow Mountain world with falling snow & a Vanguard Soldier (.glb)',
   'Làm một bộ phim 3D gồm 3 cảnh về chú robot phiêu lưu trong rừng',
   'Tạo game 2D vượt chướng ngại vật 3 màn',
+  'Make it a playable ad with a strong hook, CTA and juicy sound effects',
 ];
 
 export const RightAgentChat: React.FC = () => {
@@ -60,6 +72,41 @@ export const RightAgentChat: React.FC = () => {
   const removeActor = useStudioStore((s) => s.removeActor);
   const clearPendingAgentFixPrompt = useStudioStore((s) => s.clearPendingAgentFixPrompt);
   const appendLog = useStudioStore((s) => s.appendLog);
+  const learnedSkills = useStudioStore((s) => s.learnedSkills);
+  const saveLearnedSkill = useStudioStore((s) => s.saveLearnedSkill);
+  const workspaceAvailable = useStudioStore((s) => s.workspaceAvailable);
+  const addMemoryEntry = useStudioStore((s) => s.addMemoryEntry);
+  const memories = useStudioStore((s) => s.memories);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProject = useStudioStore((s) => s.activeProject);
+  const openExtensionReview = useStudioStore((s) => s.openExtensionReview);
+  const [savedMemoryMsgIds, setSavedMemoryMsgIds] = useState<Record<string, boolean>>({});
+
+  const nowLabel = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  /** Phase 6: memory + extension suggestions attached to the assistant reply for this prompt. */
+  const suggestionsFor = (query: string, engineType: string, mode: string) => {
+    const memorySuggestion = workspaceAvailable ? suggestMemory(query) : null;
+    const known = memorySuggestion && memories.some((m) => m.text.toLowerCase() === memorySuggestion.text.toLowerCase());
+    const extensionSuggestions = workspaceAvailable
+      ? recommendExtensions(query, { engineType, mode, projectTags: activeProject?.tags }, EXTENSION_CATALOG, installedExtensions.map((e) => e.manifest.id)).map((r) => ({
+          id: r.manifest.id,
+          name: r.manifest.name,
+          reason: r.reason,
+        }))
+      : [];
+    return { memorySuggestion: known ? undefined : memorySuggestion || undefined, extensionSuggestions: extensionSuggestions.length ? extensionSuggestions : undefined };
+  };
+  const [savedSkillMsgIds, setSavedSkillMsgIds] = useState<Record<string, boolean>>({});
+
+  const skillTitle = (id: string) =>
+    [...BUILTIN_DIRECTOR_SKILLS, ...learnedSkills].find((s) => s.id === id)?.title || id;
+
+  const handleSaveSkill = (msgId: string, prompt: string, spec: any) => {
+    const skill = saveLearnedSkill(prompt, spec);
+    setSavedSkillMsgIds((m) => ({ ...m, [msgId]: true }));
+    appendLog({ level: 'info', message: `Saved learned Director Skill "${skill.title}" (triggers: ${skill.triggers.join(', ')}).` });
+  };
 
   const selectedActor =
     sceneSpec.actors.find((a) => a.id === selectedActorId) || sceneSpec.actors[0] || null;
@@ -79,6 +126,34 @@ export const RightAgentChat: React.FC = () => {
 
     // Multi-step storyboard: "phim 3D gồm 3 cảnh", "game 2D 3 màn", "a 4-level platformer"...
     // Auto-Fix repair prompts must never be mistaken for a storyboard request.
+    // Phase 6: "nhớ rằng …" / "remember …" goes straight to memory (no AI call).
+    // Phase 6 batch 2: "làm sao…?" / "how do I…?" about the app is answered from the Guide (no AI call).
+    const helpTopic = query.startsWith('Auto-Fix Execution Issue') ? null : matchGuideQuestion(query);
+    if (helpTopic) {
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: formatGuideAnswer(helpTopic, guideLangFor(query)),
+        timestamp: nowLabel(),
+        guideTopicId: helpTopic.id,
+      });
+      return;
+    }
+
+    const explicitMemory = parseExplicitMemory(query);
+    if (explicitMemory) {
+      const entry = workspaceAvailable ? await addMemoryEntry(explicitMemory, 'preference', 'explicit', 'global') : null;
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: entry
+          ? `Đã ghi nhớ: "${entry.text}". I'll use this in future requests (Settings → Memory to edit or remove).`
+          : 'Memory needs the local workspace (run OmniStage on this computer).',
+        timestamp: nowLabel(),
+      });
+      return;
+    }
+
     const storyboardIntent = query.startsWith('Auto-Fix Execution Issue')
       ? null
       : detectStoryboardIntent(query);
@@ -125,6 +200,10 @@ export const RightAgentChat: React.FC = () => {
         diffSummary: result.diffSummary,
         previousSpecSnapshot: prevSnapshot,
         updatedSpecSnapshot: nextSpec,
+        sourcePrompt: query.startsWith('Auto-Fix Execution Issue') ? undefined : query,
+        skillsUsed: result.skillsUsed,
+        verification: result.verification,
+        ...(query.startsWith('Auto-Fix Execution Issue') ? {} : suggestionsFor(query, nextSpec.engineType, nextSpec.mode)),
       });
     } finally {
       setAgentThinking(false);
@@ -158,7 +237,12 @@ export const RightAgentChat: React.FC = () => {
     };
 
     try {
-      const result = await generateStoryboardWithAgent(query, intent, settings, {
+      const director = buildDirectorContext(query, { engineType: intent.engineType, mode: sceneSpec.mode });
+      const skilledSettings = {
+        ...settings,
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, director.skills, director.extraContext),
+      };
+      const result = await generateStoryboardWithAgent(query, intent, skilledSettings, {
         onPlan: (plan, source) => patchJob({ title: plan.storyboardTitle, total: plan.beats.length, source }),
         onProgress: (p) =>
           patchJob({ status: p.phase, completed: p.completed, total: p.total, currentLabel: p.label }),
@@ -299,6 +383,113 @@ export const RightAgentChat: React.FC = () => {
                     ))}
                   </div>
                 )}
+
+                {/* Phase 4: Director Skills + Verification Loop badges */}
+                {msg.role === 'assistant' && (msg.skillsUsed?.length || msg.verification) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {msg.verification && (
+                      <span
+                        title={msg.verification.issues.map((i) => `${i.code}: ${i.message}`).join(' | ') || 'No issues'}
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+                          msg.verification.ok
+                            ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300'
+                            : 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                        }`}
+                      >
+                        {msg.verification.ok ? <ShieldCheck className="w-3 h-3" /> : <ShieldAlert className="w-3 h-3" />}
+                        {msg.verification.ok
+                          ? `VERIFIED${msg.verification.warnings ? ` · ${msg.verification.warnings} warn` : ''}`
+                          : `${msg.verification.errors} ERROR(S)`}
+                      </span>
+                    )}
+                    {msg.skillsUsed?.map((id) => (
+                      <span
+                        key={id}
+                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-950/50 border border-violet-500/40 text-violet-300"
+                      >
+                        {skillTitle(id)}
+                      </span>
+                    ))}
+                    {msg.sourcePrompt && msg.updatedSpecSnapshot && (
+                      <button
+                        type="button"
+                        disabled={savedSkillMsgIds[msg.id]}
+                        onClick={() => handleSaveSkill(msg.id, msg.sourcePrompt!, msg.updatedSpecSnapshot)}
+                        title="Save this result as a learned Director Skill reused for similar prompts"
+                        className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border border-slate-700 text-slate-300 hover:border-violet-400 hover:text-violet-200 disabled:opacity-60 disabled:hover:border-slate-700"
+                      >
+                        <BookmarkPlus className="w-3 h-3" />
+                        {savedSkillMsgIds[msg.id] ? 'Skill saved' : 'Save as skill'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Phase 6: memory suggestion (user confirms) */}
+                {msg.guideTopicId && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => useStudioStore.getState().openGuide(msg.guideTopicId)}
+                      className="px-2 py-0.5 rounded border border-amber-500/40 text-[10px] text-amber-100"
+                    >
+                      Open in Guide
+                    </button>
+                    {guideTopic(msg.guideTopicId)?.action && (
+                      <button
+                        type="button"
+                        onClick={() => runGuideAction(guideTopic(msg.guideTopicId)!.action!.id)}
+                        className="px-2 py-0.5 rounded border border-cyan-500/40 text-[10px] text-cyan-100"
+                      >
+                        {guideTopic(msg.guideTopicId)!.action!.label[guideLangFor(msg.content)]}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {msg.memorySuggestion && (
+                  <div className="mt-2 p-2 rounded-lg bg-violet-950/30 border border-violet-500/30 flex items-start gap-2">
+                    <Brain className="w-3.5 h-3.5 text-violet-300 shrink-0 mt-0.5" />
+                    <div className="flex-1 text-[11px] text-slate-200">
+                      Remember this for next time? <span className="italic">"{msg.memorySuggestion.text}"</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={savedMemoryMsgIds[msg.id]}
+                      onClick={async () => {
+                        await addMemoryEntry(msg.memorySuggestion!.text, msg.memorySuggestion!.kind, 'confirmed-suggestion', 'global');
+                        setSavedMemoryMsgIds((m) => ({ ...m, [msg.id]: true }));
+                      }}
+                      className="px-2 py-0.5 rounded border border-violet-500/40 text-[10px] text-violet-100 disabled:opacity-60"
+                    >
+                      {savedMemoryMsgIds[msg.id] ? 'Remembered' : 'Remember'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Phase 6: extension suggestions (install goes through the review dialog) */}
+                {msg.extensionSuggestions?.map((sug) => {
+                  const manifest = EXTENSION_CATALOG.find((m) => m.id === sug.id);
+                  const installed = installedExtensions.some((e) => e.manifest.id === sug.id);
+                  if (!manifest) return null;
+                  return (
+                    <div key={sug.id} className="mt-2 p-2 rounded-lg bg-cyan-950/20 border border-cyan-500/30 flex items-start gap-2">
+                      <Puzzle className="w-3.5 h-3.5 text-cyan-300 shrink-0 mt-0.5" />
+                      <div className="flex-1 text-[11px] text-slate-200">
+                        Suggested extension: <span className="font-semibold">{sug.name}</span>
+                        <div className="text-[10px] text-slate-400">{manifest.description} {sug.reason ? `(${sug.reason})` : ''}</div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={installed}
+                        onClick={() => openExtensionReview({ manifest, source: 'builtin-catalog', reason: sug.reason })}
+                        className="px-2 py-0.5 rounded border border-cyan-500/40 text-[10px] text-cyan-100 disabled:opacity-60"
+                      >
+                        {installed ? 'Installed' : 'Review'}
+                      </button>
+                    </div>
+                  );
+                })}
 
                 {/* Vision QA Diagnostic Report Card */}
                 {msg.visionReport && (
@@ -442,6 +633,7 @@ export const RightAgentChat: React.FC = () => {
 
           {/* Chat Input Form */}
           <form
+            data-tour="chat"
             onSubmit={(e) => {
               e.preventDefault();
               handleSendPrompt();

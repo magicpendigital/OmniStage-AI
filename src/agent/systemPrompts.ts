@@ -4,6 +4,7 @@ import {
   PRESET_2D_ASSETS,
   VFX_PRESETS,
 } from '../registry/assetRegistry';
+import { PATCH_RESPONSE_FORMAT } from './patchLoop';
 
 /**
  * Visual Logic Graph authoring contract (scene.logicGraph).
@@ -123,7 +124,7 @@ ${brief.autoDiagnosis.length ? brief.autoDiagnosis.map((d) => `- ${d}`).join('\n
 ${brief.userFeedback ? `\nUSER FEEDBACK ABOUT THE PROBLEM:\n${brief.userFeedback}\n` : ''}`;
 }
 
-export function buildAgentSystemPrompt(customRules?: string): string {
+export function buildAgentSystemPrompt(customRules?: string, format: 'full' | 'patch' = 'full'): string {
   const assetSummary = Object.values(ASSET_REGISTRY)
     .map(
       (a) =>
@@ -159,7 +160,12 @@ AVAILABLE 3D WORLD & ENVIRONMENT OPTIONS (sceneSpec.world):
 - skybox: 'daylight-sky' | 'sunset-atmosphere' | 'night-stars' | 'cyber-void' | 'studio-hdri' | 'overcast'
 - terrain.type: 'flat-grid' | 'grassy-hills' | 'desert-dunes' | 'snow-mountains' | 'ocean-island' | 'city-asphalt' | 'none'
 - weather.type: 'clear' | 'rain' | 'snow' | 'floating-embers' | 'foggy-mist'
-- scatterObjects[].type: 'pine-trees' | 'cyber-buildings' | 'rocks-boulders' | 'street-lights' | 'ancient-pillars' | 'crystal-clusters'
+- scatterObjects[].type: 'pine-trees' | 'broadleaf-trees' | 'palm-trees' | 'bushes' | 'flowers' | 'grass-tufts' | 'cacti' | 'rocks-boulders'
+  | 'cyber-buildings' | 'street-lights' | 'ancient-pillars' | 'crystal-clusters' (count <= 80 per layer; several layers fill the frame)
+- biome (fastest way to a full location): 'forest' | 'meadow' | 'beach' | 'desert' | 'snowy-peaks' | 'waterfall-valley' | 'night-forest' | 'city-night'.
+  world: { biome: 'forest' } alone is enough — OmniStage fills sky, terrain, props, water and outdoor lighting; add fields only to change them.
+- features (real animated water, never fake it with VFX beams): [{ id, type: 'waterfall' | 'river' | 'pond', position: [x, 0, z], rotationDeg?, size? }].
+  Keep them 6+ m from the stage centre, e.g. a waterfall behind the actors at [0, 0, -15] (its cliff faces +z), a river at [-9, 0, 4].
 
 AVAILABLE LIGHTING STUDIO PRESETS:
 ${lightingSummary}
@@ -175,16 +181,51 @@ AUTHORING & SPATIAL DESIGN RULES:
 5. Graph-First Logic: Whenever the user asks you to create or modify a game, animation, cutscene or robot behavior, you MUST generate or update sceneSpec.logicGraph
    (nodes AND edges) together with actors, world, vfx, camera and gameRules in the SAME response. Each mechanic (collecting items, boss fight, tap-to-unbox, camera cutscene, ...)
    must appear as connected trigger -> condition -> action nodes so a non-coder can see and tweak it in the node editor. A response that adds gameplay without matching graph nodes is incomplete.
+6. Motion Easing: nodes2D[].keyframeTrack[] and camera.keyframes[] accept an optional "ease" applied from that keyframe to the next:
+   'linear' | 'sine.inOut' | 'power1.out' | 'power2.inOut' | 'power3.out' | 'expo.out' | 'back.out' | 'elastic.out' | 'bounce.out'.
+7. Procedural Game Audio: sceneSpec.audio = { enabled, masterVolume (0..1), cues: { collect, jump, hit, win, lose, click, 'scene-start' } }
+   where each cue is 'coin' | 'jump' | 'hit' | 'powerup' | 'explosion' | 'laser' | 'win' | 'lose' | 'click' | 'whoosh' | 'none'. Sounds are synthesised, never audio URLs.
+8. 2D Spritesheets & Particles: a Node2D with imageUrl may add spriteSheet { frameWidth, frameHeight, columns, frameCount, fps, clips?: { idle|run|jump: { start, end } } }.
+   Node2D type 'particle-emitter' needs emitter { preset: 'sparkle' | 'confetti' | 'fire' | 'smoke' | 'rain' | 'snow' | 'pixel-burst' | 'magic-trail', seed?, rate?, color? };
+   width/height is the emission area (use 1000x600 centred at 500,300 for rain/snow).
+9. Captions: sceneSpec.captions = [{ start, end, text, position: 'bottom'|'top'|'center', style: 'subtitle'|'title' }] inside 0..durationSeconds, ≤ 12 words each.
+10. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
+   every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.
+11. ACTING & SHOTS (media mode — this is what makes a film feel alive):
+   - actors[].performance = timed steps applied from the actor's position: { time, clip?, moveTo?: [x,0,z], duration?, arriveClip?,
+     lookAt?: actorId | [x,y,z], faceDeg?, animation?, speed?, label? }. While moving without a clip the actor walks (or runs when fast)
+     and faces where it walks; afterwards it plays arriveClip (default Idle). Use only clips listed in the asset's embeddedClips
+     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump). The hero needs >= 3 different actions per scene.
+   - camera.shots = [{ start, end?, type: 'establishing'|'wide'|'medium'|'close-up'|'over-shoulder'|'low-angle'|'high-angle'|'tracking',
+     subject?: actorId (whose face we see), partner?: actorId (over-shoulder only: the camera looks over THIS actor's shoulder at the
+     subject — "over the robot's shoulder at the fox" = { subject: fox, partner: robot }), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',
+     move?: 'static'|'push-in'|'pull-out'|'pan-left'|'pan-right'|'crane-up'|'orbit', fov? (lens only: framing keeps the shot size) }]. Shots are hard cuts framed on the subject
+     wherever it is; change shot every 2-4 s and when the action changes. Shots replace camera.mode in media scenes.
+   - Keep moveTo targets within x/z ±8 and away from other actors; give both characters something to do when two are on screen.
+12. SOUND (media mode — a silent film feels unfinished): sceneSpec.soundtrack = {
+     music: { mood: 'calm'|'happy'|'playful'|'adventure'|'epic'|'tense'|'sad'|'mysterious'|'none', volume? },
+     ambience: { type: 'auto' (follows the biome / water / weather) | 'forest'|'meadow'|'beach'|'river'|'waterfall'|'rain'|'wind'|'night'|'city'|'cave'|'space'|'none' },
+     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }] }.
+   Everything is synthesised (no audio URLs). Pick the mood from the beat, keep the same mood across consecutive shots of one sequence
+   (the music then continues across the cut), and put cues on the script's actions (a splash when someone reaches the water, a whoosh on a fast move).
+13. DIALOGUE (media mode — characters speak; voice, captions and talk motion are generated from it):
+   sceneSpec.dialogue = [{ id, time, speaker: actorId, text, emotion?: 'neutral'|'happy'|'excited'|'sad'|'angry'|'scared'|'whisper', listener?: actorId }].
+   Write the lines in the user's language (Vietnamese prompt → Vietnamese lines). One short sentence per line (<= 14 words, ~3 s spoken);
+   leave ~0.4 s between lines and never two lines at once; the last line must end before durationSeconds. The listener is who the speaker
+   turns to. Do not also put dialogue text in captions (dialogue shows as captions automatically). Optional actors[].voice =
+   { engine?: 'piper'|'babble', pitch?: -8..8 (small creatures +3..+5, big ones -3) } — each character a different pitch.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 
 ${EXECUTION_REPAIR_PROMPT_SECTION}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
-Return ONLY valid JSON matching the requested response schema with:
+${format === 'patch' ? PATCH_RESPONSE_FORMAT : FULL_RESPONSE_FORMAT}`;
+}
+
+const FULL_RESPONSE_FORMAT = `Return ONLY valid JSON matching the requested response schema with:
 - assistantMessage: concise, helpful explanation of the changes made (mention which logic-graph chains were added or changed).
 - diffSummary: array of 2-4 short bullet strings describing exact mutations (include logicGraph changes).
 - updatedSceneSpec: the complete, valid updated SceneSpec JSON object, including logicGraph { nodes, edges }.`;
-}
 
 export function buildVisionQASystemPrompt(): string {
   return `You are the OmniStage AI Multimodal Vision QA Inspector.
@@ -224,6 +265,11 @@ PLANNING RULES:
 5. Film beats must follow a story arc (establish -> rising action -> climax -> resolution) and keep the same hero characters.
 6. Game levels must escalate difficulty (difficulty 1..N): wider gaps, higher platforms, more collectibles, tighter timers.
 7. Titles are short (<= 6 words). description is 1-2 sentences of concrete visual direction (world, characters, camera, palette).
+8. SCREENWRITER (media beats): write "script" = what happens second by second in this shot, as 3-6 short lines
+   "start-end s | SHOT TYPE (wide/medium/close-up/over-shoulder/low-angle/high-angle/tracking/establishing) on WHO (over-shoulder: "on X over Y's shoulder") | ACTION | optional caption line".
+   Every scene needs a change: the hero starts doing one thing and ends doing another (wakes -> stands -> walks -> waves).
+   Open the film with an establishing shot; use close-ups for emotion; vary shot sizes; 8-12 s per scene.
+   "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic), "crossfade".
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY JSON:
 {
@@ -231,7 +277,8 @@ Return ONLY JSON:
   "kind": "film" | "game-levels" | "ad-sequence",
   "engineType": "3d" | "2d",
   "beats": [
-    { "title": "string", "description": "string", "engineType": "3d" | "2d", "mode": "media" | "game", "beat": "one-line narrative beat or level objective", "difficulty": 1 }
+    { "title": "string", "description": "string", "engineType": "3d" | "2d", "mode": "media" | "game", "beat": "one-line narrative beat or level objective", "difficulty": 1,
+      "script": "media beats only: timed lines (see SCREENWRITER)", "transition": "fade" }
   ]
 }`;
 }
@@ -251,7 +298,12 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
   * Collectibles use physics2D "collectible" (shapeKind "star", ~46x46) placed ~45px above platform tops, scoreValue 25-50.
   * gameRules.winCondition "score-threshold" with targetScore <= the sum of all collectible scoreValues.
   * Higher difficulty => narrower platforms, more pits, more stars, shorter timeLimitSeconds (min 15).
-- Set mode to "game" for levels and "media" for film shots.`;
+- Set mode to "game" for levels and "media" for film shots.
+- MEDIA SHOTS: turn the beat's "script" into actors[].performance and camera.shots (see ACTING & SHOTS) so the scene actually happens on
+  screen; captions carry the script's caption lines at the same times. Fill the frame: world.biome (or world.terrain + at least 2
+  scatterObjects layers, or an HDRI) matching the place, world.features for water the script mentions; never leave a bare grid floor
+  (environment.groundGrid false for films). Give every shot a soundtrack (mood + ambience 'auto' + cues on the actions, see SOUND).
+  The script's quoted lines become sceneSpec.dialogue (see DIALOGUE) at the times the script gives, in the script's language.`;
 }
 
 export function buildStoryboardSceneUserPrompt(params: {
@@ -279,4 +331,39 @@ Return a JSON object with:
   "assistantMessage": "one sentence describing this scene",
   "sceneSpec": { ...complete valid SceneSpec object with engineType "${beat.engineType}" and mode "${beat.mode}"... }
 }`;
+}
+
+/** Phase 6: the director drafts an OmniStage extension (skills / presets / optional sandboxed script). */
+export function buildExtensionDraftSystemPrompt(): string {
+  return `You design OmniStage extensions for game and media creators who may not code.
+Return ONE JSON object: an extension manifest with this shape:
+{
+  "id": "lower-case-slug", "name": "Human name", "version": "1.0.0", "description": "one sentence",
+  "kind": "skill-pack" | "vfx-pack" | "sfx-pack" | "tool" | "mixed",
+  "tags": ["genre", "style"], "targets": { "engines": ["2d"|"3d"], "modes": ["game"|"media"], "genres": [] },
+  "permissions": [],
+  "contributes": {
+    "skills": [{ "id": "slug", "title": "...", "description": "...", "triggers": ["lower-case words, VI and EN"], "engine": "2d"|"3d"|"any", "mode": "game"|"media"|"any",
+                 "guidance": "Rules for the AI director, written as concrete SceneSpec instructions (fields, values, timings)." }],
+    "particlePresets": { "slug": { "rate": 1-400, "life": 0.1-10, "speed": [min,max], "angle": [deg,deg], "gravity": number, "size": [min,max],
+                                   "shape": "circle"|"rect"|"line"|"pixel"|"star", "colors": ["#hex"], "alpha"?: 0-1, "fade"?: bool, "shrink"?: bool,
+                                   "grow"?: bool, "additive"?: bool, "spread"?: 0-1, "area"?: bool, "drift"?: number, "spin"?: number, "burst"?: seconds } },
+    "sfxPresets": { "slug": { "wave": "square"|"sine"|"triangle"|"sawtooth"|"noise", "dur": 0.05-4, "vol": 0-1, "f0"?: Hz, "f1"?: Hz,
+                              "notes"?: [Hz...], "step"?: seconds, "lp0"?: Hz, "lp1"?: Hz, "attack"?: seconds } }
+  }
+}
+Rules:
+- Prefer data (skills, particle and sound presets). Only add "commands" + "mainSource" when the user explicitly asks for an automated tool;
+  then mainSource is plain JavaScript using only window.omni (omni.registerCommand(id, async (args) => ...), omni.scene.get(),
+  omni.scene.applyPatch(mergePatch, label), omni.notify(text)) and "permissions" must list exactly what it uses ("scene:read", "scene:write", "ui:notify").
+- Never use network, eval, storage or DOM APIs. Never request "network" unless the user named the host.
+- Skills must make the creator's vision concrete (palette, pacing, mechanics, feedback); 2-3 skills maximum.`;
+}
+
+/** Phase 6: plain-language risk review of an extension manifest + script for non-programmers. */
+export function buildExtensionReviewSystemPrompt(): string {
+  return `You review OmniStage extensions before a non-programmer installs them. The extension runs in a sandbox that blocks network,
+storage and DOM access; it can only call window.omni APIs allowed by its permissions.
+Return JSON: { "aiRisk": "low" | "medium" | "high", "aiSummary": "3-5 short sentences in the user's language: what it does, what it can change, anything suspicious" }.
+Rate "high" if the script tries to escape the sandbox, obfuscates code, or does something unrelated to its description.`;
 }

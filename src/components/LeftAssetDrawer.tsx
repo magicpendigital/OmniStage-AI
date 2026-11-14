@@ -18,7 +18,17 @@ import {
   Trees,
   Unlock,
   Upload,
+  Volume2,
 } from 'lucide-react';
+import { AudioCuePanel } from './AudioCuePanel';
+import { SoundtrackPanel } from './SoundtrackPanel';
+import { DialoguePanel } from './DialoguePanel';
+import { BIOME_IDS, BIOME_PRESETS } from '../runtime/biomes';
+import { CaptionsPanel } from './CaptionsPanel';
+import { PersonalLibraryPanel } from './PersonalLibraryPanel';
+import { OmniRigModal } from './OmniRigModal';
+import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { enabledContributions } from '../extensions/registry';
 import {
   ASSET_REGISTRY,
   DEFAULT_WORLD_SPEC,
@@ -30,6 +40,7 @@ import { useStudioStore } from '../state/useStudioStore';
 import { OnlineAssetBrowser } from './OnlineAssetBrowser';
 import {
   LightingPresetId,
+  Particle2DPreset,
   ScatterObjectType,
   SkyboxPreset,
   TerrainType,
@@ -43,6 +54,7 @@ export const LeftAssetDrawer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AuthoringTab>('outliner');
   const [libraryFilter, setLibraryFilter] = useState<'all' | 'rigged' | 'procedural' | '2d'>('all');
   const [customGlbUrl, setCustomGlbUrl] = useState('');
+  const [omniRigOpen, setOmniRigOpen] = useState(false);
   const [customGlbName, setCustomGlbName] = useState('');
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -71,10 +83,17 @@ export const LeftAssetDrawer: React.FC = () => {
 
   const updateWorld = useStudioStore((s) => s.updateWorld);
   const updateTerrain = useStudioStore((s) => s.updateTerrain);
+  const addParticleEmitter2D = useStudioStore((s) => s.addParticleEmitter2D);
+  const installedExtensions = useStudioStore((s) => s.installedExtensions);
+  const activeProjectForExt = useStudioStore((s) => s.activeProject);
+  const extensionParticles = enabledContributions(installedExtensions, activeProjectForExt?.extensions).particlePresets;
   const updateClouds = useStudioStore((s) => s.updateClouds);
   const updateWeather = useStudioStore((s) => s.updateWeather);
   const addScatterLayer = useStudioStore((s) => s.addScatterLayer);
   const removeScatterLayer = useStudioStore((s) => s.removeScatterLayer);
+  const applyBiomePreset = useStudioStore((s) => s.applyBiomePreset);
+  const addWorldFeature = useStudioStore((s) => s.addWorldFeature);
+  const removeWorldFeature = useStudioStore((s) => s.removeWorldFeature);
   const setLightingPreset = useStudioStore((s) => s.setLightingPreset);
   const setEngineType = useStudioStore((s) => s.setEngineType);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
@@ -260,6 +279,28 @@ export const LeftAssetDrawer: React.FC = () => {
                     <Plus className="w-3 h-3" />
                     <span>Kinetic Text</span>
                   </button>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id) return;
+                      addParticleEmitter2D(id as Particle2DPreset, extensionParticles[id]);
+                    }}
+                    aria-label="Add 2D particle emitter"
+                    className="col-span-2 px-2.5 py-1.5 rounded-lg bg-violet-500/15 border border-violet-500/40 text-[11px] font-medium text-violet-200"
+                  >
+                    <option value="">+ Particle FX emitter…</option>
+                    {PARTICLE_2D_PRESETS.map((preset) => (
+                      <option key={preset} value={preset}>
+                        {preset}
+                      </option>
+                    ))}
+                    {Object.keys(extensionParticles).map((preset) => (
+                      <option key={`ext-${preset}`} value={preset}>
+                        {preset} (extension)
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
             </div>
@@ -461,6 +502,12 @@ export const LeftAssetDrawer: React.FC = () => {
            ========================================================= */}
         {activeTab === 'world' && (
           <div className="space-y-4 text-xs">
+            {/* Phase 4: Procedural Game Audio (both engines, embedded in playable exports) */}
+            <DialoguePanel />
+            <SoundtrackPanel />
+            <AudioCuePanel icon={<Volume2 className="w-3.5 h-3.5 text-violet-400" />} />
+            {/* Phase 5: captions / subtitles track */}
+            <CaptionsPanel />
             {/* Procedural Terrain Selector */}
             <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
               <div className="flex items-center gap-1.5 font-semibold text-slate-100">
@@ -601,6 +648,12 @@ export const LeftAssetDrawer: React.FC = () => {
                     { type: 'crystal-clusters', label: '+ Crystals' },
                     { type: 'ancient-pillars', label: '+ Pillars' },
                     { type: 'street-lights', label: '+ Street Lamps' },
+                    { type: 'broadleaf-trees', label: '+ Leafy Trees' },
+                    { type: 'bushes', label: '+ Bushes' },
+                    { type: 'flowers', label: '+ Flowers' },
+                    { type: 'grass-tufts', label: '+ Grass Tufts' },
+                    { type: 'palm-trees', label: '+ Palm Trees' },
+                    { type: 'cacti', label: '+ Cacti' },
                   ] as { type: ScatterObjectType; label: string }[]
                 ).map((sc) => (
                   <button
@@ -633,6 +686,45 @@ export const LeftAssetDrawer: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Phase 10B: biome presets + water landmarks */}
+            <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-100">
+                  <Trees className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Biome & Water</span>
+                </div>
+                {world.biome && <span className="text-[10px] font-mono text-emerald-300">{world.biome}</span>}
+              </div>
+              <select
+                value=""
+                onChange={(e) => e.target.value && applyBiomePreset(e.target.value as (typeof BIOME_IDS)[number])}
+                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 font-mono text-xs text-slate-100"
+                title="Replaces sky, terrain, props, water and outdoor lighting"
+              >
+                <option value="">Dress the world from a biome…</option>
+                {BIOME_IDS.map((b) => <option key={b} value={b}>{BIOME_PRESETS[b].label}</option>)}
+              </select>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(['waterfall', 'river', 'pond'] as const).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => addWorldFeature(type)}
+                    className="px-2 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 transition-colors capitalize"
+                  >
+                    + {type}
+                  </button>
+                ))}
+              </div>
+              {(world.features || []).map((f) => (
+                <div key={f.id} className="px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px]">
+                  <span className="font-mono text-slate-300">{f.type} @ [{f.position.map((v) => Math.round(v)).join(', ')}]</span>
+                  <button onClick={() => removeWorldFeature(f.id)} className="text-slate-400 hover:text-rose-400" title="Remove">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
 
             {/* Studio Lighting Presets */}
@@ -672,6 +764,18 @@ export const LeftAssetDrawer: React.FC = () => {
            ========================================================= */}
         {activeTab === 'library' && (
           <div className="space-y-3.5">
+            {/* Phase 9: OmniRig — auto-rig a character model */}
+            <button
+              type="button"
+              onClick={() => setOmniRigOpen(true)}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-100 text-xs font-semibold hover:bg-amber-500/25"
+              title="Skeleton, skin weights and animations for a humanoid, four-legged or prop model"
+            >
+              🦴 Auto-rig a character (OmniRig)
+            </button>
+            {omniRigOpen && <OmniRigModal onClose={() => setOmniRigOpen(false)} />}
+            {/* Phase 6: personal + project-shared library on this computer */}
+            <PersonalLibraryPanel />
             {/* Drag & Drop File Upload Zone (.glb, .gltf, .svg, .png, .json) */}
             <div
               onDragOver={(e) => {

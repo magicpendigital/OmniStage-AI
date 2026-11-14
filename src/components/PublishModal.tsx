@@ -21,6 +21,8 @@ import {
   X,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { previewOrder } from '../playtest/previewOrder';
+import { formatBytes, PlayableBudgetReport } from '../exporter/playableBundle';
 import {
   detectSupportedVideoMimes,
   exportCanvasSnapshotPNG,
@@ -32,6 +34,7 @@ import {
   recordMultiSceneSequence,
   StandaloneAdNetwork,
 } from '../exporter/mediaExporter';
+import { canExportFilmFrames, exportFilmMP4 } from '../exporter/filmExport';
 
 type PublishTab = 'sequencer' | 'bundler' | 'snapshot';
 
@@ -41,6 +44,12 @@ export const PublishModal: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const scenes = useStudioStore((s) => s.scenes);
   const activeSceneId = useStudioStore((s) => s.activeSceneId);
+  // The video records the active scene's storyboard (same order as Preview), not every scene in the project.
+  const sequenceScenes = React.useMemo(
+    () => previewOrder(scenes, activeSceneId).map((id) => scenes.find((s) => s.id === id)!).filter(Boolean),
+    [scenes, activeSceneId]
+  );
+  const isStoryboard = !!scenes.find((s) => s.id === activeSceneId)?.sequence?.storyboardId;
   const switchScene = useStudioStore((s) => s.switchScene);
   const canvasElement = useStudioStore((s) => s.canvasElement);
   const isRecordingVideo = useStudioStore((s) => s.isRecordingVideo);
@@ -57,11 +66,30 @@ export const PublishModal: React.FC = () => {
   const [resolutionPreset, setResolutionPreset] = useState<'1080p' | '720p' | 'native'>('1080p');
   const [includeWatermark, setIncludeWatermark] = useState<boolean>(true);
   const [sequencerProgress, setSequencerProgress] = useState<MultiSceneRecordingProgress | null>(null);
+  // Phase 10B: frame-perfect MP4 (WebCodecs) and the procedural soundtrack
+  const [frameMp4, setFrameMp4] = useState<boolean>(false);
+  const [withSound, setWithSound] = useState<boolean>(true);
+  React.useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    void canExportFilmFrames().then((ok) => {
+      if (!alive) return;
+      setFrameMp4(ok);
+      if (ok) setVideoFormat('mp4');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [isOpen]);
 
   // Standalone Game Bundler Options
   const [autoProgressLevels, setAutoProgressLevels] = useState<boolean>(true);
   const [enableMobileTouch, setEnableMobileTouch] = useState<boolean>(true);
   const [enableAudioSynth, setEnableAudioSynth] = useState<boolean>(true);
+  const [offlineRuntime, setOfflineRuntime] = useState<boolean>(true);
+  // Phase 7: renderer of the exported Player (WebGPU build is ~640 KB larger)
+  const [playerRenderer, setPlayerRenderer] = useState<'webgl' | 'auto'>('webgl');
+  const [lastBudget, setLastBudget] = useState<PlayableBudgetReport | null>(null);
 
   // UI Feedback
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -80,7 +108,7 @@ export const PublishModal: React.FC = () => {
 
   // Calculate total multi-scene sequencer runtime
   const calculateTotalDuration = () => {
-    return scenes.reduce((acc, sc) => {
+    return sequenceScenes.reduce((acc, sc) => {
       const dur = durationMode === 'fixed' ? fixedDurationSeconds : Math.max(2, sc.durationSeconds || 5);
       return acc + dur;
     }, 0);
@@ -115,15 +143,15 @@ export const PublishModal: React.FC = () => {
       overallRatio: 0,
       percentage: 0,
       currentSceneIndex: 0,
-      totalScenes: scenes.length,
-      currentSceneTitle: scenes[0]?.title || 'Starting Sequencer...',
+      totalScenes: sequenceScenes.length,
+      currentSceneTitle: sequenceScenes[0]?.title || 'Starting Sequencer...',
       elapsedSeconds: 0,
       totalDurationSeconds: totalSequencerDuration,
       phase: 'preparing',
     });
 
-    const res = await recordMultiSceneSequence({
-      scenes,
+    const res = videoFormat === 'mp4' && frameMp4 ? await runFrameExport() : await recordMultiSceneSequence({
+      scenes: sequenceScenes,
       initialActiveSceneId: activeSceneId,
       switchScene,
       getCanvasElement: () => canvasElement,
@@ -136,6 +164,7 @@ export const PublishModal: React.FC = () => {
       resolution: getResolutionDimensions(),
       watermarkBadge: includeWatermark,
       abortSignal: abortControllerRef.current.signal,
+      withSound,
       onProgress: (prog) => {
         setSequencerProgress(prog);
         setRecordingState(true, prog.percentage);
@@ -151,6 +180,38 @@ export const PublishModal: React.FC = () => {
     } else if (res.error) {
       triggerToast(`Video Sequencer: ${res.error}`);
     }
+  };
+
+  // Phase 10B: frame-stepped MP4 through the OmniStage Player (exact timing at any machine speed, with sound).
+  const runFrameExport = async () => {
+    const fps = 30;
+    const scenesForExport = durationMode === 'fixed'
+      ? sequenceScenes.map((s) => ({ ...s, durationSeconds: Math.max(1, fixedDurationSeconds) }))
+      : sequenceScenes;
+    return exportFilmMP4({
+      scenes: scenesForExport,
+      ...getResolutionDimensions(),
+      fps,
+      withSound,
+      watermark: includeWatermark,
+      transition: transitionStyle,
+      quality: 'high',
+      abortSignal: abortControllerRef.current?.signal,
+      onProgress: (p) => {
+        const percentage = Math.round(p.ratio * 100);
+        setSequencerProgress({
+          overallRatio: p.ratio,
+          percentage,
+          currentSceneIndex: p.sceneIndex,
+          totalScenes: p.totalScenes,
+          currentSceneTitle: p.sceneTitle,
+          elapsedSeconds: Math.round((p.frame / fps) * 10) / 10,
+          totalDurationSeconds: Math.round((p.totalFrames / fps) * 10) / 10,
+          phase: p.phase === 'loading' || p.phase === 'rendering' ? 'recording' : p.phase,
+        });
+        setRecordingState(true, percentage);
+      },
+    });
   };
 
   // Handler: Abort Multi-Scene Recording
@@ -175,22 +236,28 @@ export const PublishModal: React.FC = () => {
   };
 
   // Handler: Standalone Game HTML Export
-  const handleExportStandaloneHTML = (network: StandaloneAdNetwork) => {
-    exportStandalonePlayableHTML(sceneSpec, network, scenes, {
+  const handleExportStandaloneHTML = async (network: StandaloneAdNetwork) => {
+    const { budget } = await exportStandalonePlayableHTML(sceneSpec, network, scenes, {
       autoProgressScenes: autoProgressLevels,
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
+      offline: offlineRuntime,
+      renderer: playerRenderer,
     });
+    setLastBudget(budget);
     triggerToast(`Exported ${network.toUpperCase()} Standalone HTML5 Game (${scenes.length} scene${scenes.length > 1 ? 's' : ''})`);
   };
 
   // Handler: Standalone Game ZIP Export
   const handleExportStandaloneZIP = async (network: StandaloneAdNetwork) => {
-    await exportStandaloneGameZIP(sceneSpec, network, scenes, {
+    const { budget } = await exportStandaloneGameZIP(sceneSpec, network, scenes, {
       autoProgressScenes: autoProgressLevels,
       enableMobileTouchControls: enableMobileTouch,
       enableProceduralAudio: enableAudioSynth,
+      offline: offlineRuntime,
+      renderer: playerRenderer,
     });
+    setLastBudget(budget);
     triggerToast(`Exported complete ${network.toUpperCase()} Game ZIP Package`);
   };
 
@@ -285,7 +352,7 @@ export const PublishModal: React.FC = () => {
                     <span>Continuous Storyboard Video Sequencer</span>
                   </h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-xl">
-                    Automates playback across all <span className="text-slate-200 font-semibold">{scenes.length} scenes</span> (3D & 2D) on the timeline, rendering smooth transitions and exporting a single stitched master video.
+                    Plays {isStoryboard ? 'this storyboard' : 'every scene'} in order — <span className="text-slate-200 font-semibold">{sequenceScenes.length} scene{sequenceScenes.length === 1 ? '' : 's'}</span>, the same as Preview — with smooth transitions, and exports one stitched video.
                   </p>
                 </div>
                 <div className="text-right shrink-0 bg-slate-950/80 px-3 py-2 rounded-lg border border-slate-800">
@@ -297,11 +364,11 @@ export const PublishModal: React.FC = () => {
               {/* Storyboard Scenes Sequence Queue Preview */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-                  <span>Storyboard Recording Sequence ({scenes.length} Scenes)</span>
+                  <span>Storyboard Recording Sequence ({sequenceScenes.length} Scenes)</span>
                   <span className="font-mono text-[11px] text-cyan-400">FPS: 60 · 12 Mbps High-Bitrate</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                  {scenes.map((sc, idx) => {
+                  {sequenceScenes.map((sc, idx) => {
                     const dur = durationMode === 'fixed' ? fixedDurationSeconds : Math.max(2, sc.durationSeconds || 5);
                     const isCur = sc.id === activeSceneId;
                     return (
@@ -347,15 +414,15 @@ export const PublishModal: React.FC = () => {
                     <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800">
                       <button
                         onClick={() => setVideoFormat('mp4')}
-                        disabled={!supportedMimes.mp4}
+                        disabled={!supportedMimes.mp4 && !frameMp4}
                         className={`py-1.5 px-2 rounded font-mono text-[11px] font-semibold transition-colors ${
                           videoFormat === 'mp4'
                             ? 'bg-amber-500 text-slate-950 shadow'
-                            : supportedMimes.mp4
+                            : supportedMimes.mp4 || frameMp4
                             ? 'text-slate-300 hover:text-white'
                             : 'text-slate-600 cursor-not-allowed'
                         }`}
-                        title={supportedMimes.mp4 ? 'Native H.264/AVC MP4' : 'MP4 not supported in current browser'}
+                        title={frameMp4 ? 'Frame-perfect H.264 MP4 rendered through the OmniStage Player (WebCodecs)' : supportedMimes.mp4 ? 'Native H.264/AVC MP4' : 'MP4 not supported in current browser'}
                       >
                         .MP4 (AVC)
                       </button>
@@ -400,6 +467,12 @@ export const PublishModal: React.FC = () => {
                   </div>
                 </div>
 
+                <p className="text-[11px] text-slate-400">
+                  {videoFormat === 'mp4' && frameMp4
+                    ? 'MP4 renders frame by frame through the OmniStage Player (exact timing, any machine speed) with the soundtrack mixed in.'
+                    : 'Real-time recording of the studio viewport; keep this tab visible while it records.'}
+                </p>
+
                 {/* Second row of options */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/80 text-xs">
                   <div className="flex items-center gap-4">
@@ -411,6 +484,16 @@ export const PublishModal: React.FC = () => {
                         className="rounded border-slate-700 text-cyan-500 focus:ring-0"
                       />
                       <span className="text-slate-300">Overlay Scene HUD Badge</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none" title="Mood music, ambience and timed SFX from each scene's soundtrack">
+                      <input
+                        type="checkbox"
+                        checked={withSound}
+                        onChange={(e) => setWithSound(e.target.checked)}
+                        className="rounded border-slate-700 text-cyan-500 focus:ring-0"
+                      />
+                      <span className="text-slate-300">Soundtrack</span>
                     </label>
 
                     <div className="flex items-center gap-2 text-slate-400">
@@ -497,7 +580,7 @@ export const PublishModal: React.FC = () => {
                   <span>
                     {isRecordingVideo
                       ? 'Sequencing Storyboard in Progress...'
-                      : `Start Multi-Scene Video Recording (${totalSequencerDuration.toFixed(1)}s · ${scenes.length} Scenes)`}
+                      : `Start Multi-Scene Video Recording (${totalSequencerDuration.toFixed(1)}s · ${sequenceScenes.length} Scenes)`}
                   </span>
                 </button>
 
@@ -675,6 +758,52 @@ export const PublishModal: React.FC = () => {
                     </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Phase 5: offline runtime toggle + size budget report */}
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 text-xs">
+                <label className="flex items-center gap-2 text-slate-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={offlineRuntime}
+                    onChange={(e) => setOfflineRuntime(e.target.checked)}
+                    className="accent-cyan-500"
+                  />
+                  <span>Embed models & images for offline play (fits within the network size budget)</span>
+                </label>
+                <label className="flex items-center justify-between gap-2 text-slate-200">
+                  <span title="WebGPU draws the same scene with the newer GPU API where the phone / browser has it, and falls back to WebGL elsewhere">3D renderer</span>
+                  <select
+                    value={playerRenderer}
+                    onChange={(e) => setPlayerRenderer(e.target.value as 'webgl' | 'auto')}
+                    className="px-2 py-1 rounded bg-slate-950 border border-slate-700 text-xs text-slate-100"
+                  >
+                    <option value="webgl">WebGL — smallest file, every device</option>
+                    <option value="auto">WebGPU where available, WebGL fallback (+~640 KB)</option>
+                  </select>
+                </label>
+                {lastBudget && (
+                  <div
+                    className={`p-2.5 rounded-lg border font-mono text-[11px] space-y-1 ${
+                      lastBudget.withinBudget && lastBudget.offlineReady
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                        : 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                    }`}
+                  >
+                    <div>
+                      {lastBudget.network.toUpperCase()}: {formatBytes(lastBudget.measuredBytes)} / {formatBytes(lastBudget.limitBytes)}{' '}
+                      {lastBudget.withinBudget ? '✓ within budget' : '✗ over budget'} ·{' '}
+                      {lastBudget.offlineReady ? 'offline-ready' : 'needs network'}
+                    </div>
+                    <div className="text-slate-400">
+                      HTML {formatBytes(lastBudget.htmlBytes)}
+                      {lastBudget.zipBytes !== undefined ? ` · ZIP ${formatBytes(lastBudget.zipBytes)}` : ''} · {lastBudget.limitLabel}
+                    </div>
+                    {lastBudget.notes.map((n) => (
+                      <div key={n}>• {n}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

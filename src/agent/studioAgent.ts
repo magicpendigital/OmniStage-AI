@@ -16,12 +16,24 @@ import {
   LogicNodePort,
   LogicNodeType,
   PhysicsRole,
+  DirectorSkill,
   SceneSpec,
+  VerificationReport,
   VisionQAIssue,
   VisionQAReport,
 } from '../types/scene.schema';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildExecutionRepairPrompt } from './systemPrompts';
+import { DEFAULT_PATCH_ROUNDS, PatchProposal, runPatchLoop } from './patchLoop';
+import { aiHeaders } from './aiClient';
+import { inferSkillContext, mergeSystemPrompt, selectDirectorSkills } from './directorSkills';
+import { buildMemoryContext, selectMemories } from './memory';
+import { attachExtensionRecipes, buildExtensionPresetContext, enabledContributions } from '../extensions/registry';
+import { workspaceApi } from '../workspace/workspaceClient';
+import { autoFixSceneSpec, describeIssuesForAgent } from '../verification/sceneVerifier';
+import { createDefaultAudioSpec } from '../audio/audioBus';
+import { captionsFromScript } from '../media/captions';
+import type { Particle2DPreset } from '../types/scene.schema';
 
 export {
   detectStoryboardIntent,
@@ -34,7 +46,24 @@ export interface AgentMutationResult {
   assistantMessage: string;
   diffSummary: string[];
   updatedSceneSpec: SceneSpec;
+  /** Phase 4: Director Skill ids injected into this turn. */
+  skillsUsed?: string[];
+  /** Phase 4: verification report of updatedSceneSpec after the deterministic/AI repair loop. */
+  verification?: VerificationReport;
 }
+
+const AUDIO_PROMPT = /\b(sfx|sound|sounds|audio)\b|âm thanh|tiếng động|hiệu ứng âm/i;
+const CAPTION_PROMPT = /\b(captions?|subtitles?)\b|phụ đề|lời thoại/i;
+const PARTICLE_PROMPTS: Array<[RegExp, Particle2DPreset]> = [
+  [/\bfire\b|lửa/i, 'fire'],
+  [/\bsmoke\b|khói/i, 'smoke'],
+  [/\bconfetti\b|pháo giấy/i, 'confetti'],
+  [/\brain\b|mưa/i, 'rain'],
+  [/\bsnow\b|tuyết/i, 'snow'],
+  [/\bpixel\b/i, 'pixel-burst'],
+  [/\bmagic\b|phép thuật/i, 'magic-trail'],
+  [/\bsparkles?\b|\bparticles?\b|lấp lánh/i, 'sparkle'],
+];
 
 export function extractActorCoordinateSummaries(spec: SceneSpec): ActorCoordinateSummary[] {
   return spec.actors.map((a) => ({
@@ -61,6 +90,37 @@ export function applyLocalHeuristicMutation(
   currentSpec: SceneSpec
 ): AgentMutationResult {
   const result = applyLocalHeuristicMutationCore(prompt, currentSpec);
+  if (AUDIO_PROMPT.test(prompt) && !result.updatedSceneSpec.audio?.enabled) {
+    result.updatedSceneSpec.audio = createDefaultAudioSpec(true);
+    result.diffSummary = [...result.diffSummary, 'Enabled procedural SFX cues (collect=coin, jump, hit, win, lose)'];
+  }
+  const draft = result.updatedSceneSpec;
+  if (CAPTION_PROMPT.test(prompt) && !draft.captions?.length) {
+    draft.captions = captionsFromScript(`${draft.title}. ${draft.description || ''}`, Math.max(2, draft.durationSeconds || 8));
+    result.diffSummary = [...result.diffSummary, `Added ${draft.captions.length} timed caption cue(s) (WebVTT-exportable)`];
+  }
+  const particle = draft.engineType === '2d' ? PARTICLE_PROMPTS.find(([re]) => re.test(prompt))?.[1] : undefined;
+  if (particle && !draft.nodes2D.some((n) => n.type === 'particle-emitter' && n.emitter?.preset === particle)) {
+    const area = particle === 'rain' || particle === 'snow';
+    draft.nodes2D.push({
+      id: `node2d-fx-${particle}-${Date.now().toString(36)}`,
+      name: `${particle} FX`,
+      type: 'particle-emitter',
+      x: 500,
+      y: area ? 300 : 420,
+      width: area ? 1000 : 160,
+      height: area ? 600 : 140,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      fill: 'transparent',
+      stroke: '#A78BFA',
+      physics2D: 'none',
+      emitter: { preset: particle, seed: 42 },
+    });
+    result.diffSummary = [...result.diffSummary, `Added a deterministic "${particle}" 2D particle emitter`];
+  }
   const { spec, notes } = finalizeLogicGraph(result.updatedSceneSpec);
   return {
     ...result,
@@ -1371,24 +1431,29 @@ export function finalizeLogicGraph(spec: SceneSpec): { spec: SceneSpec; notes: s
 // AI-assisted execution repair
 // ---------------------------------------------------------------------------
 
-async function fetchAgentMutation(prompt: string, currentSpec: SceneSpec): Promise<AgentMutationResult | null> {
+async function fetchAgentMutation(
+  prompt: string,
+  currentSpec: SceneSpec,
+  skills: DirectorSkill[] = [],
+  extraContext: string[] = []
+): Promise<AgentMutationResult | null> {
   const settings = useStudioStore.getState().settings;
   try {
     const response = await fetch('/api/agent/mutate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiHeaders(settings),
       body: JSON.stringify({
         prompt,
         sceneSpec: currentSpec,
         model: settings.geminiModel,
-        customSystemPrompt: settings.customSystemPrompt,
+        customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext),
       }),
     });
     if (!response.ok) return null;
     const data = await response.json();
     if (data && data.updatedSceneSpec && Array.isArray(data.updatedSceneSpec.actors)) {
       return {
-        assistantMessage: data.assistantMessage || `Updated SceneSpec via ${settings.geminiModel}.`,
+        assistantMessage: data.assistantMessage || `Updated SceneSpec via ${data.provider || settings.aiProvider}${data.model ? ` · ${data.model}` : ''}.`,
         diffSummary: Array.isArray(data.diffSummary) ? data.diffSummary : ['Updated SceneSpec state'],
         updatedSceneSpec: data.updatedSceneSpec,
       };
@@ -1513,23 +1578,191 @@ export async function fixExecutionIssue(
   return cloneSceneSpec(scene);
 }
 
+export interface DirectorContext {
+  skills: DirectorSkill[];
+  extraContext: string[];
+  memoryIds: string[];
+  contributions: ReturnType<typeof enabledContributions>;
+}
+
+/**
+ * Phase 6: everything the director knows for this turn — matching skills (built-in, learned, extension),
+ * relevant memories of the creator, and the extension presets it may use.
+ */
+export function buildDirectorContext(prompt: string, current: { engineType: SceneSpec['engineType']; mode: SceneSpec['mode'] }): DirectorContext {
+  const store = useStudioStore.getState();
+  const contributions = enabledContributions(store.installedExtensions, store.activeProject?.extensions);
+  const skills = selectDirectorSkills(
+    prompt,
+    inferSkillContext(prompt, current),
+    [...store.learnedSkills, ...contributions.skills],
+    3,
+    store.settings.disabledSkills || []
+  );
+  const memories = store.memoryEnabled ? selectMemories(prompt, store.memories, store.activeProject?.id) : [];
+  const extraContext = [buildMemoryContext(memories), buildExtensionPresetContext(contributions)].filter(Boolean);
+  return { skills, extraContext, memoryIds: memories.map((m) => m.id), contributions };
+}
+
+/** Max AI repair rounds after deterministic auto-fix (verification loop). */
+const MAX_AI_VERIFY_ROUNDS = 1;
+
+function verificationNotes(fixes: string[], report: VerificationReport): string[] {
+  const notes: string[] = [];
+  if (fixes.length) notes.push(`Verifier auto-fixed ${fixes.length} issue(s): ${fixes.slice(0, 2).join('; ')}${fixes.length > 2 ? '; ...' : ''}`);
+  if (report.errors) notes.push(`Verifier: ${report.errors} error(s) still need attention (${report.issues.find((i) => i.severity === 'error')?.code})`);
+  else notes.push(`Verifier passed${report.warnings ? ` with ${report.warnings} warning(s)` : ''}`);
+  return notes;
+}
+
+/**
+ * Phase 7C: one director turn as a JSON Patch tool-use loop (src/agent/patchLoop.ts). Each round the server asks the
+ * model for a patch; here we apply it, finalize the logic graph, attach extension recipes, auto-fix and verify, and
+ * send the verifier's findings back as the next TOOL RESULT.
+ * Returns 'unavailable' when no provider is configured (503), null when the model never produced a usable patch.
+ */
+async function runPatchEdit(
+  prompt: string,
+  currentSpec: SceneSpec,
+  skills: DirectorSkill[],
+  extraContext: string[],
+  contributions: ReturnType<typeof enabledContributions>,
+  verifyOpts: { scenes: SceneSpec[] }
+): Promise<Omit<AgentMutationResult, 'skillsUsed'> | 'unavailable' | null> {
+  const settings = useStudioStore.getState().settings;
+  const customSystemPrompt = mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext);
+  let unavailable = false;
+  let providerLabel = '';
+  const graphNotes = new Set<string>();
+  const presets = new Set<string>();
+
+  const loop = await runPatchLoop({
+    prompt,
+    spec: currentSpec,
+    maxRounds: DEFAULT_PATCH_ROUNDS,
+    propose: async (turn) => {
+      try {
+        const res = await fetch('/api/agent/patch', {
+          method: 'POST',
+          headers: aiHeaders(settings),
+          body: JSON.stringify({ ...turn, sceneSpec: turn.spec, spec: undefined, model: settings.geminiModel, customSystemPrompt }),
+        });
+        if (res.status === 503) unavailable = true;
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data || typeof data !== 'object') return null;
+        if (!providerLabel && data.provider) providerLabel = `${data.provider}${data.model ? ` · ${data.model}` : ''}`;
+        return data as PatchProposal;
+      } catch {
+        return null;
+      }
+    },
+    check: (spec) => {
+      const draft = cloneSceneSpec(spec);
+      for (const name of attachExtensionRecipes(draft, contributions)) presets.add(name);
+      const { spec: finalized, notes } = finalizeLogicGraph(draft);
+      notes.forEach((n) => graphNotes.add(n));
+      return autoFixSceneSpec(finalized, verifyOpts);
+    },
+  });
+  if (!loop) return unavailable ? 'unavailable' : null;
+  if (!loop.changed && loop.rounds.some((r) => r.rejected)) return null; // never produced a valid patch: try a full rewrite
+
+  const ops = loop.rounds.reduce((n, r) => n + r.ops, 0);
+  const rejected = loop.rounds.filter((r) => r.rejected).length;
+  return {
+    assistantMessage: loop.assistantMessage || (loop.changed ? `Updated the scene via ${providerLabel || settings.aiProvider}.` : 'No changes were needed.'),
+    diffSummary: [
+      ...loop.diffSummary,
+      `AI edit loop: ${loop.rounds.length} round(s), ${ops} patch op(s)${rejected ? `, ${rejected} rejected patch(es) retried` : ''}`,
+      ...graphNotes,
+      ...(presets.size ? [`Embedded extension presets: ${[...presets].join(', ')}`] : []),
+      ...verificationNotes(loop.fixes, loop.report),
+    ],
+    updatedSceneSpec: loop.spec,
+    verification: loop.report,
+  };
+}
+
+/**
+ * AI director turn with Phase 4 skills + verification loop:
+ * 1. Select Director Skills for the prompt and inject them into the system prompt.
+ * 2. Generate (Gemini, or the offline heuristic engine) and finalize the logic graph.
+ * 3. Verify the SceneSpec deterministically, auto-fix what is mechanical, and when errors remain ask the
+ *    model once more with the exact verifier findings (closed loop instead of eyeballing the result).
+ */
 export async function mutateSceneWithAgent(
   prompt: string,
   currentSpec: SceneSpec
 ): Promise<AgentMutationResult> {
-  const result = await fetchAgentMutation(prompt, currentSpec);
-  if (!result) return applyLocalHeuristicMutation(prompt, currentSpec);
+  const store = useStudioStore.getState();
+  const director = buildDirectorContext(prompt, { engineType: currentSpec.engineType, mode: currentSpec.mode });
+  const { skills, extraContext, contributions } = director;
+  const skillsUsed = skills.map((s) => s.id);
+  store.markSkillsUsed(skillsUsed.filter((id) => id.startsWith('learned-')));
+  if (director.memoryIds.length) workspaceApi.markMemoriesUsed(director.memoryIds).catch(() => undefined);
+  const verifyOpts = { scenes: store.scenes };
+
+  // Phase 7C: small JSON Patch edits in a verify loop (default). Falls back to a full rewrite when the model can't
+  // follow the patch format, and to the offline director when no provider is configured.
+  let providerUnavailable = false;
+  if ((store.settings.aiEditMode || 'patch') === 'patch') {
+    const patched = await runPatchEdit(prompt, currentSpec, skills, extraContext, contributions, verifyOpts);
+    if (patched === 'unavailable') providerUnavailable = true;
+    else if (patched) return { ...patched, skillsUsed };
+  }
+
+  const result = providerUnavailable ? null : await fetchAgentMutation(prompt, currentSpec, skills, extraContext);
+  if (!result) {
+    const local = applyLocalHeuristicMutation(prompt, currentSpec);
+    attachExtensionRecipes(local.updatedSceneSpec, contributions);
+    const checked = autoFixSceneSpec(local.updatedSceneSpec, verifyOpts);
+    return {
+      ...local,
+      updatedSceneSpec: checked.spec,
+      diffSummary: [...local.diffSummary, ...verificationNotes(checked.fixes, checked.report)],
+      skillsUsed,
+      verification: checked.report,
+    };
+  }
 
   // Keep the user's existing graph if the model dropped it, then validate and wire any mechanic left without nodes.
   const incoming = cloneSceneSpec(result.updatedSceneSpec);
   if (!incoming.logicGraph?.nodes?.length && currentSpec.logicGraph?.nodes?.length) {
     incoming.logicGraph = JSON.parse(JSON.stringify(currentSpec.logicGraph));
   }
+  // Keep extension presets portable: copy recipes for any extension particle / SFX preset the model used.
+  for (const lib of ['particleLibrary', 'sfxLibrary'] as const) {
+    if (!incoming[lib] && currentSpec[lib]) (incoming as any)[lib] = JSON.parse(JSON.stringify(currentSpec[lib]));
+  }
+  const attachedPresets = attachExtensionRecipes(incoming, contributions);
   const { spec, notes } = finalizeLogicGraph(incoming);
+  let checked = autoFixSceneSpec(spec, verifyOpts);
+  const fixes = [...checked.fixes];
+
+  for (let round = 0; round < MAX_AI_VERIFY_ROUNDS && !checked.report.ok; round++) {
+    const repairPrompt = `VERIFICATION LOOP — the SceneSpec you produced for "${prompt}" fails OmniStage's deterministic verifier.
+Fix ONLY these problems, keep everything else identical:
+${describeIssuesForAgent(checked.report)}`;
+    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills, extraContext);
+    if (!repaired) break;
+    const candidate = autoFixSceneSpec(finalizeLogicGraph(cloneSceneSpec(repaired.updatedSceneSpec)).spec, verifyOpts);
+    if (candidate.report.errors >= checked.report.errors) break; // no progress: keep the better spec
+    fixes.push(`AI repair round ${round + 1} resolved ${checked.report.errors - candidate.report.errors} error(s)`, ...candidate.fixes);
+    checked = candidate;
+  }
+
   return {
     ...result,
-    updatedSceneSpec: spec,
-    diffSummary: notes.length ? [...result.diffSummary, ...notes] : result.diffSummary,
+    updatedSceneSpec: checked.spec,
+    diffSummary: [
+      ...result.diffSummary,
+      ...notes,
+      ...(attachedPresets.length ? [`Embedded extension presets: ${attachedPresets.join(', ')}`] : []),
+      ...verificationNotes(fixes, checked.report),
+    ],
+    skillsUsed,
+    verification: checked.report,
   };
 }
 
@@ -1548,7 +1781,7 @@ export async function runVisionQAInspection(
   try {
     const response = await fetch('/api/agent/vision-qa', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: aiHeaders(useStudioStore.getState().settings),
       body: JSON.stringify({
         screenshotDataUrl,
         actorCoordinates,
