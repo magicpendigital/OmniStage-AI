@@ -3,10 +3,9 @@
   "configurations": [
     {
       "name": "omnistage-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "env": { "PORT": "3217" },
-      "port": 3217
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "server.ts"],
+      "port": 3000
     }
   ]
 }
