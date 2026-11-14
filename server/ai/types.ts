@@ -35,6 +35,11 @@ export interface GenerateRequest {
   user: string;
   /** Optional PNG/JPEG screenshot (vision QA). Providers without vision ignore it and say so via `supportsVision`. */
   image?: { mimeType: string; base64: string };
+  /**
+   * Phase 10D: the answer is worthless without the image (director QA). Connections without vision (local CLIs) are then
+   * reported as unavailable instead of answering blind, so a fallback chain skips to the next connection.
+   */
+  requireVision?: boolean;
   /** Hard timeout for the whole call. */
   timeoutMs?: number;
 }

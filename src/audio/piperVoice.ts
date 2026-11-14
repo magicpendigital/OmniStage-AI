@@ -5,6 +5,7 @@
  * MP4 export and the exported Player (embedded WAV) play them. Studio-only: never imported by the Player bundle.
  */
 import type { DialogueLine, SceneSpec } from '../types/scene.schema';
+import type { ElevenLabsSettings } from './elevenLabsClient';
 import { decodeWav, getVoiceClip, registerVoiceClip, voiceClipKey, voiceFor, VoiceClip, estimateLineDuration } from './voices';
 
 const DB = 'omnistage-voices';
@@ -93,13 +94,22 @@ export interface VoiceProgress {
  * Gives every dialogue line of the scenes its voice: Piper lines are synthesised (or taken from the cache), babble
  * lines get their exact length. Returns the updated dialogue per scene id (lines with `clip` / `duration`).
  */
+export interface VoiceGenerationOptions {
+  /** Phase 10D: lines / characters on the 'elevenlabs' engine are spoken by ElevenLabs with these settings (BYO key). */
+  elevenLabs?: ElevenLabsSettings;
+  /** Library scope where ElevenLabs clips and their licences are recorded ("project:<id>" or "personal"). */
+  libraryScope?: string;
+}
+
 export async function generateDialogueVoices(
   scenes: SceneSpec[],
-  onProgress?: (p: VoiceProgress) => void
-): Promise<{ dialogue: Record<string, DialogueLine[]>; generated: number; failed: string[] }> {
+  onProgress?: (p: VoiceProgress) => void,
+  options: VoiceGenerationOptions = {}
+): Promise<{ dialogue: Record<string, DialogueLine[]>; generated: number; failed: string[]; licensed: number }> {
   const out: Record<string, DialogueLine[]> = {};
   const failed: string[] = [];
   let generated = 0;
+  let licensed = 0;
   const total = scenes.reduce((n, s) => n + (s.dialogue?.length || 0), 0);
   let done = 0;
   let piper: Awaited<ReturnType<typeof loadPiper>> | null = null;
@@ -108,7 +118,7 @@ export async function generateDialogueVoices(
     const lines: DialogueLine[] = [];
     for (const line of scene.dialogue) {
       const speaker = scene.actors.find((a) => a.id === line.speaker);
-      const voice = voiceFor(speaker, line.text);
+      const voice = voiceFor(speaker, line.text, line.engine);
       const next: DialogueLine = { ...line };
       if (voice.engine === 'babble' || !line.text.trim()) {
         delete next.clip;
@@ -118,16 +128,29 @@ export async function generateDialogueVoices(
         let clip = getVoiceClip(key) || (await idbGet(key));
         if (!clip) {
           try {
-            piper = piper || (await loadPiper());
-            const stored = await piper.stored();
-            const wav = await piper.predict({ text: line.text, voiceId: voice.voiceId }, (p: any) => {
-              if (!stored.includes(voice.voiceId) && p?.total) onProgress?.({ phase: 'download', ratio: p.loaded / p.total, label: `Downloading voice ${voice.voiceId}` });
-            });
-            const decoded = decodeWav(new Uint8Array(await wav.arrayBuffer()));
-            if (!decoded) throw new Error('unreadable voice audio');
-            clip = trimSilence(decoded);
-            await idbPut(key, clip);
-            generated++;
+            if (voice.engine === 'elevenlabs') {
+              const { synthesizeElevenLabsLine, recordElevenLabsAsset, clipToWavBlob } = await import('./elevenLabsClient');
+              onProgress?.({ phase: 'speak', ratio: done / Math.max(1, total), label: `ElevenLabs: line ${done + 1}/${total}` });
+              const res = await synthesizeElevenLabsLine(line, voice.voiceId, options.elevenLabs || {});
+              clip = trimSilence(res.clip);
+              await idbPut(key, clip);
+              generated++;
+              const asset = await recordElevenLabsAsset(options.libraryScope || 'personal', 'tts', clipToWavBlob(clip), {
+                prompt: line.text, model: res.model, voiceId: voice.voiceId, name: `${speaker?.name || line.speaker} ${line.text.slice(0, 24)}`,
+              });
+              if (asset) licensed++;
+            } else {
+              piper = piper || (await loadPiper());
+              const stored = await piper.stored();
+              const wav = await piper.predict({ text: line.text, voiceId: voice.voiceId }, (p: any) => {
+                if (!stored.includes(voice.voiceId) && p?.total) onProgress?.({ phase: 'download', ratio: p.loaded / p.total, label: `Downloading voice ${voice.voiceId}` });
+              });
+              const decoded = decodeWav(new Uint8Array(await wav.arrayBuffer()));
+              if (!decoded) throw new Error('unreadable voice audio');
+              clip = trimSilence(decoded);
+              await idbPut(key, clip);
+              generated++;
+            }
           } catch (err) {
             failed.push(`${line.text.slice(0, 30)}: ${(err as Error)?.message || err}`);
           }
@@ -148,5 +171,5 @@ export async function generateDialogueVoices(
     }
     out[scene.id] = lines;
   }
-  return { dialogue: out, generated, failed };
+  return { dialogue: out, generated, failed, licensed };
 }

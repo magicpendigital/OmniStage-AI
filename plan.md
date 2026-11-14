@@ -304,8 +304,30 @@ the verifier only checks playability. Fix in layers: contract → production too
     its sight line passes beside the partner's body.
   - Not done: CC0 Quaternius animation library retargeting (gesture clips per emotion); lip-sync visemes (models have no mouth rigs);
     voice clips are per browser (a project opened elsewhere falls back to babble until voices are generated again).
-- [ ] **10D** Paid Production Tools via Settings/Extensions (ElevenLabs voice/music/SFX, Blockade skybox, Meshy animation), licences recorded
-  in the project library; vision-model "director QA" scoring rendered keyframes → extra patch round.
+- [x] **10D (done 2026-11-14: director QA + ElevenLabs)** Paid production tools + director QA:
+  - Director QA (`src/agent/directorQA.ts` pure, `src/agent/directorQARunner.ts`, `src/media/directorKeyframes.ts`): one keyframe per
+    camera shot (midpoint, ≤ 4), rendered on the real exported Player (frame-stepped like the MP4 export) and tiled into one labelled
+    JPEG contact sheet, so every single-image vision provider works. `/api/agent/vision-qa` with `mode: "director"` returns a 0-100
+    score + findings (framing, composition, staging, acting, lighting, continuity, readability; tile, target id, fix). Under the
+    threshold (Settings → Production tools, default 70) the findings drive ONE extra patch round (`runDirectorQARound` on the patch
+    loop); a round that raises verifier errors / craft issues is dropped and scene identity is kept. Runs after the 10A polish on AI
+    3D film shots in the storyboard agent; notes appear in the storyboard diff summary.
+  - Vision only: `GenerateRequest.requireVision` makes CLI providers throw `ProviderUnavailableError` (a fallback chain skips them);
+    the studio skips director QA when the active connection has no vision (`AI_PROVIDERS[].vision`).
+  - ElevenLabs, bring your own key (Settings → 5. Production tools; or `ELEVENLABS_API_KEY`, used only for requests from this computer):
+    local proxy `/api/media/elevenlabs/{status,voices,tts,sfx,music}` (`server/media/elevenLabs.ts`), key sent upstream as
+    `xi-api-key`, never logged, echoed (errors are redacted) or stored in SceneSpec. Shared request builders in
+    `src/audio/elevenLabs.ts` (emotion → voice settings; v3 audio tags only for `eleven_v3*`).
+  - `VoiceEngine` adds `'elevenlabs'` (+ `actors[].voice.elevenLabsVoiceId`, per-line `dialogue[].engine` override). Dialogue panel:
+    ElevenLabs per character (voice list from the account) or per line; Generate voices speaks those lines with ElevenLabs (24 kHz
+    PCM), caches them like Piper clips (same IndexedDB / export path) and saves a WAV copy + licence record to the library. The AI
+    never picks ElevenLabs on its own (paid).
+  - Licences: every generated file goes to the project library (personal library outside a project) with source `elevenlabs`, a
+    short licence line and `meta.licence` { provider, tool, model, voiceId, prompt, generatedAt, terms, note }. SFX / music
+    generator in Settings saves to the library and adds an audio track.
+  - Tests: `tests/directorQA.test.ts`.
+  - Not done: Blockade skybox, Meshy animation; a manual "Director QA" button for existing scenes (today it runs inside storyboard
+    generation); a real vision-model run on a generated film.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [ ] Asset-generation providers as Extensions (BYO key, server proxy, results saved to the library with license/source):

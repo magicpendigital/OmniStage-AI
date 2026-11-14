@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MessageSquare, Mic, Play, Plus, Trash2 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { DIALOGUE_EMOTIONS, dialogueTimeline, getVoiceClip, PIPER_VOICES, pitchedClip, renderBabble, voiceFor } from '../audio/voices';
@@ -30,6 +30,10 @@ export const DialoguePanel: React.FC = () => {
   const setDialogueCaptions = useStudioStore((s) => s.setDialogueCaptions);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const settings = useStudioStore((s) => s.settings);
+  const activeProject = useStudioStore((s) => s.activeProject);
+  // Phase 10D: ElevenLabs voices of the creator's account (loaded when a character uses the ElevenLabs engine).
+  const [elevenVoices, setElevenVoices] = useState<Array<{ id: string; name: string }> | null>(null);
   const lines = sceneSpec.dialogue || [];
   const actors = sceneSpec.actors;
   const duration = Math.max(1, sceneSpec.durationSeconds || 8);
@@ -38,14 +42,27 @@ export const DialoguePanel: React.FC = () => {
   // Voices are generated for the whole storyboard of this scene (or just this scene).
   const storyboardId = sceneSpec.sequence?.storyboardId;
   const targetScenes = storyboardId ? scenes.filter((s) => s.sequence?.storyboardId === storyboardId).map((s) => (s.id === sceneSpec.id ? sceneSpec : s)) : [sceneSpec];
-  const pending = targetScenes.reduce((n, s) => n + (s.dialogue || []).filter((l) => !getVoiceClip(l.clip) && voiceFor(s.actors.find((a) => a.id === l.speaker), l.text).engine === 'piper').length, 0);
+  const pending = targetScenes.reduce((n, s) => n + (s.dialogue || []).filter((l) => !getVoiceClip(l.clip) && voiceFor(s.actors.find((a) => a.id === l.speaker), l.text, l.engine).engine !== 'babble').length, 0);
+  const usesEleven = targetScenes.some((s) => (s.dialogue || []).some((l) => voiceFor(s.actors.find((a) => a.id === l.speaker), l.text, l.engine).engine === 'elevenlabs'));
+
+  useEffect(() => {
+    if (!usesEleven || elevenVoices) return;
+    let cancelled = false;
+    import('../audio/elevenLabsClient')
+      .then(({ listElevenLabsVoices }) => listElevenLabsVoices(settings))
+      .then((v) => !cancelled && setElevenVoices(v))
+      .catch(() => !cancelled && setElevenVoices([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [usesEleven, elevenVoices, settings]);
 
   const update = (i: number, patch: Partial<DialogueLine>) => {
     const next = lines.map((l, j) => {
       if (j !== i) return l;
       const merged = { ...l, ...patch };
       // Text / speaker / emotion changes make the old voice clip stale.
-      if (patch.text !== undefined || patch.speaker !== undefined || patch.emotion !== undefined) {
+      if (patch.text !== undefined || patch.speaker !== undefined || patch.emotion !== undefined || 'engine' in patch) {
         delete merged.clip;
         delete merged.duration;
       }
@@ -63,7 +80,7 @@ export const DialoguePanel: React.FC = () => {
 
   const preview = (line: DialogueLine) => {
     const tl = timed.get(line.id);
-    const voice = voiceFor(actors.find((a) => a.id === line.speaker), line.text);
+    const voice = voiceFor(actors.find((a) => a.id === line.speaker), line.text, line.engine);
     const clip = getVoiceClip(line.clip);
     if (clip && line.clip) playPcm(pitchedClip(line.clip, clip, 32000, voice.pitch), 32000);
     else playPcm(renderBabble(line, voice, 32000, /robot/i.test(tl?.speaker?.assetId || '')), 32000);
@@ -74,9 +91,14 @@ export const DialoguePanel: React.FC = () => {
     setNotice(null);
     try {
       const { generateDialogueVoices } = await import('../audio/piperVoice');
-      const res = await generateDialogueVoices(targetScenes, (p) => setBusy(`${p.label} ${Math.round(p.ratio * 100)}%`));
+      const { libraryScopeFor } = await import('../audio/elevenLabsClient');
+      const res = await generateDialogueVoices(targetScenes, (p) => setBusy(`${p.label} ${Math.round(p.ratio * 100)}%`), {
+        elevenLabs: settings,
+        libraryScope: libraryScopeFor(activeProject?.id),
+      });
       applyDialogueVoices(res.dialogue);
-      setNotice(res.failed.length ? `Some lines kept the babble voice: ${res.failed[0]}` : `Voices ready (${res.generated} new).`);
+      const lic = res.licensed ? ` ${res.licensed} ElevenLabs clip(s) + licence saved to the ${activeProject ? 'project' : 'personal'} library.` : '';
+      setNotice(res.failed.length ? `Some lines kept the babble voice: ${res.failed[0]}${lic}` : `Voices ready (${res.generated} new).${lic}`);
     } catch (e) {
       setNotice(`Voice generation failed: ${(e as Error).message}`);
     } finally {
@@ -137,6 +159,13 @@ export const DialoguePanel: React.FC = () => {
                   {actors.filter((a) => a.id !== line.speaker).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </label>
+              <select value={line.engine || ''} onChange={(e) => update(i, { engine: (e.target.value || undefined) as VoiceEngine | undefined })}
+                className="px-1 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-200" title="Voice engine for this line only">
+                <option value="">character voice</option>
+                <option value="piper">Piper</option>
+                <option value="elevenlabs">ElevenLabs</option>
+                <option value="babble">Babble</option>
+              </select>
               <span>{tl ? `${tl.start.toFixed(1)}–${tl.end.toFixed(1)}s` : 'outside the scene'} · {getVoiceClip(line.clip) ? 'voice ready' : 'babble'}</span>
             </div>
           </div>
@@ -156,16 +185,30 @@ export const DialoguePanel: React.FC = () => {
                   <select value={v.engine} onChange={(e) => set({ engine: e.target.value as VoiceEngine })}
                     className="px-1 py-0.5 rounded bg-slate-950 border border-slate-700 text-slate-100" title="Voice engine">
                     <option value="piper">Real voice</option>
+                    <option value="elevenlabs">ElevenLabs</option>
                     <option value="babble">Babble</option>
                   </select>
+                  {v.engine === 'elevenlabs' && (
+                    elevenVoices && elevenVoices.length ? (
+                      <select value={v.voiceId} onChange={(e) => updateActorVoice(a.id, { ...(a.voice || {}), elevenLabsVoiceId: e.target.value })}
+                        className="flex-1 min-w-0 px-1 py-0.5 rounded bg-slate-950 border border-slate-700 text-slate-100" title="ElevenLabs voice">
+                        {!elevenVoices.some((ev) => ev.id === v.voiceId) && <option value={v.voiceId}>{v.voiceId}</option>}
+                        {elevenVoices.map((ev) => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+                      </select>
+                    ) : (
+                      <input value={v.voiceId} onChange={(e) => updateActorVoice(a.id, { ...(a.voice || {}), elevenLabsVoiceId: e.target.value.trim() })}
+                        className="flex-1 min-w-0 px-1 py-0.5 rounded bg-slate-950 border border-slate-700 font-mono text-slate-100"
+                        title="ElevenLabs voice id (add your key in Settings → Production tools to pick from a list)" />
+                    )
+                  )}
                   {v.engine === 'piper' && (
                     <select value={v.voiceId} onChange={(e) => set({ voiceId: e.target.value })}
                       className="flex-1 min-w-0 px-1 py-0.5 rounded bg-slate-950 border border-slate-700 text-slate-100" title="Piper voice">
                       {PIPER_VOICES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
                     </select>
                   )}
-                  <input type="range" min={-8} max={8} step={1} value={v.pitch} onChange={(e) => set({ pitch: parseInt(e.target.value, 10) })}
-                    className="w-14 accent-sky-500" title={`Pitch ${v.pitch > 0 ? '+' : ''}${v.pitch}`} />
+                  {v.engine !== 'elevenlabs' && <input type="range" min={-8} max={8} step={1} value={v.pitch} onChange={(e) => set({ pitch: parseInt(e.target.value, 10) })}
+                    className="w-14 accent-sky-500" title={`Pitch ${v.pitch > 0 ? '+' : ''}${v.pitch}`} />}
                 </div>
               </div>
             );
@@ -179,7 +222,7 @@ export const DialoguePanel: React.FC = () => {
             onClick={generate}
             disabled={!!busy}
             className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-sky-600/20 border border-sky-500/50 text-[11px] text-sky-100 hover:bg-sky-600/30 disabled:opacity-60"
-            title="Runs Piper in this browser; the first time downloads the voice model (~60 MB)"
+            title="Piper runs in this browser (the first time downloads ~60 MB); ElevenLabs lines use your own key and are saved with their licence to the library"
           >
             <Mic className="w-3.5 h-3.5" />
             {busy || (pending ? `Generate real voices (${pending} line${pending === 1 ? '' : 's'})` : 'Voices up to date — regenerate')}

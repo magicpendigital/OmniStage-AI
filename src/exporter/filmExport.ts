@@ -47,7 +47,7 @@ export interface FilmExportOptions {
   download?: boolean;
 }
 
-interface PlayerHandle {
+export interface PlayerHandle {
   store: { getState: () => any; setState: (patch: any) => void };
   step: (dt: number) => void;
   manual: (on: boolean) => void;
@@ -70,7 +70,7 @@ export async function canExportFilmFrames(width = 1280, height = 720): Promise<b
   }
 }
 
-async function mountPlayer(html: string, width: number, height: number, quality: 'high' | 'ultra'): Promise<{ frame: HTMLIFrameElement; player: PlayerHandle }> {
+export async function mountPlayer(html: string, width: number, height: number, quality: 'high' | 'ultra'): Promise<{ frame: HTMLIFrameElement; player: PlayerHandle }> {
   const iframe = document.createElement('iframe');
   // The Player renders at min(devicePixelRatio, 2): size the CSS box so the canvas comes out at the target pixels.
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -108,7 +108,7 @@ async function mountPlayer(html: string, width: number, height: number, quality:
   }
 }
 
-async function waitForAssets(player: PlayerHandle, abort?: AbortSignal) {
+export async function waitForAssets(player: PlayerHandle, abort?: AbortSignal) {
   const started = performance.now();
   // A couple of frames first so the view exists and has requested its models / images.
   player.relayout?.();

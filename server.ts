@@ -7,6 +7,7 @@ import { registerAssetHubRoutes } from './server/assetHubProxy.ts';
 import { aiErrorStatus, generateJSON, registerAiRoutes } from './server/ai/index.ts';
 import { registerWorkspaceRoutes } from './server/workspace/routes.ts';
 import { registerPlayRoutes } from './server/play/playSessions.ts';
+import { registerElevenLabsRoutes } from './server/media/elevenLabs.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,9 @@ async function startServer() {
 
   // Phase 6 batch 2: Play on phone (token-gated read-only /play/:token over the LAN)
   registerPlayRoutes(app);
+
+  // Phase 10D: paid production tools with the creator's own key (ElevenLabs voice / SFX / music)
+  registerElevenLabsRoutes(app);
 
   const fail = (res: express.Response, route: string, error: any) => {
     const status = aiErrorStatus(error);
@@ -195,9 +199,37 @@ Plan EXACTLY ${count} beats.`,
   // 2. Multimodal Vision QA Endpoint (CLI providers get the coordinates/SceneSpec audit without the image)
   app.post('/api/agent/vision-qa', async (req, res) => {
     try {
-      const { screenshotDataUrl, actorCoordinates, sceneSpec } = req.body ?? {};
+      const { screenshotDataUrl, actorCoordinates, sceneSpec, mode, keyframes } = req.body ?? {};
       if (!screenshotDataUrl) {
         res.status(503).json({ error: 'Vision QA fallback active' });
+        return;
+      }
+      // Phase 10D: director QA — a contact sheet of rendered keyframes of a film shot, scored like dailies.
+      if (mode === 'director') {
+        if (!sceneSpec || !Array.isArray(sceneSpec.actors) || !Array.isArray(keyframes) || !keyframes.length) {
+          res.status(400).json({ error: 'sceneSpec and keyframes are required' });
+          return;
+        }
+        const qa = await import('./src/agent/directorQA.ts');
+        const frames = keyframes.slice(0, 8).map((k: any) => ({
+          time: Number(k?.time) || 0,
+          label: String(k?.label ?? '').slice(0, 80),
+          ...(Number.isInteger(k?.shotIndex) ? { shotIndex: k.shotIndex } : {}),
+        }));
+        const match = /^data:(image\/\w+);base64,/.exec(String(screenshotDataUrl));
+        const { data, meta } = await generateJSON(req, {
+          system: qa.buildDirectorQASystemPrompt(),
+          image: { mimeType: match?.[1] || 'image/jpeg', base64: String(screenshotDataUrl).replace(/^data:image\/\w+;base64,/, '') },
+          user: qa.buildDirectorQAUserPrompt(sceneSpec, frames),
+          requireVision: true,
+          timeoutMs: 180_000,
+        });
+        const report = qa.normalizeDirectorQAReport(data, frames);
+        if (!report) {
+          res.status(502).json({ error: 'The vision model returned no director score' });
+          return;
+        }
+        res.json({ ...report, provider: meta.provider, model: meta.model });
         return;
       }
       const { buildVisionQASystemPrompt } = await loadPrompts();

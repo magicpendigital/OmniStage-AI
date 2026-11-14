@@ -43,6 +43,8 @@ import {
 } from '../types/scene.schema';
 import { autoFixSceneSpec } from '../verification/sceneVerifier';
 import { aiHeaders } from './aiClient';
+import { describeDirectorReview } from './directorQA';
+import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -202,7 +204,7 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
       : undefined,
     modelUrl: raw.customGlbUrl ? str(raw.modelUrl, raw.customGlbUrl) : entry.modelUrl,
     customGlbUrl: typeof raw.customGlbUrl === 'string' ? raw.customGlbUrl : undefined,
-    // Phase 10C: character voice
+    // Phase 10C: character voice. The AI never picks 'elevenlabs' (paid, the creator's own key): only the creator does, in the Dialogue panel.
     ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
       ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
       ...(typeof raw.voice.voiceId === 'string' ? { voiceId: raw.voice.voiceId } : {}),
@@ -1074,7 +1076,7 @@ ${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`;
 export async function generateStoryboardWithAgent(
   prompt: string,
   intent: StoryboardIntent,
-  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl'>,
+  settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'directorQA' | 'directorQAThreshold'>,
   callbacks: StoryboardGenerationCallbacks = {},
   signal?: AbortSignal
 ): Promise<StoryboardGenerationResult> {
@@ -1104,6 +1106,7 @@ export async function generateStoryboardWithAgent(
   // STEP 2: Author each scene sequentially, feeding continuity from the scenes already built
   const scenes: SceneSpec[] = [];
   const sources = new Set<'gemini' | 'local'>();
+  const directorNotes: string[] = [];
   let geminiAvailable = planSource === 'gemini';
   for (let i = 0; i < plan.beats.length; i++) {
     if (signal?.aborted) break;
@@ -1161,6 +1164,17 @@ export async function generateStoryboardWithAgent(
     if (source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && !signal?.aborted) {
       callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Polishing ${beat.title}` });
       spec = await polishFilmShot(spec, prompt, beat, settings, signal);
+      // Phase 10D: a vision model scores the rendered keyframes; a low score feeds one more patch round.
+      if (!signal?.aborted && directorQAAvailable(settings)) {
+        callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Director QA ${beat.title}` });
+        try {
+          const qa = await runDirectorQAForShot(spec, `${beat.title} — ${beat.beat}. ${prompt}`, settings, signal);
+          spec = qa.spec;
+          if (qa.review) directorNotes.push(`#${i + 1} ${describeDirectorReview(qa.review, qa)}`);
+        } catch {
+          // Director QA is a bonus pass: capture / vision failures keep the polished shot.
+        }
+      }
     }
     scenes.push(spec);
     sources.add(source);
@@ -1181,6 +1195,6 @@ export async function generateStoryboardWithAgent(
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'
         : 'Scenes are linked in order — open the Scenes tab to review each shot.'
     }`,
-    diffSummary: scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`),
+    diffSummary: [...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
   };
 }
