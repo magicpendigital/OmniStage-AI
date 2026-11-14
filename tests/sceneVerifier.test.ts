@@ -168,3 +168,13 @@ test('custom particle / SFX recipes: valid ones pass, bad ones are clamped, rena
   (junk as any).sfxLibrary = ['not', 'a', 'map'];
   assert.equal(autoFixSceneSpec(junk).spec.sfxLibrary, undefined);
 });
+
+test('mobile target: rules are opt-in and auto-fix raises small text', () => {
+  const spec = game2D();
+  spec.aspectRatio = '9:16';
+  spec.nodes2D.push({ id: 'hud', name: 'HUD', type: 'text-kinetic', text: 'Score', x: 500, y: 300, width: 200, height: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, fill: '#fff', stroke: '#000', physics2D: 'none', fontSize: 14 } as Node2D);
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code.startsWith('mobile.')));
+  assert.ok(verifySceneSpec(spec, { target: 'mobile' }).issues.some((i) => i.code === 'mobile.text-small' && i.targetId === 'hud'));
+  const fixed = autoFixSceneSpec(spec, { target: 'mobile' });
+  assert.ok(!fixed.report.issues.some((i) => i.code === 'mobile.text-small'));
+});

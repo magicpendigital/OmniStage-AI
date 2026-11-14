@@ -22,6 +22,7 @@ import { heroActor, performanceActionCount } from '../runtime/cinematics';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
+import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -56,6 +57,8 @@ const DEFAULT_SCORE = 25;
 export interface VerifyOptions {
   /** Whole storyboard, used to validate `sequence.nextSceneId`. */
   scenes?: SceneSpec[];
+  /** Phase 8: 'mobile' adds phone checks (text size, touch targets, safe area, keyboard-only input, scene weight). */
+  target?: 'mobile';
 }
 
 interface Surface {
@@ -469,6 +472,159 @@ function fixRecipe(spec: SceneSpec, targetId: string | undefined): string | null
   return `Removed the unusable custom ${def.label} recipe "${id}"`;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8: mobile checks (only with opts.target === 'mobile')
+// ---------------------------------------------------------------------------
+
+/**
+ * A small reference phone (360×780 CSS px; portrait for 9:16 / 1:1, landscape for 16:9) with notch / home-indicator
+ * insets. The Player fits the stage aspect into the screen and letterboxes the 1000×600 2D design space inside it.
+ */
+export const MOBILE_REFERENCE = {
+  shortSide: 360,
+  longSide: 780,
+  minFontPx: 12,
+  minTouchPx: 44,
+  comfortPx: 8,
+  insets: {
+    portrait: { top: 47, bottom: 34, left: 0, right: 0 },
+    landscape: { top: 0, bottom: 21, left: 47, right: 47 },
+  },
+  maxActors3D: 60,
+  maxNodes2D: 300,
+};
+
+export interface MobileStageGeometry {
+  /** CSS px per 2D design unit. */
+  scale: number;
+  /** Minimum gap (design units) a UI element should keep from each design-space edge. */
+  margin: { top: number; bottom: number; left: number; right: number };
+  minFont: number;
+  minTouch: number;
+}
+
+export function mobileStageGeometry(aspect: SceneSpec['aspectRatio']): MobileStageGeometry {
+  const R = MOBILE_REFERENCE;
+  const landscape = aspect === '16:9';
+  const [sw, sh] = landscape ? [R.longSide, R.shortSide] : [R.shortSide, R.longSide];
+  const ratio = aspect === '9:16' ? 9 / 16 : aspect === '1:1' ? 1 : 16 / 9;
+  const fw = Math.min(sw, sh * ratio);
+  const fh = fw / ratio;
+  const scale = Math.min(fw / STAGE_W, fh / STAGE_H);
+  const offX = (sw - STAGE_W * scale) / 2;
+  const offY = (sh - STAGE_H * scale) / 2;
+  const inset = landscape ? R.insets.landscape : R.insets.portrait;
+  const need = (insetPx: number, off: number) => Math.ceil(Math.max(0, insetPx + R.comfortPx - off) / scale);
+  return {
+    scale,
+    margin: { top: need(inset.top, offY), bottom: need(inset.bottom, offY), left: need(inset.left, offX), right: need(inset.right, offX) },
+    minFont: Math.ceil(R.minFontPx / scale),
+    minTouch: Math.ceil(R.minTouchPx / scale),
+  };
+}
+
+/** 2D nodes a logic-graph trigger listens to with "actor clicked". */
+function tapTargetIds(spec: SceneSpec): Set<string> {
+  const ids = new Set<string>();
+  for (const n of spec.logicGraph?.nodes || []) {
+    const ev = String(n.params?.eventType || '');
+    if (n.type === 'trigger' && (ev === 'on-click-actor' || ev === 'on-actor-click' || ev === 'actor-click') && n.params?.actorId) ids.add(String(n.params.actorId));
+  }
+  return ids;
+}
+
+function isUiNode2D(n: Node2D, taps: Set<string>) {
+  return n.visible !== false && ((n.type === 'text-kinetic' && !!String(n.text || '').trim()) || taps.has(n.id));
+}
+
+function nodeBox(n: Node2D) {
+  const w = Math.abs(n.width * (n.scaleX ?? 1));
+  const h = Math.abs(n.height * (n.scaleY ?? 1));
+  return { w, h, left: n.x - w / 2, right: n.x + w / 2, top: n.y - h / 2, bottom: n.y + h / 2 };
+}
+
+/** Keys a phone player can press: the on-screen pad + action button of this scene. */
+function touchKeys(spec: SceneSpec): Set<string> {
+  const b = touchButtons(touchLayoutFor(spec, false));
+  const keys = new Set<string>(b.pad.map((p) => p[1]));
+  if (b.action) keys.add(b.action[1]).add('space');
+  return keys;
+}
+
+function verifyMobile(spec: SceneSpec, issues: VerificationIssue[]) {
+  const geo = mobileStageGeometry(spec.aspectRatio);
+  if (spec.engineType === '2d') {
+    const taps = tapTargetIds(spec);
+    for (const n of spec.nodes2D || []) {
+      if (n.visible === false) continue;
+      const shownFont = typeof n.fontSize === 'number' ? n.fontSize * Math.abs(n.scaleY ?? 1) : Infinity;
+      if (n.type === 'text-kinetic' && String(n.text || '').trim() && shownFont < geo.minFont) {
+        issues.push(issue('mobile.text-small', 'warning', `Text "${n.name}" is about ${Math.round(shownFont * geo.scale)} px on a phone; use fontSize ≥ ${geo.minFont} for ${spec.aspectRatio}.`, true, n.id));
+      }
+      if (taps.has(n.id)) {
+        const b = nodeBox(n);
+        if (Math.min(b.w, b.h) < geo.minTouch) {
+          issues.push(issue('mobile.touch-target', 'warning', `Tap target "${n.name}" is about ${Math.round(Math.min(b.w, b.h) * geo.scale)} px on a phone; make it at least ${geo.minTouch} design units (44 px).`, true, n.id));
+        }
+      }
+      if (isUiNode2D(n, taps)) {
+        const b = nodeBox(n);
+        const m = geo.margin;
+        const outside = b.left < m.left || b.right > STAGE_W - m.right || b.top < m.top || b.bottom > STAGE_H - m.bottom;
+        if (outside && b.w <= STAGE_W - m.left - m.right && b.h <= STAGE_H - m.top - m.bottom) {
+          issues.push(issue('mobile.edge-ui', 'warning', `"${n.name}" sits under the notch, rounded corners or home bar on phones; keep it inside x ${m.left}–${STAGE_W - m.right}, y ${m.top}–${STAGE_H - m.bottom}.`, true, n.id));
+        }
+      }
+    }
+    if ((spec.nodes2D || []).length > MOBILE_REFERENCE.maxNodes2D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.nodes2D.length} 2D nodes may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxNodes2D}).`, false));
+    }
+  } else if ((spec.actors || []).length > MOBILE_REFERENCE.maxActors3D) {
+    issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxActors3D}).`, false));
+  }
+
+  if (spec.mode === 'game') {
+    const keys = touchKeys(spec);
+    const missing = new Set<string>();
+    for (const n of spec.logicGraph?.nodes || []) {
+      const ev = String(n.params?.eventType || '');
+      if (n.type !== 'trigger' || (ev !== 'on-key-press' && ev !== 'key-press')) continue;
+      const key = String(n.params?.key ?? n.params?.keyCombo ?? n.params?.inputKey ?? '').toLowerCase();
+      if (!key) continue;
+      const ok = key === 'wasd / arrows' ? keys.has('arrowleft') : keys.has(key === ' ' ? 'space' : key);
+      if (!ok) missing.add(key);
+    }
+    if (missing.size) {
+      issues.push(issue('mobile.keyboard-only', 'warning', `Key trigger(s) ${[...missing].map((k) => `"${k}"`).join(', ')} have no on-screen button on phones; use arrows / space, or an "actor clicked" trigger.`, false));
+    }
+  }
+}
+
+function fixMobile(spec: SceneSpec, i: VerificationIssue): string | null {
+  const n = (spec.nodes2D || []).find((x) => x.id === i.targetId);
+  if (!n) return null;
+  const geo = mobileStageGeometry(spec.aspectRatio);
+  if (i.code === 'mobile.text-small') {
+    n.fontSize = Math.ceil(geo.minFont / Math.abs(n.scaleY || 1));
+    return `Raised "${n.name}" to fontSize ${n.fontSize} for phones`;
+  }
+  if (i.code === 'mobile.touch-target') {
+    const b = nodeBox(n);
+    const k = geo.minTouch / Math.max(1e-6, Math.min(b.w, b.h));
+    n.width = Math.ceil(n.width * k);
+    n.height = Math.ceil(n.height * k);
+    return `Enlarged tap target "${n.name}" to ${geo.minTouch}+ design units`;
+  }
+  if (i.code === 'mobile.edge-ui') {
+    const b = nodeBox(n);
+    const m = geo.margin;
+    n.x = Math.round(clamp(n.x, m.left + b.w / 2, STAGE_W - m.right - b.w / 2));
+    n.y = Math.round(clamp(n.y, m.top + b.h / 2, STAGE_H - m.bottom - b.h / 2));
+    return `Moved "${n.name}" inside the phone safe area`;
+  }
+  return null;
+}
+
 export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): VerificationReport {
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
@@ -479,6 +635,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifySoundtrack(spec, issues);
   verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
+  if (opts.target === 'mobile') verifyMobile(spec, issues);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
 }
@@ -532,6 +689,10 @@ function makePlayer2D(): Node2D {
 
 function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): string | null {
   switch (i.code) {
+    case 'mobile.text-small':
+    case 'mobile.touch-target':
+    case 'mobile.edge-ui':
+      return fixMobile(spec, i);
     case 'recipe.invalid':
       return fixRecipe(spec, i.targetId);
     case 'media.performance-invalid': {

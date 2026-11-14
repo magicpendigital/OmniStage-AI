@@ -199,14 +199,24 @@ so that moves to the front.
     (SwiftShader has no WebGPU adapter, so the default E2E run skips them).
   - Not yet: WebGPU in the studio viewport (R3F async renderer); contact shadows as a node pass.
 
-### Phase 8 — Mobile native (Android first, then iOS)
-- [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.
-- [ ] **Android**: generate a Capacitor project (target API 36+), debug APK for sideload testing, signed AAB for Google Play; keystore wizard.
-- [ ] **iOS**: Capacitor Xcode project; build on a Mac or via a cloud build (Codemagic / Capawesome / Capgo, user's own account); TestFlight upload.
-- [ ] **Native capability plugins** (as Extensions): haptics, persistent saves, Game Center / Play Games leaderboards & achievements,
-  in-app purchases, ads SDK, push — also what keeps apps above Apple guideline 4.2 "minimum functionality".
-- [ ] **Store assistant**: icon/splash generation, screenshots from the Player, privacy/data-safety checklist, version & signing checks.
-- [ ] Mobile verifier rules: touch-reachable UI, text size, performance budget per profile, orientation lock.
+### Phase 8 — Mobile native (Android first, then iOS) — v1 done 2026-11-14
+Publish → "Mobile App" tab (`src/components/MobileExportPanel.tsx`, pure builders in `src/exporter/mobileExport.ts`, tests in
+`tests/mobileExport.test.ts`).
+- [x] **PWA export**: zip with `index.html` (Player), `manifest.webmanifest` (fullscreen, orientation, maskable icon), `sw.js`
+  (cache-first, versioned cache per appId/version/build), icons. Service worker registers only over http(s).
+- [x] **Android**: Capacitor 8 project zip (`www/`, `capacitor.config.json`, `resources/` for `@capacitor/assets`),
+  `scripts/configure-native.mjs` sets SDK 36, versionCode/versionName, orientation and a release signingConfig read from
+  `keystore.properties` (git-ignored; passwords never on the command line). `npm run android:debug` / `android:release` (AAB).
+- [x] **iOS**: same project, `npx cap add ios` on a Mac, or `codemagic.yaml` (user's own Codemagic account) for TestFlight.
+- [x] **Native capabilities v1**: haptics, persistent saves (best score, cleared levels, resume level — `src/runtime/progress.ts`),
+  pause/resume on app background (`src/player/native.ts`, Capacitor plugins with web fallbacks; only active in app builds).
+- [ ] Deferred: Game Center / Play Games leaderboards, in-app purchases, ads SDK, push — each needs store accounts, SDK keys and
+  policy review per app; listed as "later" in the panel.
+- [x] **Store assistant**: icons 192/512/maskable/1024 and 2732 splash from the stage, store screenshots (1290×2796),
+  data-safety report + privacy policy draft, checklist (identity, orientation, offline, SDK 36, signing, closed testing 12×14 days).
+- [x] Mobile verifier rules (`verifySceneSpec(spec, { target: 'mobile' })`): `mobile.text-small`, `mobile.touch-target`,
+  `mobile.edge-ui` (fixable), `mobile.heavy-scene`, `mobile.keyboard-only` (warnings). Orientation is a checklist item.
+- [ ] Later: per-device performance profiles measured on real phones; rig cost in the mobile budget.
 
 ### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
 Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
