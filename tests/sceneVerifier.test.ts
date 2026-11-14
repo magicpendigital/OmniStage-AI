@@ -137,3 +137,34 @@ test('unknown easing and audio cues are cleaned up', () => {
   assert.equal(fixed.spec.audio!.cues.collect, undefined);
   assert.equal(fixed.spec.audio!.cues.win, 'win');
 });
+
+test('custom particle / SFX recipes: valid ones pass, bad ones are clamped, renamed built-ins and junk are removed', () => {
+  const ok = { rate: 40, life: 1.2, speed: [20, 60], angle: [250, 290], gravity: -30, size: [6, 14], shape: 'circle', colors: ['#7CFC00', '#2E8B57'], fade: true, grow: true, alpha: 0.8 };
+  const clean = game2D();
+  clean.particleLibrary = { 'poison-puff': ok } as any;
+  clean.sfxLibrary = { 'arp-up': { wave: 'square', dur: 0.4, vol: 0.5, notes: [523, 659, 784, 1047], step: 0.08 } } as any;
+  assert.equal(verifySceneSpec(clean).issues.filter((i) => i.code === 'recipe.invalid').length, 0);
+
+  const spec = game2D();
+  spec.particleLibrary = { 'hot-sparks': { ...ok, rate: 9999 }, fire: ok, 'Bad Id': ok } as any;
+  spec.sfxLibrary = { 'no-wave': { dur: 0.3, vol: 0.5 }, 'loud-zap': { wave: 'sawtooth', dur: 0.2, vol: 7, f0: 800, f1: 200 } } as any;
+  const found = verifySceneSpec(spec).issues.filter((i) => i.code === 'recipe.invalid');
+  assert.deepEqual(found.map((i) => i.targetId).sort(), ['particleLibrary:Bad Id', 'particleLibrary:fire', 'particleLibrary:hot-sparks', 'sfxLibrary:loud-zap', 'sfxLibrary:no-wave']);
+  assert.ok(found.every((i) => i.severity === 'warning' && i.fixable));
+
+  const { spec: fixed } = autoFixSceneSpec(spec);
+  assert.deepEqual(Object.keys(fixed.particleLibrary!), ['hot-sparks']);
+  assert.ok((fixed.particleLibrary!['hot-sparks'] as any).rate <= 400);
+  assert.deepEqual(Object.keys(fixed.sfxLibrary!), ['loud-zap']);
+  assert.ok((fixed.sfxLibrary!['loud-zap'] as any).vol <= 1);
+  assert.equal(verifySceneSpec(fixed).issues.filter((i) => i.code === 'recipe.invalid').length, 0);
+
+  const many = game2D();
+  many.particleLibrary = Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`fx-${n}`, ok])) as any;
+  const trimmed = autoFixSceneSpec(many).spec;
+  assert.equal(Object.keys(trimmed.particleLibrary!).length, 24);
+
+  const junk = game2D();
+  (junk as any).sfxLibrary = ['not', 'a', 'map'];
+  assert.equal(autoFixSceneSpec(junk).spec.sfxLibrary, undefined);
+});

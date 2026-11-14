@@ -163,6 +163,24 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Use 'powerup' for rare high-value collectibles, 'whoosh' for scene-start in fast-paced games.
 - 2D: place a small 'particle-emitter' (preset 'sparkle') on high-value collectibles and 'confetti' near the goal; use 'fire'/'smoke' for hazards.`,
   },
+  {
+    id: 'custom-vfx-recipes',
+    title: 'Custom VFX & SFX recipes',
+    description: 'Author bespoke particle and synth-sound recipes as data when the built-in presets do not fit.',
+    triggers: ['vfx', 'particle', 'particles', 'hạt', 'hiệu ứng', 'effect', 'sfx', 'âm thanh', 'tiếng', 'sound', 'juice', 'custom', 'magic', 'phép'],
+    engine: 'any',
+    mode: 'any',
+    source: 'builtin',
+    guidance: `CUSTOM VFX / SFX RECIPES (data only, never code):
+- Prefer built-in presets; add a recipe only for a look or sound they cannot give (e.g. a green poison puff, a rising arcade arpeggio).
+- Particles: sceneSpec.particleLibrary["poison-puff"] = { rate: 40, life: 1.2, speed: [20, 60], angle: [250, 290], gravity: -30,
+  size: [6, 14], shape: "circle", colors: ["#7CFC00", "#2E8B57"], fade: true, grow: true, alpha: 0.8 }; then emitter.preset = "poison-puff".
+  One-shot bursts: add burst (seconds) and a high rate; use additive: true for glows, shape "star"/"pixel" for arcade sparkle.
+- Sounds: sceneSpec.sfxLibrary["arp-up"] = { wave: "square", dur: 0.4, vol: 0.5, notes: [523, 659, 784, 1047], step: 0.08 };
+  sweeps use f0 → f1, noise + lp0 → lp1 for impacts and whooshes. Reference by id in audio.cues or soundtrack cues.
+- Slug ids (lower-case, dashes), never a built-in preset name, ≤ 24 recipes per library, ≤ 8 colours, ≤ 16 notes, dur ≤ 4 s.
+- Keep palettes consistent with the scene's art direction and keep loud sounds (vol > 0.7) for rare moments.`,
+  },
 ];
 
 const STOPWORDS = new Set([

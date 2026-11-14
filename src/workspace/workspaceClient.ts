@@ -162,7 +162,7 @@ export const workspaceApi = {
   uninstallExtension: (id: string) => api(`/extensions/${id}`, { method: 'DELETE' }),
 
   listGenerators: () => api<AvailableGenerator[]>('/generate/generators'),
-  startGeneration: (input: { extensionId: string; generatorId: string; prompt: string; scope: string }, key?: string) =>
+  startGeneration: (input: { extensionId: string; generatorId: string; prompt: string; scope: string; imageAssetId?: string; imageScope?: string }, key?: string) =>
     api<GenerationJob>('/generate/jobs', { method: 'POST', body: body(input), headers: keyHeader(key) }),
   pollGeneration: (id: string, key?: string) => api<GenerationJob>(`/generate/jobs/${encodeURIComponent(id)}`, { headers: keyHeader(key) }),
 

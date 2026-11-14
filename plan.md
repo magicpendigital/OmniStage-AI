@@ -351,10 +351,19 @@ the verifier only checks playability. Fix in layers: contract → production too
   `x-generate-key`, or env `MESHY_API_KEY` / `TRIPO_API_KEY` / `FAL_KEY` / `REPLICATE_API_TOKEN`), never stored or logged.
   Results land in My Library (personal or project) with source, licence and prompt; "Generate with AI" in My Library → Place.
   Tests: `tests/generate.test.ts`.
-- [ ] Remaining generators: Rodin (3D), OpenRouter images, audio (ElevenLabs SFX / music / TTS); image-to-3D; sprite sheets
-  (multi-frame) and rigging generated characters with OmniRig.
-- [ ] VFX & animation by code as AI skills: AI-authored particle/SFX recipes (available now via extensions), GLSL shader effects in a
-  validated sandbox, procedural tween/sprite animation, all reviewable and installable.
+- [x] Remaining generators (2026-11-14): `rodin-3d-generator` (Hyper3D Rodin Gen-2.5, multipart create → status → download; its
+  CDN is undocumented so results may come from any public https host via `ANY_PUBLIC_HOST`, key never sent there),
+  `openrouter-image-generator` (sprite / sprite sheet / backdrop, one-shot base64) and `elevenlabs-audio-generator` (SFX + music,
+  binary MP3, licence record). One-shot providers run as background "sync" jobs. Image-to-3D (Meshy v1 image-to-3d, Rodin
+  images) reads the picture from My Library (`imageAssetId`, ≤ 15 MB, sniffed PNG/JPEG/WebP). Multi-frame sprite sheets
+  (`frames` 2–8: fal, OpenRouter) save `meta.spriteSheet` and play animated when placed. Generated models get a Rig button that
+  opens OmniRig with the model loaded. OpenRouter / ElevenLabs reuse the keys already saved in Settings. TTS stays in the existing
+  dialogue voice pipeline (not a library generator).
+- [x] AI-authored particle/SFX recipes (2026-11-14): the director may write `particleLibrary` / `sfxLibrary` recipes itself
+  (prompt section + `custom-vfx-recipes` skill); shared sanitizers in `src/extensions/validate.ts`; verifier rule `recipe.invalid`
+  (fixable: clamp, drop renamed built-ins / junk, max 24). Procedural tween + sprite-sheet animation already ship as data.
+- [ ] GLSL shader effects — deferred: generated shader code conflicts with invariant 1 (no generated / eval'd rendering code) and
+  would need a WebGL/WebGPU (TSL) parity story; revisit as a fixed set of parameterised, reviewed shader presets instead.
 
 ### Later
 - [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.

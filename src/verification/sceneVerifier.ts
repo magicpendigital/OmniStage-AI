@@ -17,6 +17,7 @@ import type {
 import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { MAX_SCENE_RECIPES, RECIPE_ID_RE, sameRecipe, sanitizeParticleRecipe, sanitizeSfxRecipe } from '../extensions/validate';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
@@ -408,9 +409,70 @@ function verifyCommon(spec: SceneSpec, issues: VerificationIssue[], opts: Verify
   }
 }
 
+type RecipeLibrary = 'particleLibrary' | 'sfxLibrary';
+const RECIPE_LIBS: Array<{ lib: RecipeLibrary; label: string; clean: (r: unknown) => object | null; builtIn: readonly string[] }> = [
+  { lib: 'particleLibrary', label: 'particle', clean: sanitizeParticleRecipe, builtIn: PARTICLE_2D_PRESETS },
+  { lib: 'sfxLibrary', label: 'sound', clean: sanitizeSfxRecipe, builtIn: SFX_PRESET_IDS },
+];
+
+/** Problems with one custom recipe (AI-authored or copied from an extension), or null when it is clean. */
+function recipeProblem(id: string, recipe: unknown, def: (typeof RECIPE_LIBS)[number]): string | null {
+  if (!RECIPE_ID_RE.test(id)) return `id "${id}" must be a lower-case slug`;
+  if (def.builtIn.includes(id)) return `id "${id}" hides the built-in preset of the same name`;
+  const clean = def.clean(recipe);
+  if (!clean) return `"${id}" is missing required fields`;
+  if (!sameRecipe(clean, recipe)) return `"${id}" has unknown fields or values out of range`;
+  return null;
+}
+
+/** Phase 6 Batch 3 — AI-authored particle / SFX recipes are data only: known fields, clamped numbers, slug ids. */
+function verifyRecipes(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const def of RECIPE_LIBS) {
+    const lib = spec[def.lib] as Record<string, unknown> | undefined;
+    if (!lib) continue;
+    if (typeof lib !== 'object' || Array.isArray(lib)) {
+      issues.push(issue('recipe.invalid', 'warning', `${def.lib} must be an object of id → recipe.`, true, `${def.lib}:*`));
+      continue;
+    }
+    const ids = Object.keys(lib);
+    if (ids.length > MAX_SCENE_RECIPES) {
+      issues.push(issue('recipe.invalid', 'warning', `${def.lib} has ${ids.length} recipes (max ${MAX_SCENE_RECIPES}).`, true, `${def.lib}:*`));
+    }
+    for (const id of ids) {
+      const problem = recipeProblem(id, lib[id], def);
+      if (problem) issues.push(issue('recipe.invalid', 'warning', `Custom ${def.label} recipe ${problem}.`, true, `${def.lib}:${id}`));
+    }
+  }
+}
+
+function fixRecipe(spec: SceneSpec, targetId: string | undefined): string | null {
+  const [libName, id] = String(targetId || '').split(/:(.*)/s);
+  const def = RECIPE_LIBS.find((d) => d.lib === libName);
+  if (!def) return null;
+  const lib = spec[def.lib] as Record<string, unknown> | undefined;
+  if (id === '*') {
+    if (!lib || typeof lib !== 'object' || Array.isArray(lib)) {
+      delete spec[def.lib];
+      return `Removed the malformed ${def.lib}`;
+    }
+    const keep = Object.keys(lib).slice(0, MAX_SCENE_RECIPES);
+    (spec as any)[def.lib] = Object.fromEntries(keep.map((k) => [k, lib[k]]));
+    return `Kept the first ${MAX_SCENE_RECIPES} ${def.label} recipes`;
+  }
+  if (!lib || !(id in lib)) return null;
+  const clean = RECIPE_ID_RE.test(id) && !def.builtIn.includes(id) ? def.clean(lib[id]) : null;
+  if (clean) {
+    lib[id] = clean;
+    return `Clamped the custom ${def.label} recipe "${id}" to safe values`;
+  }
+  delete lib[id];
+  return `Removed the unusable custom ${def.label} recipe "${id}"`;
+}
+
 export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): VerificationReport {
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
+  verifyRecipes(spec, issues);
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
@@ -470,6 +532,8 @@ function makePlayer2D(): Node2D {
 
 function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): string | null {
   switch (i.code) {
+    case 'recipe.invalid':
+      return fixRecipe(spec, i.targetId);
     case 'media.performance-invalid': {
       const a = spec.actors.find((x) => x.id === i.targetId);
       if (!a?.performance) return null;
