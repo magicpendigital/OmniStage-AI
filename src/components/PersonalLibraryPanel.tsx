@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { HardDrive, Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { LibraryAsset, workspaceApi } from '../workspace/workspaceClient';
+import { GeneratePanel } from './GeneratePanel';
 
 /**
  * Phase 6 — "My Library": personal assets on this computer (shared by every project) and the open project's
@@ -75,6 +76,7 @@ export const PersonalLibraryPanel: React.FC = () => {
           <button type="button" onClick={() => setScope('project')} disabled={!activeProject} title={activeProject ? `Shared by games in ${activeProject.name}` : 'Open a project first'} className={`px-2 py-0.5 rounded text-[10px] disabled:opacity-40 ${scope === 'project' ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-400'}`}>Project</button>
         </div>
       </div>
+      <GeneratePanel scopeKey={scopeKey} onSaved={() => reload()} onPlace={place} />
       <input ref={fileRef} type="file" multiple className="hidden" accept=".glb,.gltf,.png,.jpg,.jpeg,.webp,.svg,.gif,.mp3,.wav,.ogg,.hdr" onChange={(e) => e.target.files && upload(e.target.files)} />
       <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-dashed border-slate-600 text-slate-300 hover:border-cyan-400 disabled:opacity-50">
         {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />} Add files (.glb, .png, .svg, .mp3…)

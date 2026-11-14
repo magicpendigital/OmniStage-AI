@@ -9,7 +9,10 @@ import type {
   ParticleRecipe,
   SfxRecipe,
 } from './types';
-import { PERMISSION_INFO } from './types';
+import { GENERATION_PROVIDERS, PERMISSION_INFO } from './types';
+
+/** owner/name model ids for fal.ai and Replicate (no traversal, no versions, no query strings). */
+export const GENERATION_MODEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63}){1,3}$/;
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const KINDS = ['skill-pack', 'vfx-pack', 'sfx-pack', 'asset-library', 'tool', 'mixed'];
@@ -75,6 +78,15 @@ export function validateManifest(m: any): string[] {
       if (!item.license) errors.push(`asset "${item.name}" needs a license`);
     }
   }
+  for (const g of c.generators || []) {
+    const label = `generator "${g?.id || '?'}"`;
+    if (!ID_RE.test(g?.id || '') || !g.title) errors.push(`${label} needs an id (slug) and a title`);
+    const info = GENERATION_PROVIDERS[g?.provider as keyof typeof GENERATION_PROVIDERS];
+    if (!info) errors.push(`${label} has unknown provider "${g?.provider}" (use ${Object.keys(GENERATION_PROVIDERS).join(', ')})`);
+    else if (g.output !== info.output) errors.push(`${label}: ${info.label} generates ${info.output}s`);
+    if (g?.model !== undefined && (typeof g.model !== 'string' || !GENERATION_MODEL_RE.test(g.model) || g.model.includes('..'))) errors.push(`${label} has an invalid model id`);
+  }
+  if (c.generators?.length && !(m.permissions || []).includes('generate')) errors.push('generators need the "generate" permission');
   if (c.commands?.length && !m.mainSource) errors.push('commands need a main script');
   if (m.mainSource && typeof m.mainSource !== 'string') errors.push('mainSource must be a string');
   if (typeof m.mainSource === 'string' && m.mainSource.length > MAX_MAIN_SOURCE) errors.push('main script is larger than 200 KB');
@@ -105,6 +117,10 @@ export function reviewExtension(m: ExtensionManifest): ExtensionReview {
   if (c.assetLibraries?.length) {
     const hosts = new Set(c.assetLibraries.flatMap((l) => l.items.map((i) => { try { return new URL(i.url).host; } catch { return '?'; } })));
     findings.push({ level: 'warn', message: `Adds asset libraries loading files from: ${[...hosts].join(', ')}` });
+  }
+  if (c.generators?.length) {
+    const names = [...new Set(c.generators.map((g) => GENERATION_PROVIDERS[g.provider]?.label || g.provider))];
+    findings.push({ level: 'warn', message: `Sends your prompts to ${names.join(', ')} with your own API key (each generation uses your credits there).` });
   }
   if (m.mainSource) {
     findings.push({ level: 'warn', message: `Runs a script (${(m.mainSource.length / 1024).toFixed(1)} KB) in an isolated sandbox.` });

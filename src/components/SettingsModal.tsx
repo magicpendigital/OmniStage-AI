@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { GENERATION_PROVIDERS, GenerationProviderId } from '../extensions/types';
 import {
   Brain,
   CheckCircle2,
@@ -297,6 +298,33 @@ export const SettingsModal: React.FC = () => {
                 <p className="text-[11px] text-slate-400">
                   Poly Haven (CC0 models & HDRIs) needs no key.
                 </p>
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                  <KeyRound className="w-3.5 h-3.5 text-fuchsia-400" />
+                  <span>Generation keys (Meshy · Tripo · fal.ai · Replicate)</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Used by generator extensions (My Library → Generate). Stored only in this browser and sent to the local
+                  OmniStage server, which calls the provider for you. Each generation uses your credits with that provider.
+                </p>
+                {(Object.keys(GENERATION_PROVIDERS) as GenerationProviderId[]).map((id) => (
+                  <div key={id} className="space-y-1">
+                    <label className="block text-slate-300">
+                      {GENERATION_PROVIDERS[id].label}{' '}
+                      <a href={GENERATION_PROVIDERS[id].keyUrl} target="_blank" rel="noreferrer" className="text-cyan-400 underline">(get one)</a>
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={settings.generationKeys?.[id] || ''}
+                      onChange={(e) => updateSettings({ generationKeys: { ...(settings.generationKeys || {}), [id]: e.target.value } })}
+                      placeholder={GENERATION_PROVIDERS[id].keyLabel}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-mono text-xs placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+                ))}
               </div>
 
               <div className="space-y-1.5 pt-2">

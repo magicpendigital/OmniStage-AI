@@ -24,6 +24,7 @@ import {
 import { omniHome, WorkspaceError } from './store';
 import { keepDraft, listDrafts, loadDraft, promoteDraft, saveDraft, trashDraft } from './drafts';
 import { join } from 'node:path';
+import { registerGenerateRoutes } from '../generate/routes';
 
 const personalLibrary = () => new AssetStore(join(omniHome(), 'library'));
 
@@ -118,6 +119,9 @@ export function registerWorkspaceRoutes(app: Express) {
   r.post('/extensions/install', route((req) => installExtension(req.body ?? {})));
   r.patch('/extensions/:id', route((req) => setExtensionEnabled(req.params.id, !!req.body?.enabled)));
   r.delete('/extensions/:id', route((req) => uninstallExtension(req.params.id)));
+
+  // Generation providers (Phase 6 Batch 3): results are saved into the library scope chosen by the user
+  registerGenerateRoutes(r, { route, storeFor });
 
   // Memory
   r.get('/memory', route(() => readMemory()));

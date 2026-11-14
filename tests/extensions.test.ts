@@ -17,7 +17,7 @@ test('every catalog extension is valid and reviewed', () => {
   for (const m of EXTENSION_CATALOG) {
     assert.deepEqual(validateManifest(m), [], m.id);
     const r = reviewExtension(m);
-    assert.equal(r.risk, m.mainSource ? 'medium' : 'low', m.id);
+    assert.equal(r.risk, m.mainSource || m.contributes?.generators?.length ? 'medium' : 'low', m.id);
   }
 });
 
