@@ -4,17 +4,27 @@
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { analyzeMesh, AnalysisReport, canonicalPositions, CharacterCategory, MeshData } from './analyze';
-import { BoneDef, fitSkeleton, RigSkeleton } from './skeleton';
-import { computeSkinWeights, SkinWeights, validateRig, RigValidation } from './skin';
-import { ClipData, proceduralClips } from './animate';
+import type { AnalysisReport, CharacterCategory, MeshData } from './analyze';
+import type { BoneDef, RigSkeleton } from './skeleton';
+import type { SkinWeights, RigValidation } from './skin';
+import type { ClipData } from './animate';
+import { rigMeshData, type CoreRigResult } from './pipeline';
+import { lastRigJobThread, runRigJob } from './rigJobs';
+import { mergeClips, type SourceClip, type SourceClipLibrary } from './clipLibrary';
 
 export interface RigResult {
   report: AnalysisReport;
   skeleton: RigSkeleton;
   skin: SkinWeights;
   validation: RigValidation;
+  /** Every clip of the character: procedural ones, replaced / extended by imported library clips. */
   clips: ClipData[];
+  proceduralClips: ClipData[];
+  importedClips: ClipData[];
+  /** Triangles of the simplified copy that was skinned (meshes above 300k triangles). */
+  proxyTriangles?: number;
+  /** Where the heavy maths ran. */
+  thread: 'worker' | 'main';
   /** Rigged character (SkinnedMesh + bones) in the canonical frame, ready to preview or export. */
   object: THREE.Group;
   mesh: THREE.SkinnedMesh;
@@ -35,6 +45,8 @@ export interface RigJson {
   score: number;
   poses: RigValidation['poses'];
   clips: string[];
+  /** Clips that came from an imported library (retargeted), not generated. */
+  importedClips?: string[];
   warnings: string[];
   createdAt: string;
 }
@@ -164,24 +176,16 @@ export function assemble(geometry: THREE.BufferGeometry, materials: THREE.Materi
   return { object, mesh, animations };
 }
 
-/** Full automatic pipeline. `forceCategory` = the user's answer when the classification was unsure. */
-export function rigCharacter(root: THREE.Object3D, opts: { forceCategory?: CharacterCategory; skeleton?: RigSkeleton } = {}): RigResult {
+interface Prepared { geometry: THREE.BufferGeometry; materials: THREE.Material[]; data: MeshData }
+
+/** Main-thread part 1: every mesh of the scene merged into one indexed geometry (+ its materials). */
+export function prepareSource(root: THREE.Object3D): Prepared {
   const { geometry, materials } = mergeParts(collectParts(root));
-  const data = toMeshData(geometry);
-  const { report, points } = analyzeMesh(data, { forceCategory: opts.forceCategory });
-  // Bake the canonical frame (orientation, ground, size) into the geometry.
-  const canon = canonicalPositions(data, report.frame);
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(canon, 3));
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
-  const mesh: MeshData = { positions: canon, indices: data.indices };
-  const skeleton = opts.skeleton || fitSkeleton(report.category, points);
-  const skin = computeSkinWeights(mesh, skeleton);
-  const validation = validateRig(mesh, skeleton, skin);
-  const clips = proceduralClips(skeleton);
-  const built = assemble(geometry, materials, skeleton, skin, clips);
-  const rigJson: RigJson = {
+  return { geometry, materials, data: toMeshData(geometry) };
+}
+
+function rigJsonOf(report: AnalysisReport, skeleton: RigSkeleton, validation: RigValidation, clips: ClipData[], warnings: string[]): RigJson {
+  return {
     version: 1,
     generator: 'OmniRig',
     category: report.category,
@@ -193,39 +197,140 @@ export function rigCharacter(root: THREE.Object3D, opts: { forceCategory?: Chara
     score: validation.score,
     poses: validation.poses,
     clips: clips.map((c) => c.name),
-    warnings: [...report.warnings, ...skeleton.warnings],
+    warnings,
     createdAt: new Date().toISOString(),
   };
-  // keep the canonical geometry for re-rigging after manual joint edits
-  built.object.userData.omnirig = { geometry, materials, mesh };
-  return { report, skeleton, skin, validation, clips, ...built, rigJson };
 }
 
-/** Re-runs skinning + validation + clips with edited joints (manual fix), reusing the analysed geometry. */
-export function rerig(previous: RigResult, skeleton: RigSkeleton): RigResult {
+/** Main-thread part 2: the pipeline's plain-data result → a skinned THREE character. */
+function finish(prep: Prepared, core: CoreRigResult, thread: RigResult['thread']): RigResult {
+  const { geometry, materials, data } = prep;
+  // Bake the canonical frame (orientation, ground, size) into the geometry.
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(core.positions, 3));
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  const mesh: MeshData = { positions: core.positions, indices: data.indices };
+  const built = assemble(geometry, materials, core.skeleton, core.skin, core.clips);
+  const rigJson = rigJsonOf(core.report, core.skeleton, core.validation, core.clips, [...core.report.warnings, ...core.skeleton.warnings]);
+  // keep the canonical geometry for re-rigging after manual joint edits
+  built.object.userData.omnirig = { geometry, materials, mesh };
+  return {
+    report: core.report, skeleton: core.skeleton, skin: core.skin, validation: core.validation,
+    clips: core.clips, proceduralClips: core.clips, importedClips: [], proxyTriangles: core.proxyTriangles, thread,
+    ...built, rigJson,
+  };
+}
+
+/** Full automatic pipeline on the main thread (tests / fallback). `forceCategory` = the user's answer when unsure. */
+export function rigCharacter(root: THREE.Object3D, opts: { forceCategory?: CharacterCategory; skeleton?: RigSkeleton } = {}): RigResult {
+  const prep = prepareSource(root);
+  return finish(prep, rigMeshData(prep.data, opts), 'main');
+}
+
+/** Full automatic pipeline with the heavy maths in the OmniRig Web Worker (falls back to the main thread). */
+export async function rigCharacterAsync(root: THREE.Object3D, opts: { forceCategory?: CharacterCategory; skeleton?: RigSkeleton } = {}): Promise<RigResult> {
+  const prep = prepareSource(root);
+  const core = await runRigJob({ kind: 'rig', data: prep.data, opts });
+  return finish(prep, core, lastRigJobThread);
+}
+
+/** Re-runs skinning + validation + clips with edited joints (manual fix) in the worker, reusing the analysed geometry. */
+export async function rerigAsync(previous: RigResult, skeleton: RigSkeleton): Promise<RigResult> {
   const { geometry, materials, mesh } = previous.object.userData.omnirig as { geometry: THREE.BufferGeometry; materials: THREE.Material[]; mesh: MeshData };
-  const skin = computeSkinWeights(mesh, skeleton);
-  const validation = validateRig(mesh, skeleton, skin);
-  const clips = proceduralClips(skeleton);
-  const built = assemble(geometry, materials, skeleton, skin, clips);
+  const stage = await runRigJob({ kind: 'skin', mesh, skeleton });
+  const built = assemble(geometry, materials, skeleton, stage.skin, stage.clips);
   built.object.userData.omnirig = { geometry, materials, mesh };
   return {
     ...previous,
     skeleton,
-    skin,
-    validation,
-    clips,
+    skin: stage.skin,
+    validation: stage.validation,
+    clips: stage.clips,
+    proceduralClips: stage.clips,
+    importedClips: [],
+    proxyTriangles: stage.proxyTriangles,
+    thread: lastRigJobThread,
     ...built,
-    rigJson: {
-      ...previous.rigJson,
-      bones: skeleton.bones.map((b) => ({ name: b.name, parent: b.parent >= 0 ? skeleton.bones[b.parent].name : null, head: b.head.map((v) => +v.toFixed(4)) })),
-      grade: validation.grade,
-      score: validation.score,
-      poses: validation.poses,
-      warnings: [...previous.report.warnings, ...skeleton.warnings, 'Joints adjusted by hand.'],
-      createdAt: new Date().toISOString(),
-    },
+    rigJson: rigJsonOf(previous.report, skeleton, stage.validation, stage.clips, [...previous.report.warnings, ...skeleton.warnings, 'Joints adjusted by hand.']),
   };
+}
+
+/** The same rig with retargeted library clips added (same-named procedural clips are replaced). */
+export function withImportedClips(result: RigResult, imported: ClipData[]): RigResult {
+  const clips = mergeClips(result.proceduralClips, imported);
+  return {
+    ...result,
+    clips,
+    importedClips: imported,
+    animations: clips.map((c) => clipToThree(c, result.skeleton.bones)),
+    rigJson: { ...result.rigJson, clips: clips.map((c) => c.name), importedClips: imported.map((c) => c.name) },
+  };
+}
+
+// ================================================================================================ clip library import
+
+/**
+ * A loaded glTF with animations (e.g. a Mixamo character or clip exported as GLB) → plain clip data for `retargetLibrary`.
+ * Rest pose = the skin's bind pose (node transforms when there is no skin). Clips are resampled at `fps`; root bones carry
+ * their armature's rotation so every world rotation is in scene space.
+ */
+export function extractClipLibrary(scene: THREE.Object3D, animations: THREE.AnimationClip[], fps = 30): SourceClipLibrary {
+  let skeleton: THREE.Skeleton | undefined;
+  scene.traverse((o) => { if (!skeleton && (o as THREE.SkinnedMesh).isSkinnedMesh) skeleton = (o as THREE.SkinnedMesh).skeleton; });
+  scene.updateMatrixWorld(true);
+  if (skeleton) { skeleton.pose(); scene.updateMatrixWorld(true); }
+  const animated = new Set<string>();
+  for (const a of animations) for (const t of a.tracks) animated.add(THREE.PropertyBinding.parseTrackName(t.name).nodeName);
+  const skinBones = new Set<THREE.Object3D>(skeleton?.bones || []);
+  const nodes: THREE.Object3D[] = [];
+  scene.traverse((o) => { if (skinBones.size ? skinBones.has(o) : ((o as THREE.Bone).isBone || animated.has(o.name))) nodes.push(o); });
+  if (!nodes.length) throw new Error('No skeleton found in this file.');
+  const index = new Map(nodes.map((n, i) => [n, i]));
+  const parentOf = (n: THREE.Object3D) => { let p = n.parent; while (p && !index.has(p)) p = p.parent; return p ? index.get(p)! : -1; };
+  const armature = (n: THREE.Object3D) => (n.parent ? n.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion());
+  const q4 = (q: THREE.Quaternion): [number, number, number, number] => [q.x, q.y, q.z, q.w];
+  const bones = nodes.map((n) => {
+    const parent = parentOf(n);
+    const rest = parent < 0 ? armature(n).multiply(n.quaternion) : n.quaternion.clone();
+    const head = n.getWorldPosition(new THREE.Vector3());
+    return { name: n.name, parent, restLocal: q4(rest), head: [head.x, head.y, head.z] as [number, number, number] };
+  });
+  const root = nodes.find((n) => parentOf(n) < 0)!;
+  const clips: SourceClip[] = animations.map((a) => {
+    const duration = Math.max(a.duration, 1 / fps);
+    const count = Math.max(2, Math.round(duration * fps) + 1);
+    const times = Array.from({ length: count }, (_, k) => +((k / (count - 1)) * duration).toFixed(4));
+    const local: Record<string, number[]> = {};
+    let rootPositions: number[] | undefined;
+    for (const t of a.tracks) {
+      const { nodeName, propertyName } = THREE.PropertyBinding.parseTrackName(t.name);
+      const node = nodes.find((n) => n.name === nodeName);
+      if (!node) continue;
+      // set by KeyframeTrack.setInterpolation at runtime (slerp for quaternions), not in the typings
+      const interp = (t as unknown as { createInterpolant(): THREE.Interpolant }).createInterpolant();
+      if (propertyName === 'quaternion') {
+        const pre = parentOf(node) < 0 ? armature(node) : null;
+        const out: number[] = [];
+        for (const time of times) {
+          const v = interp.evaluate(time);
+          const q = new THREE.Quaternion(v[0], v[1], v[2], v[3]).normalize();
+          out.push(...q4(pre ? pre.clone().multiply(q) : q));
+        }
+        local[node.name] = out;
+      } else if (propertyName === 'position' && node === root) {
+        rootPositions = [];
+        const toWorld = node.parent ? node.parent.matrixWorld : new THREE.Matrix4();
+        for (const time of times) {
+          const v = interp.evaluate(time);
+          const p = new THREE.Vector3(v[0], v[1], v[2]).applyMatrix4(toWorld);
+          rootPositions.push(p.x, p.y, p.z);
+        }
+      }
+    }
+    return { name: a.name, duration, times, local, rootPositions };
+  });
+  return { skeleton: { bones }, rootBone: root.name, clips };
 }
 
 /** Rigged character → binary glTF (with every clip). */

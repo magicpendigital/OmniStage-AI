@@ -210,16 +210,42 @@ export function proceduralClips(sk: RigSkeleton): ClipData[] {
  * Inputs are plain data: for each source bone its rest world rotation and parent, and per key its local rotation.
  */
 export interface SourceSkeleton {
-  bones: Array<{ name: string; parent: number; restLocal: Quat }>;
+  /** `restLocal` of a root bone includes its parents' (armature) rotation, so world = scene space. `head` = rest joint
+   * position in scene space (needed for `matchRestDirections`). */
+  bones: Array<{ name: string; parent: number; restLocal: Quat; head?: Vec3 }>;
 }
 
+/** Shortest rotation taking direction a onto direction b. */
+export function quatFromTo(a: Vec3, b: Vec3): Quat {
+  const la = Math.hypot(a[0], a[1], a[2]) || 1, lb = Math.hypot(b[0], b[1], b[2]) || 1;
+  const u: Vec3 = [a[0] / la, a[1] / la, a[2] / la], v: Vec3 = [b[0] / lb, b[1] / lb, b[2] / lb];
+  const d = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+  if (d < -0.999999) {
+    // opposite: any axis perpendicular to u
+    const axis: Vec3 = Math.abs(u[0]) < 0.9 ? [0, -u[2], u[1]] : [-u[2], 0, u[0]];
+    const l = Math.hypot(axis[0], axis[1], axis[2]);
+    return [axis[0] / l, axis[1] / l, axis[2] / l, 0];
+  }
+  const c: Vec3 = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const q: Quat = [c[0], c[1], c[2], 1 + d];
+  const l = Math.hypot(q[0], q[1], q[2], q[3]);
+  return [q[0] / l, q[1] / l, q[2] / l, q[3] / l];
+}
+
+/**
+ * `matchRestDirections`: when the rest poses differ (an A-pose character, T-pose Mixamo clips) every single-child bone of
+ * the target first swings its rest direction onto the source's rest direction, so limbs end up pointing where the
+ * source's limbs point (world target = delta · swing) instead of keeping the target's rest offset.
+ */
 export function retargetClip(
   clip: { name: string; duration: number; times: number[]; local: Record<string, number[]> /* xyzw per key */ },
   source: SourceSkeleton,
   target: RigSkeleton,
-  map: (sourceBone: string) => string | null = (n) => n
+  map: (sourceBone: string) => string | null = (n) => n,
+  opts: { matchRestDirections?: boolean } = {}
 ): ClipData {
   const conj = (q: Quat): Quat => [-q[0], -q[1], -q[2], q[3]];
+  const swing = restSwings(source, target, map, !!opts.matchRestDirections);
   // source rest world rotations
   const restWorld: Quat[] = [];
   source.bones.forEach((b, i) => { restWorld[i] = b.parent < 0 ? b.restLocal : mul(restWorld[b.parent], b.restLocal); });
@@ -239,7 +265,7 @@ export function retargetClip(
       const ti = tName ? targetIndex.get(tName) : undefined;
       if (ti === undefined) return;
       // delta from rest, in world space: world · restWorld⁻¹ (applied on the target's identity rest)
-      targetWorld[ti][k] = mul(world[i], conj(restWorld[i]));
+      targetWorld[ti][k] = mul(mul(world[i], conj(restWorld[i])), swing[ti]);
       mapped.add(ti);
     });
   }
@@ -256,4 +282,25 @@ export function retargetClip(
     tracks.push({ bone: b.name, times: clip.times, rotations });
   });
   return { name: clip.name, duration: clip.duration, loop: true, tracks };
+}
+
+/** Per target bone: the swing from its rest direction to the mapped source bone's rest direction (identity if unknown). */
+function restSwings(source: SourceSkeleton, target: RigSkeleton, map: (n: string) => string | null, enabled: boolean): Quat[] {
+  const out: Quat[] = target.bones.map(() => [0, 0, 0, 1]);
+  if (!enabled) return out;
+  const srcOf = new Map<string, number>();
+  source.bones.forEach((b, i) => { const t = map(b.name); if (t && !srcOf.has(t)) srcOf.set(t, i); });
+  target.bones.forEach((b, i) => {
+    const kids = target.bones.map((c, j) => (c.parent === i ? j : -1)).filter((j) => j >= 0);
+    if (kids.length !== 1) return; // hips / chest: several children, rest directions do not say much
+    const si = srcOf.get(b.name), sj = srcOf.get(target.bones[kids[0]].name);
+    if (si === undefined || sj === undefined) return;
+    const sh = source.bones[si].head, sc = source.bones[sj].head;
+    if (!sh || !sc) return;
+    const tDir: Vec3 = [target.bones[kids[0]].head[0] - b.head[0], target.bones[kids[0]].head[1] - b.head[1], target.bones[kids[0]].head[2] - b.head[2]];
+    const sDir: Vec3 = [sc[0] - sh[0], sc[1] - sh[1], sc[2] - sh[2]];
+    if (Math.hypot(...tDir) < 1e-6 || Math.hypot(...sDir) < 1e-6) return;
+    out[i] = quatFromTo(tDir, sDir);
+  });
+  return out;
 }

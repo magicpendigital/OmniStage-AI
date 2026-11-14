@@ -7,7 +7,11 @@ import assert from 'node:assert/strict';
 import { analyzeMesh, canonicalPositions, MeshData, toCanonical, Vec3 } from '../src/rig/analyze';
 import { fitSkeleton, MIXAMO } from '../src/rig/skeleton';
 import { computeSkinWeights, posePositions, quatAxisAngle, validateRig } from '../src/rig/skin';
-import { proceduralClips, retargetClip } from '../src/rig/animate';
+import { proceduralClips, quatFromTo, retargetClip } from '../src/rig/animate';
+import { decimateMesh, transferSkin } from '../src/rig/decimate';
+import { rigMeshData, skinStage } from '../src/rig/pipeline';
+import { handleRigJob, lastRigJobThread, runRigJob } from '../src/rig/rigJobs';
+import { boneKey, boneMapper, importedClipName, mergeClips, retargetLibrary, retargetRootMotion, SourceClipLibrary } from '../src/rig/clipLibrary';
 import { SAMPLE_HUMANOID_JOINTS, sampleHumanoid, sampleQuadruped, transformMesh } from '../src/rig/fixtures';
 
 function rig(m0: MeshData, forceCategory?: 'humanoid' | 'quadruped' | 'prop') {
@@ -165,4 +169,193 @@ test('retargeting applies rest-pose deltas, so a different source rest pose does
   assert.ok(Math.abs(arm.rotations![3] - 1) < 1e-6);
   const angle = 2 * Math.acos(Math.min(1, Math.abs(arm.rotations![7]))) * (180 / Math.PI);
   assert.ok(Math.abs(angle - 40) < 0.5, `retargeted angle ${angle}`);
+});
+
+// ================================================================================================ big meshes / worker
+
+/** Midpoint subdivision without smoothing: every triangle → 4 (same shape, 4× the triangles). */
+function subdivide(m: MeshData): MeshData {
+  const pos = Array.from(m.positions);
+  const idx: number[] = [];
+  const mid = new Map<string, number>();
+  const get = (a: number, b: number) => {
+    const k = a < b ? `${a},${b}` : `${b},${a}`;
+    let v = mid.get(k);
+    if (v === undefined) {
+      v = pos.length / 3;
+      for (let i = 0; i < 3; i++) pos.push((pos[a * 3 + i] + pos[b * 3 + i]) / 2);
+      mid.set(k, v);
+    }
+    return v;
+  };
+  for (let t = 0; t < m.indices.length; t += 3) {
+    const a = m.indices[t], b = m.indices[t + 1], c = m.indices[t + 2];
+    const ab = get(a, b), bc = get(b, c), ca = get(c, a);
+    idx.push(a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca);
+  }
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+}
+
+test('decimation: vertex clustering hits the triangle budget, maps every vertex and is deterministic', () => {
+  const m = subdivide(subdivide(sampleHumanoid()));
+  const a = decimateMesh(m, 6000);
+  assert.ok(a.mesh.indices.length / 3 <= 6000, `${a.mesh.indices.length / 3} triangles`);
+  assert.ok(a.mesh.indices.length / 3 > 1500, 'not collapsed to almost nothing');
+  assert.equal(a.map.length, m.positions.length / 3);
+  const nv = a.mesh.positions.length / 3;
+  assert.ok(a.map.every((v) => v < nv));
+  assert.ok(a.mesh.indices.every((i) => i < nv));
+  // every original vertex stays within one cell of its cluster point
+  let worst = 0;
+  for (let i = 0; i < a.map.length; i++) {
+    const c = a.map[i];
+    worst = Math.max(worst, Math.hypot(m.positions[i * 3] - a.mesh.positions[c * 3], m.positions[i * 3 + 1] - a.mesh.positions[c * 3 + 1], m.positions[i * 3 + 2] - a.mesh.positions[c * 3 + 2]));
+  }
+  assert.ok(worst <= a.cell * Math.sqrt(3) + 1e-6);
+  const b = decimateMesh(m, 6000);
+  assert.deepEqual(Array.from(b.mesh.indices), Array.from(a.mesh.indices));
+  // weight transfer copies the cluster's 4 influences
+  const skin = { indices: new Uint16Array(nv * 4).map((_, i) => i % 7), weights: new Float32Array(nv * 4).fill(0.25) };
+  const t = transferSkin(skin, a.map);
+  assert.equal(t.indices.length, (m.positions.length / 3) * 4);
+  assert.deepEqual(Array.from(t.indices.slice(40, 44)), Array.from(skin.indices.slice(a.map[10] * 4, a.map[10] * 4 + 4)));
+});
+
+test('meshes above 300k triangles are skinned on a decimated copy; weights match full-resolution skinning', () => {
+  let m = sampleHumanoid();
+  while (m.indices.length / 3 <= 300_000) m = subdivide(m);
+  const n = m.positions.length / 3;
+  const big = rigMeshData(m);
+  assert.ok(big.proxyTriangles && big.proxyTriangles <= 100_000, `proxy ${big.proxyTriangles}`);
+  assert.equal(big.skin.weights.length, n * 4);
+  assert.match(big.report.warnings.join(' '), /simplified copy/);
+  assert.ok(['A', 'B'].includes(big.validation.grade), `grade ${big.validation.grade}`);
+  for (let v = 0; v < n; v += 997) {
+    const sum = big.skin.weights[v * 4] + big.skin.weights[v * 4 + 1] + big.skin.weights[v * 4 + 2] + big.skin.weights[v * 4 + 3];
+    assert.ok(Math.abs(sum - 1) < 1e-4);
+  }
+  const full = skinStage({ positions: big.positions, indices: m.indices }, big.skeleton, { maxTriangles: Infinity });
+  assert.equal(full.proxyTriangles, undefined);
+  let same = 0;
+  for (let i = 0; i < n; i++) if (full.skin.indices[i * 4] === big.skin.indices[i * 4]) same++;
+  assert.ok(same / n > 0.97, `dominant bone agrees on ${((100 * same) / n).toFixed(1)} % of vertices`);
+});
+
+test('rig jobs: the worker protocol returns plain data (+ transferables) and falls back to the main thread', async () => {
+  const data = sampleHumanoid();
+  const reply = handleRigJob({ id: 7, kind: 'rig', data, opts: {} });
+  assert.equal(reply.message.id, 7);
+  assert.ok(reply.message.ok);
+  assert.equal(reply.transfer.length, 3);
+  const res = (reply.message as { result: ReturnType<typeof rigMeshData> }).result;
+  assert.equal(res.report.category, 'humanoid');
+  const skinJob = handleRigJob({ id: 8, kind: 'skin', mesh: { positions: res.positions.slice(), indices: data.indices }, skeleton: res.skeleton });
+  assert.ok(skinJob.message.ok && skinJob.transfer.length === 2);
+  const bad = handleRigJob({ id: 9, kind: 'rig', data: null as unknown as MeshData, opts: {} });
+  assert.equal(bad.message.ok, false);
+  // node has no Worker → runs inline, same answer as the direct call (deterministic)
+  const viaJob = await runRigJob({ kind: 'rig', data, opts: {} });
+  assert.equal(lastRigJobThread, 'main');
+  assert.deepEqual(Array.from(viaJob.skin.indices.slice(0, 400)), Array.from(res.skin.indices.slice(0, 400)));
+  assert.equal(viaJob.validation.score, res.validation.score);
+});
+
+// ================================================================================================ clip library import
+
+type Q = [number, number, number, number];
+function rotateVec(q: Q, v: Vec3): Vec3 {
+  const [x, y, z, w] = q;
+  const ix = w * v[0] + y * v[2] - z * v[1], iy = w * v[1] + z * v[0] - x * v[2], iz = w * v[2] + x * v[1] - y * v[0], iw = -x * v[0] - y * v[1] - z * v[2];
+  return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x];
+}
+
+/** A Mixamo-format source built from the fitted rig: centimetres, "mixamorig1:" names, optional A-pose left arm. */
+function mixamoSource(skeleton: ReturnType<typeof rig>['skeleton'], opts: { armDownDeg?: number } = {}): SourceClipLibrary['skeleton'] {
+  const heads = skeleton.bones.map((b) => b.head.map((v) => v * 100) as Vec3);
+  if (opts.armDownDeg) {
+    const q = quatAxisAngle([0, 0, 1], -opts.armDownDeg) as Q;
+    const shoulder = skeleton.bones.findIndex((b) => b.name === MIXAMO('LeftArm'));
+    const inChain = (i: number): boolean => i === shoulder || (i >= 0 && skeleton.bones[i].parent >= 0 && inChain(skeleton.bones[i].parent));
+    const p0 = heads[shoulder];
+    skeleton.bones.forEach((_, i) => {
+      if (i === shoulder || !inChain(i)) return;
+      const d = rotateVec(q, [heads[i][0] - p0[0], heads[i][1] - p0[1], heads[i][2] - p0[2]]);
+      heads[i] = [p0[0] + d[0], p0[1] + d[1], p0[2] + d[2]];
+    });
+  }
+  return { bones: skeleton.bones.map((b, i) => ({ name: b.name.replace('mixamorig', 'mixamorig1:'), parent: b.parent, restLocal: [0, 0, 0, 1] as Q, head: heads[i] })) };
+}
+
+test('clip import: Mixamo bone names map onto the rig, clip names become the ones the AI uses', () => {
+  assert.equal(boneKey('mixamorig:LeftArm'), 'leftarm');
+  assert.equal(boneKey('mixamorig1_LeftForeArm'), 'leftforearm');
+  assert.equal(boneKey('Armature|mixamorigHips'), 'hips');
+  const map = boneMapper([MIXAMO('LeftArm'), MIXAMO('Hips')]);
+  assert.equal(map('mixamorig:LeftArm'), MIXAMO('LeftArm'));
+  assert.equal(map('mixamorig:LeftHandIndex1'), null);
+  assert.equal(importedClipName('mixamo.com', 'Slow Walking.glb'), 'Walking');
+  assert.equal(importedClipName('Armature|mixamo.com|Layer0', 'Ch09@Running.glb'), 'Running');
+  assert.equal(importedClipName('Samba Dancing', 'x.glb'), 'Dance');
+  assert.equal(importedClipName('mixamo.com', 'Fist Pump.glb'), 'Fist Pump');
+  assert.equal(importedClipName('Take 001', 'Kick.glb', 1, 2), 'Kick 2');
+  const proc = proceduralClips(rig(sampleHumanoid()).skeleton);
+  const merged = mergeClips(proc, [{ name: 'Walking', duration: 1, loop: true, tracks: [] }, { name: 'Fist Pump', duration: 1, loop: true, tracks: [] }]);
+  assert.equal(merged.filter((c) => c.name === 'Walking').length, 1);
+  assert.equal(merged.find((c) => c.name === 'Walking')!.tracks.length, 0);
+  assert.equal(merged.length, proc.length + 1);
+});
+
+test('clip import: a T-pose Mixamo clip retargets onto the rig with in-place, rescaled hips motion', () => {
+  const { skeleton } = rig(sampleHumanoid());
+  const src = mixamoSource(skeleton);
+  const keys = 5;
+  const times = Array.from({ length: keys }, (_, k) => k / (keys - 1));
+  const hips = skeleton.bones.find((b) => b.name === MIXAMO('Hips'))!.head.map((v) => v * 100);
+  const lib: SourceClipLibrary = {
+    skeleton: src,
+    rootBone: 'mixamorig1:Hips',
+    clips: [{
+      name: 'mixamo.com', duration: 1, times,
+      local: { 'mixamorig1:LeftArm': times.flatMap((t) => quatAxisAngle([0, 0, 1], -60 * t)) },
+      // walks 2 m forward (in cm) while bobbing 4 cm
+      rootPositions: times.flatMap((t) => [hips[0], hips[1] - 4 * Math.sin(t * Math.PI), hips[2] + 200 * t]),
+    }],
+  };
+  const out = retargetLibrary(lib, skeleton, 'Walking.glb');
+  assert.equal(out.clips[0].name, 'Walking');
+  assert.ok(out.matched >= out.total * 0.9, `${out.matched}/${out.total}`);
+  const arm = out.clips[0].tracks.find((t) => t.bone === MIXAMO('LeftArm'))!;
+  const last = arm.rotations!.slice((keys - 1) * 4);
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(last[3]))) * (180 / Math.PI);
+  assert.ok(Math.abs(angle - 60) < 1, `arm lowered ${angle.toFixed(1)}°`);
+  const root = out.clips[0].tracks.find((t) => t.positions)!;
+  assert.equal(root.bone, MIXAMO('Hips'));
+  const p = root.positions!;
+  // no forward travel (played in place); the bob is scaled from cm to the rig's metres
+  for (let k = 0; k < keys; k++) assert.ok(Math.abs(p[k * 3 + 2]) < 1e-6 && Math.abs(p[k * 3]) < 1e-6);
+  assert.ok(Math.abs(p[2 * 3 + 1] + 0.04) < 1e-3, `bob ${p[2 * 3 + 1]}`);
+  // the same file against a quadruped rig is refused with a reason
+  assert.throws(() => retargetLibrary(lib, rig(sampleQuadruped()).skeleton, 'Walking.glb'), /bones match/);
+  assert.deepEqual(retargetRootMotion([0, 100, 0, 0, 100, 50], [0, 100, 0], 1), [0, 0, 0, 0, 0, 0]);
+});
+
+test('clip import: rest directions are matched, so an A-pose source still points the arm where the source does', () => {
+  const { skeleton } = rig(sampleHumanoid());
+  const src = mixamoSource(skeleton, { armDownDeg: 45 });
+  const lib: SourceClipLibrary = { skeleton: src, rootBone: 'mixamorig1:Hips', clips: [{ name: 'Hold', duration: 1, times: [0, 1], local: {} }] };
+  const out = retargetLibrary(lib, skeleton, 'Hold.glb');
+  const arm = out.clips[0].tracks.find((t) => t.bone === MIXAMO('LeftArm'))!;
+  const q = arm.rotations!.slice(0, 4) as Q;
+  // the T-pose target's upper arm now points along the source's A-pose upper arm
+  const sh = skeleton.bones.find((b) => b.name === MIXAMO('LeftArm'))!.head, el = skeleton.bones.find((b) => b.name === MIXAMO('LeftForeArm'))!.head;
+  const dir = rotateVec(q, [el[0] - sh[0], el[1] - sh[1], el[2] - sh[2]]);
+  const sSh = src.bones.find((b) => b.name === 'mixamorig1:LeftArm')!.head!, sEl = src.bones.find((b) => b.name === 'mixamorig1:LeftForeArm')!.head!;
+  const sDir: Vec3 = [sEl[0] - sSh[0], sEl[1] - sSh[1], sEl[2] - sSh[2]];
+  const cos = (dir[0] * sDir[0] + dir[1] * sDir[1] + dir[2] * sDir[2]) / (Math.hypot(...dir) * Math.hypot(...sDir));
+  assert.ok(cos > 0.999, `arm direction cos ${cos}`);
+  // the forearm does not swing again (its parent already carries the swing)
+  const fore = out.clips[0].tracks.find((t) => t.bone === MIXAMO('LeftForeArm'))!;
+  assert.ok(Math.abs(Math.abs(fore.rotations![3]) - 1) < 1e-3);
+  const ft = quatFromTo([1, 0, 0], [0, 1, 0]);
+  assert.ok(Math.abs(ft[2] - Math.SQRT1_2) < 1e-6 && Math.abs(ft[3] - Math.SQRT1_2) < 1e-6);
 });

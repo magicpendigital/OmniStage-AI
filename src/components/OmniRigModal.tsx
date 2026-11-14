@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Bone as BoneIcon, Loader2, RotateCcw, Save, Upload, X } from 'lucide-react';
+import { Bone as BoneIcon, Download, Loader2, RotateCcw, Save, Upload, X } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { workspaceApi } from '../workspace/workspaceClient';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
@@ -10,9 +10,36 @@ import type { CharacterCategory } from '../rig/analyze';
 import { sampleHumanoid, sampleQuadruped } from '../rig/fixtures';
 import type { RigSkeleton } from '../rig/skeleton';
 import { stressPoses } from '../rig/skin';
-import { exportRiggedGlb, rerig, rigCharacter, RigResult } from '../rig/omnirig3d';
+import { exportRiggedGlb, extractClipLibrary, rerigAsync, rigCharacterAsync, RigResult, withImportedClips } from '../rig/omnirig3d';
+import { retargetLibrary, type SourceClipLibrary } from '../rig/clipLibrary';
+import type { ClipData } from '../rig/animate';
 
 type Source = { name: string; root: THREE.Object3D };
+/** A loaded clip file (kept as plain data so it can be retargeted again after re-rigging). */
+type ClipLib = { fileName: string; lib: SourceClipLibrary; clipCount: number };
+type LibStatus = { fileName: string; ok: boolean; text: string };
+
+/** Retargets every loaded clip file onto the rig; a file that does not fit is reported, not fatal. */
+function applyLibraries(res: RigResult, libs: ClipLib[]): { result: RigResult; status: LibStatus[] } {
+  if (!libs.length) return { result: res, status: [] };
+  const imported: ClipData[] = [];
+  const status: LibStatus[] = [];
+  for (const l of libs) {
+    try {
+      const out = retargetLibrary(l.lib, res.skeleton, l.fileName);
+      // a later file with the same clip name wins
+      for (const c of out.clips) {
+        const i = imported.findIndex((x) => x.name === c.name);
+        if (i >= 0) imported.splice(i, 1);
+        imported.push(c);
+      }
+      status.push({ fileName: l.fileName, ok: true, text: `${out.clips.map((c) => c.name).join(', ')} · ${out.matched}/${out.total} bones` });
+    } catch (e) {
+      status.push({ fileName: l.fileName, ok: false, text: (e as Error).message });
+    }
+  }
+  return { result: withImportedClips(res, imported), status };
+}
 const REST = '__rest';
 
 const SAMPLE_MODELS = ['gltf-soldier', 'gltf-robot-expressive', 'gltf-fox', 'gltf-horse'].filter((id) => ASSET_REGISTRY[id]?.modelUrl);
@@ -46,6 +73,12 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [clip, setClip] = useState<string>('Idle');
   const [stress, setStress] = useState<string | null>(null);
   const [name, setName] = useState('My character');
+  const [libs, setLibs] = useState<ClipLib[]>([]);
+  const [libStatus, setLibStatus] = useState<LibStatus[]>([]);
+  const libsRef = useRef<ClipLib[]>([]);
+  libsRef.current = libs;
+  /** Bumped on every rig request so a slow worker result for an old model is dropped. */
+  const runToken = useRef(0);
   const canvasHost = useRef<HTMLDivElement>(null);
   const view = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls; mixer?: THREE.AnimationMixer; content?: THREE.Object3D; joints: THREE.Mesh[]; raf: number } | null>(null);
   const editedSkeleton = useRef<RigSkeleton | null>(null);
@@ -203,37 +236,42 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   }, [clip, stress, result]);
 
   // ---------------------------------------------------------------- pipeline
-  const run = (src: Source, forceCategory?: CharacterCategory) => {
-    setBusy('Analysing and rigging…');
+  const run = async (src: Source, forceCategory?: CharacterCategory) => {
+    const token = ++runToken.current;
+    setBusy('Analysing and rigging (background worker)…');
     setError(null);
     setNotice(null);
     setStress(null);
-    setTimeout(() => {
-      try {
-        const res = rigCharacter(src.root, { forceCategory });
-        setResult(res);
-        // doubtful joints → open in the joint editor, otherwise show the idle clip
-        const doubtful = Object.values(res.skeleton.confidence).some((c) => c < 0.6) || res.validation.grade === 'D';
-        setClip(doubtful ? REST : 'Idle');
-      } catch (e) {
-        setError((e as Error).message || 'Rigging failed');
-      } finally {
-        setBusy(null);
-      }
-    }, 30);
+    try {
+      const rigged = await rigCharacterAsync(src.root, { forceCategory });
+      if (token !== runToken.current) return;
+      const { result: res, status } = applyLibraries(rigged, libsRef.current);
+      setLibStatus(status);
+      setResult(res);
+      // doubtful joints → open in the joint editor, otherwise show the idle clip
+      const doubtful = Object.values(res.skeleton.confidence).some((c) => c < 0.6) || res.validation.grade === 'D';
+      setClip(doubtful ? REST : 'Idle');
+    } catch (e) {
+      if (token === runToken.current) setError((e as Error).message || 'Rigging failed');
+    } finally {
+      if (token === runToken.current) setBusy(null);
+    }
   };
 
   useEffect(() => {
     const onMoved = () => {
       if (!result || !editedSkeleton.current) return;
+      const token = ++runToken.current;
       setBusy('Re-rigging with your joints…');
-      setTimeout(() => {
-        try {
-          setResult(rerig(result, editedSkeleton.current!));
-        } finally {
-          setBusy(null);
-        }
-      }, 30);
+      rerigAsync(result, editedSkeleton.current)
+        .then((res) => {
+          if (token !== runToken.current) return;
+          const applied = applyLibraries(res, libsRef.current);
+          setLibStatus(applied.status);
+          setResult(applied.result);
+        })
+        .catch((e) => token === runToken.current && setError((e as Error).message))
+        .finally(() => token === runToken.current && setBusy(null));
     };
     window.addEventListener('omnirig-joints-moved', onMoved);
     return () => window.removeEventListener('omnirig-joints-moved', onMoved);
@@ -268,6 +306,41 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
       setBusy(null);
       setError((e as Error).message);
     }
+  };
+
+  const importClips = async (files: File[]) => {
+    if (!result) return;
+    setBusy('Reading clips…');
+    setError(null);
+    try {
+      const added: ClipLib[] = [];
+      for (const file of files) {
+        const gltf = await new GLTFLoader().parseAsync(await file.arrayBuffer(), '');
+        if (!gltf.animations.length) throw new Error(`${file.name} has no animations.`);
+        added.push({ fileName: file.name, lib: extractClipLibrary(gltf.scene, gltf.animations), clipCount: gltf.animations.length });
+      }
+      const next = [...libs.filter((l) => !added.some((a) => a.fileName === l.fileName)), ...added];
+      const applied = applyLibraries(result, next);
+      setLibs(next);
+      setLibStatus(applied.status);
+      setResult(applied.result);
+      const firstNew = applied.result.importedClips[applied.result.importedClips.length - 1];
+      if (firstNew) { setStress(null); setClip(firstNew.name); }
+    } catch (e) {
+      setError(`Clip import failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeLibrary = (fileName: string) => {
+    if (!result) return;
+    const next = libs.filter((l) => l.fileName !== fileName);
+    const applied = applyLibraries(result, next);
+    setLibs(next);
+    setLibStatus(applied.status);
+    setResult(applied.result);
+    if (!applied.result.clips.some((c) => c.name === clip)) setClip('Idle');
   };
 
   const save = async () => {
@@ -359,6 +432,10 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                     <span className={`text-lg font-black ${GRADE_COLOR[r.validation.grade]}`} title={`Rig quality ${r.validation.score}/100`}>{r.validation.grade}</span>
                   </div>
                   <div className="text-slate-400">{r.report.triangles.toLocaleString()} triangles · up {r.report.frame.upAxis} · facing {r.report.frame.facingAxis} · symmetry {Math.round(r.report.symmetry * 100)} %</div>
+                  <div className="text-[10px] text-slate-500" data-testid="omnirig-thread">
+                    {r.thread === 'worker' ? 'Rigged in a background worker' : 'Rigged on the main thread'}
+                    {r.proxyTriangles ? ` · skinned on a simplified copy (${r.proxyTriangles.toLocaleString()} triangles), weights transferred to the full mesh` : ''}
+                  </div>
                   <label className="flex items-center gap-1.5">
                     <span className="text-slate-400">Type</span>
                     <select value={r.report.category} onChange={(e) => source && run(source, e.target.value as CharacterCategory)} className="flex-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700">
@@ -392,11 +469,31 @@ export const OmniRigModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                       title="Stop and show the joints: drag a yellow joint to move it (left / right stay mirrored), the rig is rebuilt when you let go">
                       Rest pose · edit joints
                     </button>
-                    {r.clips.map((c) => (
-                      <button key={c.name} type="button" onClick={() => { setStress(null); setClip(c.name); }}
-                        className={`px-2 py-0.5 rounded ${!stress && clip === c.name ? 'bg-cyan-500/30 text-cyan-100' : 'bg-slate-800 hover:bg-slate-700'}`}>{c.name}</button>
-                    ))}
+                    {r.clips.map((c) => {
+                      const imported = r.importedClips.includes(c);
+                      return (
+                        <button key={c.name} type="button" onClick={() => { setStress(null); setClip(c.name); }}
+                          title={imported ? 'Imported clip (retargeted onto this rig)' : 'Generated clip'}
+                          className={`px-2 py-0.5 rounded ${!stress && clip === c.name ? 'bg-cyan-500/30 text-cyan-100' : imported ? 'bg-violet-900/60 hover:bg-violet-800/60 text-violet-100' : 'bg-slate-800 hover:bg-slate-700'}`}>
+                          {c.name}{imported ? ' ↓' : ''}
+                        </button>
+                      );
+                    })}
                   </div>
+                  {r.report.category !== 'prop' && (
+                    <label className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg bg-violet-500/15 border border-violet-500/40 text-violet-100 cursor-pointer hover:bg-violet-500/25"
+                      title="Mixamo-format GLB(s) with animations (download from Mixamo as FBX, convert to GLB). Clips are retargeted onto this rig; a clip named Walking, Running … replaces the generated one.">
+                      <Download className="w-3.5 h-3.5" /> Import clips (Mixamo .glb)
+                      <input type="file" accept=".glb,.gltf" multiple className="hidden" data-testid="omnirig-clip-input"
+                        onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) importClips(f); }} />
+                    </label>
+                  )}
+                  {libStatus.map((st) => (
+                    <div key={st.fileName} className={`flex items-start gap-1 text-[10px] ${st.ok ? 'text-violet-200/90' : 'text-rose-300'}`}>
+                      <span className="flex-1 break-words"><span className="font-semibold">{st.fileName}</span>: {st.text}</span>
+                      <button type="button" onClick={() => removeLibrary(st.fileName)} aria-label={`Remove ${st.fileName}`} className="text-slate-500 hover:text-slate-200"><X className="w-3 h-3" /></button>
+                    </div>
+                  ))}
                 </div>
 
                 <div className="space-y-1.5">
