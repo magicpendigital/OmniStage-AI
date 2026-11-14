@@ -35,8 +35,9 @@ import {
   StandaloneAdNetwork,
 } from '../exporter/mediaExporter';
 import { canExportFilmFrames, exportFilmMP4 } from '../exporter/filmExport';
+import { MobileExportPanel } from './MobileExportPanel';
 
-type PublishTab = 'sequencer' | 'bundler' | 'snapshot';
+type PublishTab = 'sequencer' | 'bundler' | 'mobile' | 'snapshot';
 
 export const PublishModal: React.FC = () => {
   const isOpen = useStudioStore((s) => s.isPublishModalOpen);
@@ -309,6 +310,11 @@ export const PublishModal: React.FC = () => {
               id: 'bundler' as const,
               label: 'Standalone Game Bundler (HTML5 / ZIP)',
               icon: <Gamepad2 className="w-3.5 h-3.5 text-cyan-400" />,
+            },
+            {
+              id: 'mobile' as const,
+              label: 'Mobile App (PWA / Android / iOS)',
+              icon: <Smartphone className="w-3.5 h-3.5 text-emerald-400" />,
             },
             {
               id: 'snapshot' as const,
@@ -809,6 +815,8 @@ export const PublishModal: React.FC = () => {
           )}
 
           {/* TAB 3: SNAPSHOTS & MCA CONTRACT */}
+          {activeTab === 'mobile' && <MobileExportPanel onNotice={triggerToast} />}
+
           {activeTab === 'snapshot' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

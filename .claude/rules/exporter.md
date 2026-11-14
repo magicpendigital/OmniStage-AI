@@ -31,4 +31,8 @@ paths:
   `src/audio/piperVoice.ts` (Piper / onnxruntime) from the Player or runtime.
 - Scene data goes into the HTML through `inlineJSON` only (escapes `<`, U+2028/2029); asset embedding must respect the network budget and
   report what stays online.
+- Phase 8 mobile apps: builders in `src/exporter/mobileExport.ts` stay pure (tested in `tests/mobileExport.test.ts`); browser-only
+  art lives in `mobileAssets.ts`. App behaviour (haptics, saves, pause) runs only when `PlayerHtmlOptions.app` is set, so ad exports are
+  unchanged. Service workers only in the PWA build (the Capacitor build rejects them). Never write signing passwords into generated
+  files or command lines; they live in the user's git-ignored `keystore.properties`.
 - 2D physics live in `src/runtime/stage2d.ts` and must match `PLATFORMER_PHYSICS` in the verifier, so verified levels stay beatable everywhere.

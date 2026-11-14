@@ -18,6 +18,8 @@ import { Hud, PLAYER_CSS } from './hud';
 import { pendingLoads } from './loading';
 import { registerVoiceAssets } from '../audio/voices';
 import { setNodeBackend } from '../render3d/backend';
+import { createNativeBridge, NativeBridge } from './native';
+import { parseProgress, progressKey, recordRound, resumeSceneFor, SavedProgress } from '../runtime/progress';
 
 export interface OmniPlayerData {
   scenes: SceneSpec[];
@@ -34,6 +36,11 @@ export interface OmniPlayerOptions {
   sound?: boolean;
   /** Phase 7: 'webgpu' / 'auto' use WebGPU where the device has it (WebGPU build of the Player only), else WebGL. */
   renderer?: 'webgl' | 'webgpu' | 'auto';
+  /**
+   * Phase 8: app builds (PWA / Android / iOS). Turns on haptics, saved progress (best score, resume level) and
+   * pause on background. Ad exports leave it unset so their behaviour does not change.
+   */
+  app?: { saveKey: string; haptics?: boolean; saves?: boolean };
 }
 
 /** true only in the WebGPU build of the Player (scripts/build-player.mjs defines it); undefined in the studio. */
@@ -117,6 +124,14 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       .catch(() => { backend = 'webgl'; });
   }
 
+  // Phase 8: native bridge (Capacitor plugins inside the app shell, web APIs in a PWA).
+  const native: NativeBridge | null = options.app ? createNativeBridge() : null;
+  const haptic = (kind: Parameters<NativeBridge['haptic']>[0]) => {
+    if (native && options.app?.haptics !== false) native.haptic(kind);
+  };
+  const saveKey = options.app && options.app.saves !== false ? progressKey(options.app.saveKey) : null;
+  let progress: SavedProgress | null = null;
+
   const ctaUrl = () => store.getState().sceneSpec.marketingOverlay?.ctaUrl || '';
   const openCta = () => {
     const w = window as any;
@@ -195,6 +210,24 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   let raf = 0;
   let last = performance.now();
   let lastAspect = '';
+  let lastScore = store.getState().gameScore;
+  let endedKey = '';
+  const onRoundState = (s: ReturnType<typeof store.getState>) => {
+    if (!native) return;
+    if (s.gameScore > lastScore) haptic('light');
+    lastScore = s.gameScore;
+    const key = s.gameEnded ? `${s.activeSceneId}:${s.gameWon}` : '';
+    if (key === endedKey) return;
+    endedKey = key;
+    if (!key || s.sceneSpec.mode !== 'game') return;
+    haptic(s.gameWon ? 'success' : 'error');
+    if (saveKey && progress) {
+      const r = recordRound(progress, { sceneId: s.activeSceneId, score: s.gameScore, won: s.gameWon, nextSceneId: s.gameWon ? nextSceneIdFor(s) : null });
+      progress = r.progress;
+      native.save(saveKey, JSON.stringify(progress));
+      if (r.newBest && s.gameScore > 0) hud.showNotice(`New best: ${s.gameScore}`);
+    }
+  };
   const tick = (dt: number) => {
     if (backend === 'pending') return;
     input.pollGamepads();
@@ -210,6 +243,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     const spec = s.sceneSpec;
     const index = Math.max(0, s.scenes.findIndex((x) => x.id === s.activeSceneId));
     hud.update(s, index, s.scenes.length);
+    onRoundState(s);
     const next = nextSceneIdFor(s);
     const cta = spec.marketingOverlay?.enabled ? spec.marketingOverlay.ctaText : undefined;
     if (spec.mode === 'game') {
@@ -230,6 +264,40 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   };
   raf = requestAnimationFrame(loop);
 
+  // Phase 8: app builds pause in the background (no frames, soundtrack stopped) and resume where they were.
+  let manualMode = false;
+  let paused = false;
+  let wasPlaying = false;
+  const unsubscribeLifecycle = native
+    ? native.onLifecycle(
+        () => {
+          if (paused) return;
+          paused = true;
+          wasPlaying = store.getState().isPlaying;
+          cancelAnimationFrame(raf);
+          if (wasPlaying) store.setState({ isPlaying: false });
+        },
+        () => {
+          if (!paused) return;
+          paused = false;
+          if (wasPlaying) store.setState({ isPlaying: true });
+          if (!manualMode) {
+            last = performance.now();
+            raf = requestAnimationFrame(loop);
+          }
+        }
+      )
+    : () => undefined;
+  if (native && saveKey) {
+    const key = saveKey;
+    native.load(key).then((raw) => {
+      progress = parseProgress(raw);
+      const s = store.getState();
+      const target = resumeSceneFor(progress, s.scenes.map((x) => x.id), s.activeSceneId);
+      if (target !== s.activeSceneId && s.currentTime < 1 && !s.gameEnded) gotoScene(target);
+    });
+  }
+
   const handle: OmniPlayerHandle = {
     store,
     restart: restartScene,
@@ -240,8 +308,9 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       view3d: view instanceof View3D ? view.inspect() : undefined,
     }),
     manual: (on) => {
+      manualMode = on;
       cancelAnimationFrame(raf);
-      if (!on) {
+      if (!on && !paused) {
         last = performance.now();
         raf = requestAnimationFrame(loop);
       }
@@ -258,6 +327,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     canvas: () => (view ? view.canvas : null),
     destroy: () => {
       cancelAnimationFrame(raf);
+      unsubscribeLifecycle();
       ro.disconnect();
       input.dispose();
       uninstallAudio();
