@@ -25,6 +25,7 @@ import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
 import { DEVICE_PROFILES, DeviceTier } from '../runtime/deviceProfiles';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
+import { repairStateMachine, stateMachineIssues } from '../runtime/stateMachine';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -698,6 +699,26 @@ function fixMobile(spec: SceneSpec, i: VerificationIssue): string | null {
   return null;
 }
 
+// Phase 9: behaviour state machines (rules + repairs live in src/runtime/stateMachine.ts, shared with the AI normaliser).
+function machineHosts(spec: SceneSpec): Array<ActorNode | Node2D> {
+  return [...(spec.actors || []), ...(spec.nodes2D || [])].filter((h) => h.stateMachine !== undefined);
+}
+
+function verifyStateMachines(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const host of machineHosts(spec)) {
+    for (const m of stateMachineIssues(host, spec)) issues.push(issue(m.code, m.severity, `"${host.name}" ${m.message}`, m.fixable, host.id));
+  }
+}
+
+function fixStateMachine(spec: SceneSpec, i: VerificationIssue): string | null {
+  const host = machineHosts(spec).find((h) => h.id === i.targetId);
+  if (!host) return null;
+  const next = repairStateMachine(host, i.code);
+  if (next) host.stateMachine = next;
+  else delete host.stateMachine;
+  return next ? `Repaired "${host.name}" state machine (${i.code})` : `Removed "${host.name}" empty state machine`;
+}
+
 export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): VerificationReport {
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
@@ -708,6 +729,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifySoundtrack(spec, issues);
   verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
+  verifyStateMachines(spec, issues);
   if (opts.target === 'mobile') verifyMobile(spec, issues, opts.deviceTier);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
@@ -762,6 +784,8 @@ function makePlayer2D(): Node2D {
 
 function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): string | null {
   switch (i.code) {
+    case 'machine.invalid': case 'machine.no-initial': case 'machine.transition-missing': case 'machine.unreachable': case 'machine.clip-missing':
+      return fixStateMachine(spec, i);
     case 'mobile.text-small':
     case 'mobile.touch-target':
     case 'mobile.edge-ui':

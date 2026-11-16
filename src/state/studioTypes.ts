@@ -126,6 +126,8 @@ export interface StudioState {
   gameTimeRemaining: number;
   gameWon: boolean;
   gameEnded: boolean;
+  /** Phase 9: live behaviour state per actor / node id (written by src/runtime/stateMachine.ts). */
+  machineStates?: Record<string, string>;
   unboxTapCounts: Record<string, number>;
   scorePopups: FloatingScoreFeedback[];
   burstEffects: BurstVFXInstance[];

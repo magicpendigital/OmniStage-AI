@@ -182,6 +182,24 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Slug ids (lower-case, dashes), never a built-in preset name, ≤ 24 recipes per library, ≤ 8 colours, ≤ 16 notes, dur ≤ 4 s.
 - Keep palettes consistent with the scene's art direction and keep loud sounds (vol > 0.7) for rare moments.`,
   },
+  {
+    id: 'behaviour-state-machines',
+    title: 'Enemy & NPC behaviour',
+    description: 'Patrol / chase / attack enemies, reactive NPCs and doors as declarative state machines.',
+    triggers: ['enemy', 'enemies', 'patrol', 'chase', 'guard', 'npc', 'ai', 'behaviour', 'behavior', 'door', 'boss', 'quái', 'kẻ địch', 'tuần tra', 'đuổi', 'cửa', 'lính gác'],
+    engine: 'any',
+    mode: 'game',
+    source: 'builtin',
+    guidance: `BEHAVIOUR STATE MACHINES (actors[].stateMachine / nodes2D[].stateMachine, game mode):
+- One machine per character that acts on its own; 2-5 states with verbs as names (patrol, chase, attack, return, idle, wave, open).
+- Enemies: patrol (2-4 waypoints inside the arena) → chase-player when player-near 2.5-4 m (2D: 150-250 px) → attack on collided (Attack clip,
+  add-score negative or add-health, play-sfx 'hit') → back to chase after a 0.8-1.5 s timer → return-home when player-far, then patrol on arrived.
+- Make the chase slower than the player (3D ≤ 2.6 m/s, 2D ≤ 220 px/s) so it is escapable; always give a way out of every state.
+- NPCs: idle (move 'stay') ↔ wave/talk on player-near / player-far with a gap (near 2.5, far 4) so they do not flicker.
+- Doors / gates: closed → opening (timer 0.5-1 s, sfx 'click') → open (set-visible false or move-to) driven by score-at-least, signal or clicked.
+- Coordinate several machines with send-signal / signal (an alarm guard wakes the others). Use random { chance, every } for idle variety.
+- Use only clips the actor has (availableClips); leave clip unset to get Walk/Run/Idle automatically.`,
+  },
 ];
 
 const STOPWORDS = new Set([

@@ -497,6 +497,8 @@ export interface Node2D {
   spriteSheet?: SpriteSheetSpec;
   /** Phase 5: settings for `type: 'particle-emitter'`. */
   emitter?: Particle2DEmitterSpec;
+  /** Phase 9: behaviour state machine (game mode), run by src/runtime/stateMachine.ts. */
+  stateMachine?: ActorStateMachine;
 }
 
 // ============================================================================
@@ -584,6 +586,74 @@ export interface ActorNode {
    * renderers can add talk motion. Not saved.
    */
   talkLevel?: number;
+  /** Phase 9: behaviour state machine (game mode), run by src/runtime/stateMachine.ts. */
+  stateMachine?: ActorStateMachine;
+}
+
+// ============================================================================
+// PHASE 9: BEHAVIOUR STATE MACHINES (AI-authored data, interpreted by src/runtime/stateMachine.ts — never code)
+// ============================================================================
+
+/** How an actor moves while in a state. `points` are [x, y, z] in 3D or [x, y] in the 2D 1000x600 space. */
+export type StateMachineMove = 'stay' | 'patrol' | 'move-to' | 'chase-player' | 'flee-player' | 'return-home';
+
+/** Transition guard. Distances are metres (3D, x/z plane) or design px (2D). */
+export type StateMachineCondition =
+  | { type: 'player-near'; distance: number }
+  | { type: 'player-far'; distance: number }
+  /** Seconds spent in the current state. */
+  | { type: 'timer'; seconds: number }
+  /** move-to / return-home reached, patrol lap finished, chase caught up, 'stay' at once. */
+  | { type: 'arrived' }
+  /** The machine's own health (starts at `health`, changed by 'add-health'). */
+  | { type: 'health-below'; value: number }
+  | { type: 'score-at-least'; value: number }
+  /** Sent by a 'send-signal' action of any machine, or a logic-graph action { actionType: 'send-signal', signal }. */
+  | { type: 'signal'; name: string }
+  /** Touching the player. */
+  | { type: 'collided' }
+  /** Tapped / clicked. */
+  | { type: 'clicked' }
+  /** Seeded roll every `every` s (default 1) with probability `chance` (0..1). */
+  | { type: 'random'; chance: number; every?: number };
+
+/** Runs once when a state is entered. */
+export type StateMachineAction =
+  | { type: 'add-score'; amount: number }
+  | { type: 'add-health'; amount: number }
+  | { type: 'spawn-vfx'; vfx: VFXType; color?: string }
+  | { type: 'play-sfx'; sound: GameAudioEvent }
+  | { type: 'send-signal'; name: string }
+  | { type: 'set-visible'; visible: boolean }
+  | { type: 'end-game'; won: boolean };
+
+export interface StateMachineTransition {
+  to: string;
+  when: StateMachineCondition;
+}
+
+export interface StateMachineState {
+  /** 3D: skeletal clip (one of availableClips); 2D: spriteSheet clip. Moving states default to Walk / Run, 'stay' to Idle. */
+  clip?: string;
+  /** Procedural motion (non-rigged 3D actors). */
+  animation?: AnimationType;
+  move?: StateMachineMove;
+  /** patrol waypoints (looped) or the move-to target (first point). */
+  points?: Array<[number, number] | [number, number, number]>;
+  /** m/s in 3D (default 1.5), px/s in 2D (default 120). */
+  speed?: number;
+  onEnter?: StateMachineAction[];
+  /** Checked in order each frame; the first true one fires (at most one transition per frame). */
+  transitions?: StateMachineTransition[];
+}
+
+export interface ActorStateMachine {
+  initial: string;
+  states: Record<string, StateMachineState>;
+  /** Starting health for 'health-below' / 'add-health' (default 100). */
+  health?: number;
+  /** Seed for 'random' conditions (default 1). */
+  seed?: number;
 }
 
 /**
