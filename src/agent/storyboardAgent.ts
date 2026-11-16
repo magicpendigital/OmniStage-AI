@@ -204,6 +204,10 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
       : undefined,
     modelUrl: raw.customGlbUrl ? str(raw.modelUrl, raw.customGlbUrl) : entry.modelUrl,
     customGlbUrl: typeof raw.customGlbUrl === 'string' ? raw.customGlbUrl : undefined,
+    // Measured on placement (OmniRig); kept through AI edits so the mobile budget still sees it.
+    ...(raw.rigCost && Number.isFinite(raw.rigCost.bones) && Number.isFinite(raw.rigCost.vertices)
+      ? { rigCost: { bones: raw.rigCost.bones, vertices: raw.rigCost.vertices, ...(Number.isFinite(raw.rigCost.textureSize) ? { textureSize: raw.rigCost.textureSize } : {}) } }
+      : {}),
     // Phase 10C: character voice. The AI never picks 'elevenlabs' (paid, the creator's own key): only the creator does, in the Dialogue panel.
     ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
       ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
@@ -300,6 +304,7 @@ export function normalizeSoundtrack(raw: any): SoundtrackSpec | undefined {
       .filter((c: any) => c && Number.isFinite(c.time) && typeof c.sfx === 'string')
       .map((c: any) => ({ time: Math.max(0, c.time), sfx: c.sfx, ...(Number.isFinite(c.volume) ? { volume: c.volume } : {}) }));
   }
+  if (raw.footsteps === false) out.footsteps = false;
   if (Number.isFinite(raw.volume)) out.volume = raw.volume;
   return out;
 }

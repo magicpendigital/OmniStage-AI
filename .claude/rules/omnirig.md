@@ -13,6 +13,7 @@ paths:
 - Clip names must stay the ones the AI and `matchClipName` already use (Idle, Walking, Running, Wave, Jump, Yes, No, Sitting, Dance).
 - Retarget with `retargetClip` (rest-pose deltas), never `SkeletonUtils.retargetClip`. Imported libraries go through
   `clipLibrary.ts` (`retargetLibrary`, `matchRestDirections: true`); extraction from glTF is `extractClipLibrary` in omnirig3d.
+  Clip files are read only through `readAnimationFile` (GLB/glTF or Mixamo FBX). Placed characters get `rigCost` from `rigCostOf`.
 - The rig pipeline (`pipeline.ts`) must stay worker-safe: no Three.js, no DOM. The studio calls `rigCharacterAsync` / `rerigAsync`
   (`rigJobs.ts` → `rig.worker.ts`, inline fallback); meshes above 300k triangles are skinned on a decimated proxy (`decimate.ts`).
 - Keep `tests/omnirig.test.ts` green: joints within 9 cm on the sample humanoid at any yaw / scale, no arm-to-ribs bleed, A/B grades

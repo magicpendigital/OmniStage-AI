@@ -144,3 +144,58 @@ test('rigPoseInputFor: foot IK only on terrain while standing on it', () => {
 
 import { terrainGroundY } from '../src/runtime/cinematics';
 const rigGround = (spec: SceneSpec, x: number, z: number) => terrainGroundY(spec.world, x, z);
+
+import { SPRING, SPRING_NAME, springDisplacement } from '../src/render3d/rigPose';
+
+test('springDisplacement: still or steady motion is calm; a push lags behind, then overshoots and settles', () => {
+  const still = springDisplacement(() => new THREE.Vector3(1, 0, 2));
+  assert.ok(still.length() < 1e-9);
+  const steady = springDisplacement((k) => new THREE.Vector3(3 - k * SPRING.dt * 2, 0, 0)); // 2 m/s along +x
+  assert.ok(steady.length() < 1e-6, `steady ${steady.length()}`);
+  // Support accelerates along +x from t = 0 (now = t): x(t) = a t² / 2.
+  const pushAt = (now: number) => springDisplacement((k) => {
+    const t = Math.max(0, now - k * SPRING.dt);
+    return new THREE.Vector3(1.5 * t * t, 0, 0);
+  });
+  assert.ok(pushAt(0.2).x < -0.005, 'lags behind the push');
+  // Push then stop (constant velocity afterwards): overshoots forward, then dies out.
+  const stopAt = (now: number) => springDisplacement((k) => {
+    const t = Math.max(0, now - k * SPRING.dt);
+    return new THREE.Vector3(t < 0.5 ? 1.5 * t * t : 0.375 + 1.5 * (t - 0.5), 0, 0);
+  });
+  const xs = [0.6, 0.7, 0.8, 0.9].map((t) => stopAt(t).x);
+  assert.ok(Math.max(...xs) > 0.002, `overshoot ${xs}`);
+  assert.ok(Math.abs(stopAt(2.4).x) < Math.abs(Math.max(...xs)) * 0.2, 'settles');
+});
+
+test('RigPoseLayer: spring chains swing with the body, deterministically, and leave arms alone', () => {
+  assert.ok(SPRING_NAME.test('tail1') && SPRING_NAME.test('leftear') && SPRING_NAME.test('earl') && SPRING_NAME.test('hair02'));
+  assert.ok(!SPRING_NAME.test('leftforearm') && !SPRING_NAME.test('head') && !SPRING_NAME.test('spine'));
+  const s = skeleton();
+  const t1 = new THREE.Bone(); t1.name = 'Tail1'; t1.position.set(0, 0, -0.1); s.hips.add(t1);
+  const t2 = new THREE.Bone(); t2.name = 'Tail2'; t2.position.set(0, 0, -0.3); t1.add(t2);
+  const te = new THREE.Bone(); te.name = 'TailEnd'; te.position.set(0, 0, -0.3); t2.add(te);
+  s.root.updateMatrixWorld(true);
+  const layer = new RigPoseLayer(s.root);
+  assert.ok(layer.hasSprings);
+  const rest = te.getWorldPosition(new THREE.Vector3());
+  // Strafe to +x with an eased push from t = 1 to t = 2.
+  const motionAt = (t: number) => {
+    const u = Math.min(1, Math.max(0, t - 1));
+    return { position: [2 * u * u * (3 - 2 * u), 0, 0] as [number, number, number], yaw: 0 };
+  };
+  layer.apply({ yaw: 0, motion: { at: motionAt, time: 0.5 } });
+  s.root.updateMatrixWorld(true);
+  assert.ok(te.getWorldPosition(new THREE.Vector3()).distanceTo(rest) < 1e-6, 'still before the move');
+  layer.apply({ yaw: 0, motion: { at: motionAt, time: 1.3 } });
+  s.root.updateMatrixWorld(true);
+  const swung = te.getWorldPosition(new THREE.Vector3());
+  assert.ok(swung.x < rest.x - 0.01, `tail lags to -x: ${swung.x}`);
+  // Scrubbing: the same time gives the same pose, whatever came before.
+  layer.apply({ yaw: 0, motion: { at: motionAt, time: 3.9 } });
+  layer.apply({ yaw: 0, motion: { at: motionAt, time: 1.3 } });
+  s.root.updateMatrixWorld(true);
+  assert.ok(te.getWorldPosition(new THREE.Vector3()).distanceTo(swung) < 1e-9);
+  // Hips / legs untouched by the springs.
+  assert.ok(Math.abs(s.hips.position.y - 1) < 1e-9);
+});

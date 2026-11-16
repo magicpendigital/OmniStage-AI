@@ -10,7 +10,7 @@ import type { CharacterCategory } from '../rig/analyze';
 import { sampleHumanoid, sampleQuadruped } from '../rig/fixtures';
 import type { RigSkeleton } from '../rig/skeleton';
 import { stressPoses } from '../rig/skin';
-import { exportRiggedGlb, extractClipLibrary, rerigAsync, rigCharacterAsync, RigResult, withImportedClips } from '../rig/omnirig3d';
+import { exportRiggedGlb, extractClipLibrary, readAnimationFile, rigCostOf, rerigAsync, rigCharacterAsync, RigResult, withImportedClips } from '../rig/omnirig3d';
 import { retargetLibrary, type SourceClipLibrary } from '../rig/clipLibrary';
 import type { ClipData } from '../rig/animate';
 
@@ -341,9 +341,9 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
     try {
       const added: ClipLib[] = [];
       for (const file of files) {
-        const gltf = await new GLTFLoader().parseAsync(await file.arrayBuffer(), '');
-        if (!gltf.animations.length) throw new Error(`${file.name} has no animations.`);
-        added.push({ fileName: file.name, lib: extractClipLibrary(gltf.scene, gltf.animations), clipCount: gltf.animations.length });
+        const anim = await readAnimationFile(await file.arrayBuffer(), file.name);
+        if (!anim.animations.length) throw new Error(`${file.name} has no animations.`);
+        added.push({ fileName: file.name, lib: extractClipLibrary(anim.scene, anim.animations), clipCount: anim.animations.length });
       }
       const next = [...libs.filter((l) => !added.some((a) => a.fileName === l.fileName)), ...added];
       const applied = applyLibraries(result, next);
@@ -388,13 +388,21 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
         boundingBox: { width: +size.x.toFixed(2), height: +size.y.toFixed(2), depth: +size.z.toFixed(2) },
         attachmentSockets: { ground: [0, 0, 0] as [number, number, number], top_badge: [0, +(size.y + 0.3).toFixed(2), 0] as [number, number, number] },
       };
+      // The placed actor carries its measured skinning cost for the mobile budget (mobile.rig-cost).
+      const tagRigCost = () => {
+        const st = useStudioStore.getState();
+        const placed = st.sceneSpec.actors[st.sceneSpec.actors.length - 1];
+        if (placed?.modelUrl && placed.assetId.startsWith('custom-glb-')) st.updateActor(placed.id, { rigCost: rigCostOf(result) });
+      };
       if (workspaceAvailable) {
         const asset = await workspaceApi.uploadToLibrary('personal', file, { tags: ['rigged', 'omnirig', result.report.category], source: 'omnirig' });
         await workspaceApi.updateAsset('personal', asset.id, { name, kind: 'model', meta: { rig: result.rigJson } });
         registerAndSpawnCustomAsset(name, workspaceApi.assetUrl('personal', asset.id), 'glb', entry);
+        tagRigCost();
         setNotice(`Saved to My Library (rigged GLB + rig.json, grade ${result.validation.grade}) and added to the scene.`);
       } else {
         registerAndSpawnCustomAsset(name, URL.createObjectURL(file), 'glb', entry);
+        tagRigCost();
         setNotice('Added to the scene (My Library needs OmniStage running locally to keep the file).');
       }
     } catch (e) {
@@ -509,8 +517,8 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
                   {r.report.category !== 'prop' && (
                     <label className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg bg-violet-500/15 border border-violet-500/40 text-violet-100 cursor-pointer hover:bg-violet-500/25"
                       title="Mixamo-format GLB(s) with animations (download from Mixamo as FBX, convert to GLB). Clips are retargeted onto this rig; a clip named Walking, Running … replaces the generated one.">
-                      <Download className="w-3.5 h-3.5" /> Import clips (Mixamo .glb)
-                      <input type="file" accept=".glb,.gltf" multiple className="hidden" data-testid="omnirig-clip-input"
+                      <Download className="w-3.5 h-3.5" /> Import clips (Mixamo .fbx / .glb)
+                      <input type="file" accept=".glb,.gltf,.fbx" multiple className="hidden" data-testid="omnirig-clip-input"
                         onChange={(e) => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) importClips(f); }} />
                     </label>
                   )}
