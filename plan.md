@@ -269,7 +269,15 @@ vertices, texture size of OmniRig characters).
 - [x] FBX clip import (2026-11-16): OmniRig "Import clips" accepts Mixamo `.fbx` (FBXLoader) as well as `.glb`; not yet checked
   against a real Mixamo download.
 - [ ] LLM state machine JSON.
-- [ ] Weight painting; bird / serpent templates; finger bones.
+- [ ] Weight painting.
+- [x] Bird / serpent templates (2026-11-16): `bird` = thin wings spread wide at mid height + legs (spine, neck, head, 3-bone
+  wings, 2 legs, tail; clips Idle / Walking / Running / Flying / Gliding / Peck; stress poses wings up / down, peck); `serpent` =
+  long and low, normalised to 2 m long (10–16 spine bones + head + jaw; travelling-wave slither Idle / Walking / Running + Attack;
+  coil / S-curve / rear up). Both auto-detected or picked in OmniRig; samples grade A on the synthetic meshes.
+- [x] Finger bones (2026-11-16): open hands with separated fingers get Mixamo chains (`mixamorigLeftHandIndex1..4` …, thumb
+  included) from a 2D distance transform of the hand in the palm plane; weights stay on one finger per vertex; clips curl the
+  fingers; Mixamo finger tracks retarget. Mitten / touching / curled fingers keep one hand bone with a warning. Not yet checked
+  on real models.
 - [x] Provider plugins (2026-11-16): Meshy rig + animation (`meshy-rig-animator`: rigging → animations with Animation Library
   action ids) and Tripo rig + retarget (`tripo-rig-animator`: v3 upload → rig → retarget presets, biped + quadruped), BYO keys.
   The source is a GLB from My Library; the result's clips are renamed to Idle / Walking / Running… (`server/generate/glb.ts`)

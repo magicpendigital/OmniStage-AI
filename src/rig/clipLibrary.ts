@@ -5,7 +5,7 @@
  * imported walk replaces the procedural one, and hips motion is scaled to the target and kept in place.
  */
 import type { Vec3 } from './analyze';
-import type { RigSkeleton } from './skeleton';
+import { fingerChainOf, type RigSkeleton } from './skeleton';
 import { ClipData, retargetClip, SourceSkeleton } from './animate';
 
 export interface SourceClip {
@@ -50,7 +50,9 @@ export function boneMapper(targetNames: string[]): (source: string) => string | 
 const CANONICAL: Array<[string, RegExp]> = [
   ['Idle', /idle|breath|stand/i],
   ['Running', /run|sprint|jog/i],
-  ['Walking', /walk/i],
+  ['Walking', /walk|slither/i],
+  ['Gliding', /glid/i],
+  ['Flying', /fly|flap|soar/i],
   ['Wave', /wav|hello|greet/i],
   ['Jump', /jump|hop/i],
   ['Sitting', /sit/i],
@@ -94,8 +96,12 @@ export function retargetLibrary(lib: SourceClipLibrary, target: RigSkeleton, fil
   const moving = target.bones.filter((b, i) => target.bones.some((c) => c.parent === i) || b.parent < 0);
   const matched = moving.filter((b) => hit.has(b.name)).length;
   if (!lib.clips.length) throw new Error(`${fileName} has no animations.`);
-  if (matched < Math.max(3, moving.length * 0.5)) {
-    throw new Error(`Only ${matched} of ${moving.length} bones match by name — ${fileName} does not look like a ${target.category === 'humanoid' ? 'Mixamo-format humanoid' : target.category} clip file.`);
+  // Finger bones retarget when the file has them, but a file without fingers is still a valid body clip file.
+  const body = moving.filter((b) => !fingerChainOf(b.name));
+  const bodyMatched = body.filter((b) => hit.has(b.name)).length;
+  const sourceHasFingers = lib.skeleton.bones.some((b) => !!fingerChainOf(b.name));
+  if (bodyMatched < Math.max(3, body.length * 0.5)) {
+    throw new Error(`Only ${bodyMatched} of ${body.length} bones match by name — ${fileName} does not look like a ${target.category === 'humanoid' ? 'Mixamo-format humanoid' : target.category} clip file.`);
   }
   const targetRoot = map(lib.rootBone);
   const rootDef = target.bones.find((b) => b.name === targetRoot);
@@ -113,7 +119,7 @@ export function retargetLibrary(lib: SourceClipLibrary, target: RigSkeleton, fil
     }
     return out;
   });
-  return { clips, matched, total: moving.length, unmatchedTarget: moving.filter((b) => !hit.has(b.name)).map((b) => b.name) };
+  return { clips, matched, total: moving.length, unmatchedTarget: (sourceHasFingers ? moving : body).filter((b) => !hit.has(b.name)).map((b) => b.name) };
 }
 
 /** Imported clips win over procedural ones with the same name; the rest are appended. */
