@@ -18,10 +18,24 @@ const loadPrompts = () => import('./src/agent/systemPrompts.ts');
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  // HOST: the desktop app binds 127.0.0.1 (phone preview over the LAN needs 0.0.0.0, the default).
+  const HOST = process.env.HOST || '0.0.0.0';
 
   // 0. Bind port 3000 immediately on startup so health checks succeed in <200ms
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+  });
+
+  // Graceful shutdown (desktop app, Ctrl+C): stop accepting connections, then exit. Workspace writes are atomic.
+  const shutdown = () => {
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+  // Electron utility process (desktop/main.cjs): signals don't reach it on Windows, so the app asks via parentPort.
+  (process as any).parentPort?.on('message', (e: any) => {
+    if (e?.data?.type === 'omnistage:shutdown') shutdown();
   });
 
   app.use(express.json({ limit: '25mb' }));
@@ -307,7 +321,8 @@ Detect any overlapping objects, off-frame cameras, ungrounded actors, or low-con
       }
     });
   } else {
-    const distPath = path.join(__dirname, 'dist');
+    // OMNISTAGE_DIST_DIR: the bundled server (dist-server/, desktop app) lives next to, not above, the built studio.
+    const distPath = process.env.OMNISTAGE_DIST_DIR ? path.resolve(process.env.OMNISTAGE_DIST_DIR) : path.join(__dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
