@@ -20,6 +20,8 @@ import { registerVoiceAssets } from '../audio/voices';
 import { setNodeBackend } from '../render3d/backend';
 import { createNativeBridge, NativeBridge } from './native';
 import { parseProgress, progressKey, recordRound, resumeSceneFor, SavedProgress } from '../runtime/progress';
+import { AppPerfOptions, createPerfMonitor, PerfMonitor } from './perf';
+import type { PerfReport } from '../runtime/qualityGovernor';
 
 export interface OmniPlayerData {
   scenes: SceneSpec[];
@@ -40,7 +42,7 @@ export interface OmniPlayerOptions {
    * Phase 8: app builds (PWA / Android / iOS). Turns on haptics, saved progress (best score, resume level) and
    * pause on background. Ad exports leave it unset so their behaviour does not change.
    */
-  app?: { saveKey: string; haptics?: boolean; saves?: boolean };
+  app?: { saveKey: string; haptics?: boolean; saves?: boolean } & AppPerfOptions;
 }
 
 /** true only in the WebGPU build of the Player (scripts/build-player.mjs defines it); undefined in the studio. */
@@ -70,6 +72,10 @@ export interface OmniPlayerHandle {
   canvas: () => HTMLCanvasElement | null;
   /** Hold or release a logical key ('arrowright', ' ', …) as if pressed (tests / accessibility tools). */
   setKey: (key: string, down: boolean) => void;
+  /** Phase 8: device tier + adaptive quality report (app builds only; null in ad exports). */
+  perf: () => PerfReport | null;
+  /** Phase 8: feed `count` synthetic frames of `frameMs` to the governor (tests / tuning; app builds only). */
+  perfSample: (frameMs: number, count?: number) => void;
 }
 
 function pickQuality(q: OmniPlayerOptions['quality']): QualityLevel {
@@ -103,7 +109,22 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   const input = new InputManager({ onKeyPress: (key, code) => runtimeFor().emit('key-press', { key, code }) });
   const assets = options.assets || {};
   const resolveUrl = (url: string) => assets[url] || url;
-  const quality = pickQuality(options.quality);
+  // Phase 8: native bridge (Capacitor plugins inside the app shell, web APIs in a PWA).
+  const native: NativeBridge | null = options.app ? createNativeBridge() : null;
+  // Phase 8: app builds pick a device tier and adapt quality to measured frame times (src/player/perf.ts).
+  let perf: PerfMonitor | null = null;
+  if (options.app) {
+    perf = createPerfMonitor({
+      root,
+      app: options.app,
+      quality: options.quality,
+      native,
+      onChange: (s) => {
+        if (view instanceof View3D) view.applySettings(s);
+      },
+    });
+  }
+  const quality = perf ? perf.playerQuality : pickQuality(options.quality);
   const touch = options.touchControls === 'auto' || options.touchControls === undefined ? isTouchDevice() : options.touchControls;
 
   // Phase 7: optional WebGPU. Frames wait until the device is ready; without a WebGPU adapter the Player stays on WebGL.
@@ -124,8 +145,6 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       .catch(() => { backend = 'webgl'; });
   }
 
-  // Phase 8: native bridge (Capacitor plugins inside the app shell, web APIs in a PWA).
-  const native: NativeBridge | null = options.app ? createNativeBridge() : null;
   const haptic = (kind: Parameters<NativeBridge['haptic']>[0]) => {
     if (native && options.app?.haptics !== false) native.haptic(kind);
   };
@@ -186,7 +205,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     const engine = store.getState().sceneSpec.engineType;
     if (engine === viewEngine && view) return;
     view?.dispose();
-    view = engine === '2d' ? new View2D(frame, runtimes['2d'], input, resolveUrl) : new View3D(frame, runtimes['3d'], input, resolveUrl, quality, sharedRenderer || undefined);
+    view = engine === '2d' ? new View2D(frame, runtimes['2d'], input, resolveUrl) : new View3D(frame, runtimes['3d'], input, resolveUrl, quality, sharedRenderer || undefined, perf?.settings());
     frame.insertBefore(view.canvas, hud.root);
     viewEngine = engine;
   };
@@ -258,6 +277,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   };
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
+    perf?.frame(now - last);
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
     tick(dt);
@@ -275,11 +295,13 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
           paused = true;
           wasPlaying = store.getState().isPlaying;
           cancelAnimationFrame(raf);
+          perf?.pause();
           if (wasPlaying) store.setState({ isPlaying: false });
         },
         () => {
           if (!paused) return;
           paused = false;
+          perf?.resume();
           if (wasPlaying) store.setState({ isPlaying: true });
           if (!manualMode) {
             last = performance.now();
@@ -325,9 +347,14 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       if (view instanceof View3D) view.resize();
     },
     canvas: () => (view ? view.canvas : null),
+    perf: () => (perf ? perf.report() : null),
+    perfSample: (frameMs, count = 1) => {
+      for (let i = 0; i < count; i++) perf?.frame(frameMs);
+    },
     destroy: () => {
       cancelAnimationFrame(raf);
       unsubscribeLifecycle();
+      perf?.destroy();
       ro.disconnect();
       input.dispose();
       uninstallAudio();

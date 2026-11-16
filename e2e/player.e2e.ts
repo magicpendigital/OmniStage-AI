@@ -157,3 +157,42 @@ test('3D dialogue: the speaker talks, turns to its listener and the line is capt
   await expect(page.locator('.omni-captions')).toContainText('Xin chào! Mình là chú robot nhỏ.');
   expect(p.errors).toEqual([]);
 });
+
+test('app build: device tier + adaptive quality steps down on slow frames (Phase 8)', async ({ page }) => {
+  const p = await openExport(page, template('open-world-nature-island'), { app: { saveKey: 'com.omnistage.perftest', tier: 'high' } });
+  await p.step(10);
+  const perf = () => page.evaluate(() => (window as any).__omniPlayer.perf());
+  const quality = () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d.quality);
+  let report = await perf();
+  expect(report.tier).toBe('high');
+  expect(report.rung).toBe(0);
+  expect(await quality()).toMatchObject({ shadows: 'full', postFx: true, particleScale: 1 });
+  // Frame-stepping (MP4 / manual mode) never feeds the governor.
+  const framesBefore = report.frames;
+  await p.step(20);
+  expect((await perf()).frames).toBe(framesBefore);
+  // 25 fps for ~12 s of synthetic frames → several steps down the ladder.
+  await page.evaluate(() => (window as any).__omniPlayer.perfSample(40, 300));
+  report = await perf();
+  expect(report.steps.length).toBeGreaterThanOrEqual(2);
+  expect(report.steps.every((s: any) => s.reason === 'slow')).toBe(true);
+  expect(report.rung).toBeGreaterThan(1);
+  expect((await quality()).postFx).toBe(false);
+  await p.step(5);
+  const px = await p.pixelStats();
+  expect(px.std, 'still renders after the quality change').toBeGreaterThan(8);
+  expect(p.errors).toEqual([]);
+});
+
+test('app build: auto tier detection picks low on software rendering; ad exports report no profile (Phase 8)', async ({ page }) => {
+  const app = await openExport(page, template('coin-rush-playable'), { quality: 'auto', app: { saveKey: 'com.omnistage.autotier' } });
+  await app.step(5);
+  const report = await page.evaluate(() => (window as any).__omniPlayer.perf());
+  expect(report.tier).toBe('low');
+  expect(report.reasons.join(' ')).toMatch(/software/);
+  expect(app.errors).toEqual([]);
+
+  const ad = await openExport(page, template('coin-rush-playable'));
+  await ad.step(5);
+  expect(await page.evaluate(() => (window as any).__omniPlayer.perf())).toBeNull();
+});

@@ -2,7 +2,7 @@
  * Phase 8 — Publish → Mobile App: installable PWA, Capacitor Android / iOS project, mobile checks and store assistant.
  */
 import React from 'react';
-import { AlertCircle, Check, Download, Globe, ListChecks, Smartphone, Wand2 } from 'lucide-react';
+import { AlertCircle, Check, Download, Gauge, Globe, ListChecks, Smartphone, Wand2 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildZip } from '../exporter/playableBundle';
 import { buildStandalonePlayable, downloadBlob, slugifyTitle } from '../exporter/mediaExporter';
@@ -21,6 +21,7 @@ import {
 } from '../exporter/mobileExport';
 import { renderAppIcons, renderStoreScreenshot } from '../exporter/mobileAssets';
 import { autoFixSceneSpec, verifySceneSpec } from '../verification/sceneVerifier';
+import { DEVICE_PROFILES, DEVICE_TIERS, DeviceTier, QUALITY_LADDER } from '../runtime/deviceProfiles';
 
 type ReadyCap = NativeCapability['id'];
 
@@ -37,11 +38,12 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
   const [screens, setScreens] = React.useState<Uint8Array[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [tier, setTier] = React.useState<DeviceTier>('mid');
 
   const all = React.useMemo(() => (scenes.length ? scenes.map((s) => (s.id === sceneSpec.id ? sceneSpec : s)) : [sceneSpec]), [scenes, sceneSpec]);
   const mobileReports = React.useMemo(
-    () => all.map((s) => ({ scene: s, report: verifySceneSpec(s, { scenes: all, target: 'mobile' }) })),
-    [all]
+    () => all.map((s) => ({ scene: s, report: verifySceneSpec(s, { scenes: all, target: 'mobile', deviceTier: tier }) })),
+    [all, tier]
   );
   const mobileIssues = mobileReports.flatMap((r) => r.report.issues.filter((i) => i.code.startsWith('mobile.')).map((i) => ({ ...i, sceneTitle: r.scene.title })));
   const activeFixable = mobileReports.find((r) => r.scene.id === sceneSpec.id)?.report.issues.some((i) => i.code.startsWith('mobile.') && i.fixable);
@@ -53,7 +55,7 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
   const toggleCap = (id: ReadyCap) => setCaps((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const fixActive = () => {
-    const { spec, fixes } = autoFixSceneSpec(sceneSpec, { scenes: all, target: 'mobile' });
+    const { spec, fixes } = autoFixSceneSpec(sceneSpec, { scenes: all, target: 'mobile', deviceTier: tier });
     if (!fixes.length) return onNotice('Nothing to fix automatically in this scene.');
     setSceneSpec(spec, fixes);
     onNotice(`Applied ${fixes.length} phone fix(es) to "${sceneSpec.title}".`);
@@ -185,6 +187,14 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
       <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <h5 className="text-xs font-semibold text-slate-200 uppercase tracking-wider">Phone checks</h5>
+          <label className="ml-auto text-[11px] text-slate-400 flex items-center gap-1.5">
+            Budget for
+            <select className="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-slate-200" value={tier} onChange={(e) => setTier(e.target.value as DeviceTier)}>
+              {DEVICE_TIERS.map((t) => (
+                <option key={t} value={t}>{DEVICE_PROFILES[t].label}</option>
+              ))}
+            </select>
+          </label>
           <button
             onClick={fixActive}
             disabled={!activeFixable}
@@ -207,6 +217,53 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
           </ul>
         )}
       </div>
+
+      {/* Performance profiles */}
+      <details className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-300">
+        <summary className="text-xs font-semibold text-slate-200 uppercase tracking-wider cursor-pointer flex items-center gap-1.5">
+          <Gauge className="w-3.5 h-3.5 text-cyan-400" /> Performance profiles (device tiers)
+        </summary>
+        <p className="mt-2 text-slate-400">
+          App builds detect the phone tier at start (cores, memory, GPU, screen) and adapt quality while playing: when frames stay
+          slower than the target they lower post FX, pixel ratio, shadows and particles, and raise them again once the game runs
+          smoothly. Ad exports and MP4 renders never change quality.
+        </p>
+        <table className="mt-2 w-full text-[10px]">
+          <thead className="text-slate-500">
+            <tr>
+              <th className="text-left font-normal">Tier</th>
+              <th className="text-left font-normal">Target</th>
+              <th className="text-left font-normal">3D actors / 2D nodes</th>
+              <th className="text-left font-normal">Skinned verts · bones · tex</th>
+              <th className="text-left font-normal">Particles</th>
+              <th className="text-left font-normal">Start quality</th>
+            </tr>
+          </thead>
+          <tbody>
+            {DEVICE_TIERS.map((t) => {
+              const p = DEVICE_PROFILES[t];
+              const q = QUALITY_LADDER[p.startRung];
+              return (
+                <tr key={t} className={t === tier ? 'text-cyan-200' : ''}>
+                  <td title={p.examples}>{p.label}</td>
+                  <td>{p.targetFps} fps</td>
+                  <td>{p.budget.maxActors3D} / {p.budget.maxNodes2D}</td>
+                  <td>{p.budget.maxSkinnedVertices / 1000}k · {p.budget.maxBones} · {p.budget.maxTextureSize}</td>
+                  <td>{p.budget.maxParticles}</td>
+                  <td>DPR ≤ {q.pixelRatioCap}, shadows {q.shadows}{q.postFx ? ', bloom' : ''}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="mt-2 font-semibold text-slate-200">Read the profile report on a phone</p>
+        <ul className="list-disc pl-4 space-y-0.5 text-slate-400">
+          <li>Tap the top-left corner of the game 5 times quickly: an overlay shows tier, fps (last / worst / average), the current quality and every step the governor took. "Copy JSON" copies the full report.</li>
+          <li>PWA: open the URL with <code>?omniPerf=1</code>; force a tier with <code>?omniTier=low|mid|high</code>, keep the start quality with <code>?omniGovernor=0</code>.</li>
+          <li>Debug APK: Chrome → <code>chrome://inspect</code> → console <code>__omniPlayer.perf()</code>. With saves on, the last report is also stored under <code>omnistage.perf.&lt;app id&gt;</code>.</li>
+          <li>The budgets are reference estimates until measured: follow docs/mobile-performance.md and fill in real numbers.</li>
+        </ul>
+      </details>
 
       {/* Store assistant */}
       <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">

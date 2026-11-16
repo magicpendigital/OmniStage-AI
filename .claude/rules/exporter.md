@@ -35,4 +35,6 @@ paths:
   art lives in `mobileAssets.ts`. App behaviour (haptics, saves, pause) runs only when `PlayerHtmlOptions.app` is set, so ad exports are
   unchanged. Service workers only in the PWA build (the Capacitor build rejects them). Never write signing passwords into generated
   files or command lines; they live in the user's git-ignored `keystore.properties`.
+- Phase 8 device tiers: budgets / ladder are data in `src/runtime/deviceProfiles.ts` (`mid` must equal `MOBILE_REFERENCE`). The
+  adaptive governor (`src/player/perf.ts`) is fed only from the rAF loop of app builds; never from `step()` / manual mode.
 - 2D physics live in `src/runtime/stage2d.ts` and must match `PLATFORMER_PHYSICS` in the verifier, so verified levels stay beatable everywhere.

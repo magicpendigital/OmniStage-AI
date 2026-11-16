@@ -218,7 +218,13 @@ Publish → "Mobile App" tab (`src/components/MobileExportPanel.tsx`, pure build
   `mobile.edge-ui` (fixable), `mobile.heavy-scene`, `mobile.keyboard-only` (warnings). Orientation is a checklist item.
 - [x] Rig cost in the mobile budget (2026-11-16): OmniRig characters carry `actors[].rigCost` (bones, skinned vertices, texture size)
   measured on placement; `mobile.rig-cost` warns above 150k skinned vertices, 12 rigged actors, 100 bones or 2048 px textures.
-- [ ] Later: per-device performance profiles measured on real phones.
+- [x] Per-device performance profiles — machinery (2026-11-16): low / mid / high tiers as data (`src/runtime/deviceProfiles.ts`;
+  `mid` = `MOBILE_REFERENCE`), `verifySceneSpec(spec, { target: 'mobile', deviceTier })` (same rule ids; particle budget under
+  `mobile.heavy-scene`). App builds detect the tier (cores, memory, GPU string, screen) and run an adaptive governor
+  (`src/runtime/qualityGovernor.ts`: bloom → pixel ratio → shadows → particles, hysteresis + oscillation lock); never in ad
+  exports or frame-stepped capture. Hidden overlay (5 taps top-left / `?omniPerf=1`), `__omniPlayer.perf()`, report saved
+  under `omnistage.perf.<appId>`. Guide: `docs/mobile-performance.md`.
+- [ ] Measure the tier budgets on real phones and fill in the table in `docs/mobile-performance.md`; 2D quality steps.
 
 ### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
 Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
