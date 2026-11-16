@@ -9,7 +9,7 @@
  */
 import type { MeshData, Vec3 } from './analyze';
 import type { BoneDef, RigSkeleton } from './skeleton';
-import { boneSegments } from './skeleton';
+import { boneSegments, fingerChainOf } from './skeleton';
 
 export interface SkinWeights {
   /** 4 bone indices per vertex (into skeleton.bones). */
@@ -129,17 +129,29 @@ export class VoxelSolid {
 export function computeSkinWeights(mesh: MeshData, skeleton: RigSkeleton, opts: { voxelRes?: number; smoothIterations?: number } = {}): SkinWeights {
   const { positions, indices } = mesh;
   const nV = positions.length / 3;
-  let minY = Infinity, maxY = -Infinity;
-  for (let i = 1; i < positions.length; i += 3) { minY = Math.min(minY, positions[i]); maxY = Math.max(maxY, positions[i]); }
-  const H = Math.max(1e-6, maxY - minY);
+  const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) for (let k = 0; k < 3; k++) {
+    lo[k] = Math.min(lo[k], positions[i + k]); hi[k] = Math.max(hi[k], positions[i + k]);
+  }
+  // Size reference: the height, or half the longest extent for flat characters (a serpent is long, not tall).
+  const H = Math.max(1e-6, hi[1] - lo[1], 0.5 * Math.max(hi[0] - lo[0], hi[2] - lo[2]));
   const { map, count } = weld(positions, H * 1e-4);
   // one representative position per welded vertex
   const wp = new Float32Array(count * 3);
   for (let i = 0; i < nV; i++) for (let k = 0; k < 3; k++) wp[map[i] * 3 + k] = positions[i * 3 + k];
-  const solid = new VoxelSolid(positions, indices, opts.voxelRes ?? 72);
+  // thin wings and long thin bodies need finer voxels for the visibility test
+  const fine = skeleton.category === 'bird' || skeleton.category === 'serpent';
+  const solid = new VoxelSolid(positions, indices, opts.voxelRes ?? (fine ? 128 : 72));
   const segs = boneSegments(skeleton.bones).filter((s): s is { bone: number; a: Vec3; b: Vec3 } => !!s);
   const B = skeleton.bones.length;
   const W = new Float32Array(count * B);
+  // finger bones: which finger chain each belongs to, and a fade behind the knuckle short enough to leave the palm alone
+  const chainOf = skeleton.bones.map((b) => fingerChainOf(b.name));
+  const fadeLen = skeleton.bones.map((_, i) => {
+    const s = segs.find((x) => x.bone === i);
+    if (!chainOf[i] || !s) return H * 0.04;
+    return Math.min(H * 0.04, 0.5 * Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1], s.b[2] - s.a[2]));
+  });
 
   for (let v = 0; v < count; v++) {
     const p: Vec3 = [wp[v * 3], wp[v * 3 + 1], wp[v * 3 + 2]];
@@ -151,7 +163,7 @@ export function computeSkinWeights(mesh: MeshData, skeleton: RigSkeleton, opts: 
       if (c !== cands[0] && !solid.visible(p, c.q)) continue;
       // Behind its joint a bone fades out within ~4 % of the height (the shoulder, not the arm, owns the ribs).
       const root = skeleton.bones[c.s.bone].parent < 0;
-      const fade = root ? 1 : Math.max(0, 1 - c.behind / (H * 0.04)) ** 2;
+      const fade = root ? 1 : Math.max(0, 1 - c.behind / fadeLen[c.s.bone]) ** 2;
       if (fade <= 0 && c !== cands[0]) continue;
       const w = (1 / Math.pow(c.d + H * 0.005, 4)) * Math.max(fade, c === cands[0] ? 0.05 : 0);
       if (w <= 0) continue;
@@ -181,6 +193,23 @@ export function computeSkinWeights(mesh: MeshData, skeleton: RigSkeleton, opts: 
       }
     }
     cur = next;
+  }
+
+  // Fingers never share a vertex: keep only the finger chain with the most weight (plus the non-finger bones).
+  const fingerBones = chainOf.map((c, i) => (c ? i : -1)).filter((i) => i >= 0);
+  if (fingerBones.length) {
+    const sums = new Map<string, number>();
+    for (let v = 0; v < count; v++) {
+      sums.clear();
+      for (const b of fingerBones) {
+        const w = cur[v * B + b];
+        if (w > 0) sums.set(chainOf[b]!, (sums.get(chainOf[b]!) || 0) + w);
+      }
+      if (sums.size < 2) continue;
+      let keep = '', best = -1;
+      for (const [c, w] of sums) if (w > best) { best = w; keep = c; }
+      for (const b of fingerBones) if (chainOf[b] !== keep) cur[v * B + b] = 0;
+    }
   }
 
   // Keep the 4 strongest per vertex, normalise, expand back to the original (unwelded) vertices.
@@ -268,6 +297,42 @@ export function posePositions(positions: Float32Array, bones: BoneDef[], skin: S
 
 // ================================================================================================ validation
 
+/**
+ * Finger curl as local rotations (rest = identity, so the rest-frame axis works at every level of the chain): each
+ * finger bone turns about (finger direction × palm side) so the fingers close towards the palm. The palm side comes from
+ * the hand's chirality (index → pinky × wrist → middle knuckle). `curl` = degrees per joint for the four fingers,
+ * `thumb` for the thumb. Empty when the skeleton has no finger bones.
+ */
+export function fingerCurlPose(bones: BoneDef[], curl: number, thumb: number, sides: ReadonlyArray<'Left' | 'Right'> = ['Left', 'Right']): Record<string, Quat> {
+  const out: Record<string, Quat> = {};
+  for (const side of sides) {
+    const find = (suffix: string) => bones.find((b) => b.name.endsWith(`${side}${suffix}`));
+    const hand = find('Hand'), index = find('HandIndex1'), pinky = find('HandPinky1'), middle = find('HandMiddle1');
+    if (!hand || !middle) continue;
+    let palm: Vec3 = [0, -1, 0];
+    if (index && pinky) {
+      const a: Vec3 = [index.head[0] - pinky.head[0], index.head[1] - pinky.head[1], index.head[2] - pinky.head[2]];
+      const b: Vec3 = [middle.head[0] - hand.head[0], middle.head[1] - hand.head[1], middle.head[2] - hand.head[2]];
+      const c: Vec3 = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const l = Math.hypot(...c);
+      if (l > 1e-9) palm = (side === 'Left' ? [-c[0] / l, -c[1] / l, -c[2] / l] : [c[0] / l, c[1] / l, c[2] / l]) as Vec3;
+    }
+    for (const b of bones) {
+      const m = new RegExp(`${side}Hand(Thumb|Index|Middle|Ring|Pinky)([123])$`).exec(b.name);
+      if (!m) continue;
+      const child = bones.find((c) => c.parent >= 0 && bones[c.parent] === b);
+      if (!child) continue;
+      const d: Vec3 = [child.head[0] - b.head[0], child.head[1] - b.head[1], child.head[2] - b.head[2]];
+      const axis: Vec3 = [d[1] * palm[2] - d[2] * palm[1], d[2] * palm[0] - d[0] * palm[2], d[0] * palm[1] - d[1] * palm[0]];
+      if (Math.hypot(...axis) < 1e-9) continue;
+      const k = Number(m[2]);
+      const deg = m[1] === 'Thumb' ? thumb * (k === 1 ? 0.5 : 1) : curl * (k === 1 ? 0.8 : k === 2 ? 1 : 0.7);
+      out[b.name] = quatAxisAngle(axis, deg);
+    }
+  }
+  return out;
+}
+
 export interface PoseTest {
   name: string;
   pose: Record<string, Quat>;
@@ -277,11 +342,33 @@ export function stressPoses(skeleton: RigSkeleton): PoseTest[] {
   const has = (n: string) => skeleton.bones.some((b) => b.name === n);
   if (skeleton.category === 'humanoid') {
     const m = (n: string) => `mixamorig${n}`;
-    return [
+    const poses: PoseTest[] = [
       { name: 'Arms raised', pose: { [m('LeftArm')]: quatAxisAngle([0, 0, 1], 70), [m('RightArm')]: quatAxisAngle([0, 0, 1], -70), [m('LeftForeArm')]: quatAxisAngle([0, 1, 0], -40), [m('RightForeArm')]: quatAxisAngle([0, 1, 0], 40) } },
       { name: 'Squat', pose: { [m('LeftUpLeg')]: quatAxisAngle([1, 0, 0], -80), [m('RightUpLeg')]: quatAxisAngle([1, 0, 0], -80), [m('LeftLeg')]: quatAxisAngle([1, 0, 0], 100), [m('RightLeg')]: quatAxisAngle([1, 0, 0], 100), [m('Spine')]: quatAxisAngle([1, 0, 0], 15) } },
       { name: 'Stride', pose: { [m('LeftUpLeg')]: quatAxisAngle([1, 0, 0], -35), [m('RightUpLeg')]: quatAxisAngle([1, 0, 0], 30), [m('LeftLeg')]: quatAxisAngle([1, 0, 0], 20), [m('RightLeg')]: quatAxisAngle([1, 0, 0], 40) } },
     ];
+    const grip = fingerCurlPose(skeleton.bones, 35, 25);
+    if (Object.keys(grip).length) poses.push({ name: 'Grip', pose: grip });
+    return poses;
+  }
+  if (skeleton.category === 'bird') {
+    return [
+      { name: 'Wings up', pose: { LeftWing1: quatAxisAngle([0, 0, 1], 60), RightWing1: quatAxisAngle([0, 0, 1], -60), LeftWing2: quatAxisAngle([0, 0, 1], 20), RightWing2: quatAxisAngle([0, 0, 1], -20) } },
+      { name: 'Wings down', pose: { LeftWing1: quatAxisAngle([0, 0, 1], -40), RightWing1: quatAxisAngle([0, 0, 1], 40), LeftWing3: quatAxisAngle([0, 0, 1], -20), RightWing3: quatAxisAngle([0, 0, 1], 20) } },
+      { name: 'Peck', pose: { Neck: quatAxisAngle([1, 0, 0], 40), Head: quatAxisAngle([1, 0, 0], 20), LeftUpLeg: quatAxisAngle([1, 0, 0], -25), ...(has('Tail1') ? { Tail1: quatAxisAngle([1, 0, 0], -20) } : {}) } },
+    ];
+  }
+  if (skeleton.category === 'serpent') {
+    const body = skeleton.bones.filter((b) => /^(Spine\d+|Neck|Tail\d+)$/.test(b.name));
+    const coil: Record<string, Quat> = {}, rear: Record<string, Quat> = {}, wave: Record<string, Quat> = {};
+    body.forEach((b, i) => {
+      coil[b.name] = quatAxisAngle([0, 1, 0], 10);
+      wave[b.name] = quatAxisAngle([0, 1, 0], i % 4 < 2 ? 25 : -25);
+    });
+    for (const b of body) if (/^(Spine\d+|Neck)$/.test(b.name)) rear[b.name] = quatAxisAngle([1, 0, 0], -12);
+    rear.Head = quatAxisAngle([1, 0, 0], 30);
+    if (has('Jaw')) rear.Jaw = quatAxisAngle([1, 0, 0], 30);
+    return [{ name: 'Coil', pose: coil }, { name: 'S-curve', pose: wave }, { name: 'Rear up', pose: rear }];
   }
   if (skeleton.category === 'quadruped') {
     return [
