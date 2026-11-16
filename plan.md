@@ -248,9 +248,15 @@ vertices, texture size of OmniRig characters).
   prefixes stripped), clips retargeted with `retargetClip` (+ rest-direction matching for A-pose vs T-pose), hips motion scaled and
   kept in place; Walking / Running … replace the generated clips. Checked: Soldier.glb → 22/22 bones, 4 clips.
 
+- [x] (2026-11-16) Pose layer after the clips (`src/render3d/rigPose.ts`, studio + Player): head look-at (neck 40 % / head 60 %,
+  yaw ±70°, pitch ±30°, eased weight) driven by `gazeAt` in `src/runtime/cinematics.ts` (speaker ↔ listener during a line, else the
+  latest `lookAt` step until the next walk); foot IK on terrain (two-bone legs, feet follow the ground under them, pelvis drops for
+  the lower foot, steps over 0.6 m ignored, only while the actor stands on the terrain). Bones the mixer does not drive are reset
+  first, so nothing accumulates. Tests: `tests/rigPose.test.ts`.
+
 **Not yet**
 - [ ] Vision-LLM classification / scoring of rendered views; MediaPipe landmarks for arms-down (I-pose) characters.
-- [ ] Foot IK on terrain, look-at, spring bones, LLM state machine JSON; FBX clip import (now GLB only).
+- [ ] Spring bones, LLM state machine JSON; FBX clip import (now GLB only).
 - [ ] Weight painting; bird / serpent templates; finger bones.
 - [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
 
@@ -349,8 +355,9 @@ the verifier only checks playability. Fix in layers: contract → production too
     short licence line and `meta.licence` { provider, tool, model, voiceId, prompt, generatedAt, terms, note }. SFX / music
     generator in Settings saves to the library and adds an audio track.
   - Tests: `tests/directorQA.test.ts`.
-  - Not done: Blockade skybox, Meshy animation; a manual "Director QA" button for existing scenes (today it runs inside storyboard
-    generation); a real vision-model run on a generated film.
+  - (2026-11-16) Manual "Director QA" button (AI drawer header + command bar) for any 3D scene with keyframes; runs even when
+    automatic Director QA is off, asks for a vision connection otherwise; the result is undoable like an AI turn.
+  - Not done: Blockade skybox, Meshy animation; a real vision-model run on a generated film.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`
@@ -378,4 +385,4 @@ the verifier only checks playability. Fix in layers: contract → production too
 ### Later
 - [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.
 - [ ] Exporter plugins beyond the web runtime (e.g. SceneSpec → Godot project) for heavy 3D games, consoles and Steam.
-- [ ] Deterministic video (WebCodecs) with audio; NodeGraphView passive `onWheel` fix.
+- [x] Deterministic video (WebCodecs) with audio — done in 10B; NodeGraphView wheel zoom uses a non-passive listener (2026-11-16).

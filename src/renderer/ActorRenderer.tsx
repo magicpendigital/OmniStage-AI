@@ -16,6 +16,7 @@ import { createActorBadge } from '../render3d/vfx3d';
 import { Built } from './Built';
 import { actorBadgeText, actorMotion } from '../render3d/actorMotion';
 import { matchClipName, performedActor } from '../runtime/cinematics';
+import { RigPoseLayer, rigPoseInputFor } from '../render3d/rigPose';
 
 interface ActorRendererProps {
   actor: ActorNode;
@@ -34,9 +35,13 @@ function CanvasBadgeSprite({ text, position }: { text: string; position: [number
 function RiggedGltfModel({
   url,
   actor,
+  baseActor,
 }: {
   url: string;
+  /** Performed actor (pose at the current time). */
   actor: ActorNode;
+  /** Authored actor (its performance drives the gaze). */
+  baseActor: ActorNode;
 }) {
   const gl = useThree((s) => s.gl);
   const configureLoader = useMemo(() => (loader: GLTFLoader) => configureActorLoader(loader, gl), [gl]);
@@ -97,6 +102,21 @@ function RiggedGltfModel({
   }, [actions, actor.animationSpeed]);
 
   useFrame(() => crossFade.update());
+
+  // Phase 9: head look-at + foot IK after the mixer (drei's useAnimations frame callback is registered before this one).
+  const poseLayer = useMemo(() => {
+    const layer = new RigPoseLayer(clonedScene);
+    return layer.hasHead || layer.hasLegs ? layer : null;
+  }, [clonedScene]);
+  const baseRef = useRef(baseActor);
+  baseRef.current = baseActor;
+  const performedRef = useRef(actor);
+  performedRef.current = actor;
+  useFrame(() => {
+    if (!poseLayer) return;
+    const { sceneSpec, currentTime } = useStudioStore.getState();
+    poseLayer.apply(rigPoseInputFor(baseRef.current, performedRef.current, sceneSpec, currentTime));
+  });
   useEffect(() => () => crossFade.dispose(), [crossFade]);
 
   const defaultScale = ASSET_REGISTRY[actor.assetId]?.defaultScale ?? 1;
@@ -232,7 +252,7 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
         {gltfUrl ? (
           <GlbErrorBoundary resetKey={gltfUrl} fallback={fallbackMesh}>
             <Suspense fallback={fallbackMesh}>
-              <RiggedGltfModel key={gltfUrl} url={gltfUrl} actor={performed} />
+              <RiggedGltfModel key={gltfUrl} url={gltfUrl} actor={performed} baseActor={actor} />
             </Suspense>
           </GlbErrorBoundary>
         ) : (

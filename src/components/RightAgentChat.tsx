@@ -3,6 +3,7 @@ import {
   ArrowUp,
   BookmarkPlus,
   Brain,
+  Clapperboard,
   Cpu,
   Code2,
   Puzzle,
@@ -37,7 +38,8 @@ import type { ChatMessage } from '../types/scene.schema';
 import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
 import { Dropdown, IconBtn, Segmented } from './ui';
 import { AIConnectionPicker } from './AIConnectionPicker';
-import { providerLabel } from '../agent/aiClient';
+import { providerInfo, providerLabel } from '../agent/aiClient';
+import { describeDirectorReview, pickDirectorKeyframes } from '../agent/directorQA';
 
 type DrawerTab = 'chat' | 'inspector' | 'json';
 
@@ -195,6 +197,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('chat');
   const [promptInput, setPromptInput] = useState('');
   const [dismissedReplyId, setDismissedReplyId] = useState<string | null>(null);
+  const [isDirectorQARunning, setDirectorQARunning] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const aiMode = useShellStore((s) => s.aiMode);
@@ -457,6 +460,38 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     }
   };
 
+  // Director QA on demand (Phase 10D): the same keyframe review + one patch round the storyboard agent runs, for the open scene.
+  const canDirectorQA = sceneSpec.engineType === '3d' && pickDirectorKeyframes(sceneSpec).length > 0;
+  const handleDirectorQA = async () => {
+    if (isDirectorQARunning || isAgentThinking) return;
+    const say = (content: string, extra: Partial<ChatMessage> = {}) =>
+      addChatMessage({ id: `msg-dqa-${Date.now()}`, role: 'assistant', content, timestamp: now(), ...extra });
+    if (!providerInfo(settings.aiProvider || 'gemini').vision) {
+      say('Director QA needs a vision-capable AI connection (an API provider, not a CLI login). Switch the connection and try again.');
+      return;
+    }
+    setDirectorQARunning(true);
+    setAgentThinking(true);
+    const prevSnapshot = JSON.parse(JSON.stringify(sceneSpec));
+    try {
+      const { runDirectorQAForShot } = await import('../agent/directorQARunner');
+      // A click is an explicit request, so it runs even when automatic Director QA is switched off in Settings.
+      const result = await runDirectorQAForShot(sceneSpec, sceneSpec.description || sceneSpec.title || 'Polish this shot', { ...settings, directorQA: true });
+      if (result.changed) setSceneSpec(result.spec, result.diffSummary);
+      say(
+        result.review
+          ? describeDirectorReview(result.review, result)
+          : 'Director QA could not capture or score this shot. Check the AI connection and that the scene plays in Preview.',
+        result.changed ? { diffSummary: result.diffSummary, previousSpecSnapshot: prevSnapshot, updatedSpecSnapshot: result.spec } : {}
+      );
+    } catch (err) {
+      say(`Director QA failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDirectorQARunning(false);
+      setAgentThinking(false);
+    }
+  };
+
   // Keep the newest message in view while the drawer chat is open.
   useEffect(() => {
     if (aiMode === 'drawer' && drawerTab === 'chat' && listRef.current) {
@@ -624,6 +659,16 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           >
             <ScanEye size={16} />
           </IconBtn>
+          {canDirectorQA && (
+            <IconBtn
+              label={isDirectorQARunning ? 'Director QA reviewing…' : 'Director QA: score this shot and apply the notes'}
+              active={isDirectorQARunning}
+              disabled={isDirectorQARunning || isAgentThinking}
+              onClick={handleDirectorQA}
+            >
+              <Clapperboard size={16} />
+            </IconBtn>
+          )}
           <IconBtn label="Open chat drawer (history, inspector, SceneSpec)" onClick={() => setAiMode('drawer')}>
             <PanelRightOpen size={16} />
           </IconBtn>
@@ -652,6 +697,17 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
         >
           <ScanEye size={13} /> {isVisionRunning ? 'Scanning…' : 'Vision QA'}
         </button>
+        {canDirectorQA && (
+          <button
+            type="button"
+            className="btn sm"
+            disabled={isDirectorQARunning || isAgentThinking}
+            onClick={handleDirectorQA}
+            title="Render this shot's keyframes, let a vision model score the direction, and apply its notes in one patch round"
+          >
+            <Clapperboard size={13} /> {isDirectorQARunning ? 'Reviewing…' : 'Director QA'}
+          </button>
+        )}
         <IconBtn small label="Collapse to floating command bar" onClick={() => setAiMode('bar')}>
           <PanelBottom size={14} />
         </IconBtn>

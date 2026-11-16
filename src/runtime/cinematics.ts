@@ -37,6 +37,11 @@ export function hasPerformance(actor: Pick<ActorNode, 'performance'>): boolean {
   return Array.isArray(actor.performance) && actor.performance.length > 0;
 }
 
+/** Terrain height under (x, z); 0 on a flat stage. Shared with the renderers (foot placement). */
+export function terrainGroundY(world: World, x: number, z: number): number {
+  return groundY(world, x, z);
+}
+
 function groundY(world: World, x: number, z: number): number {
   const t = world?.terrain;
   if (!t || t.type === 'flat-grid' || t.type === 'none') return 0;
@@ -178,6 +183,69 @@ export function performedActor(actor: ActorNode, spec: Pick<SceneSpec, 'mode' | 
     animationSpeed: pose.speed,
     ...(talkLevel > 0 ? { talkLevel } : {}),
   };
+}
+
+// --------------------------------------------------------------------------------------------- gaze
+
+const GAZE_EASE = 0.4;
+
+export interface Gaze {
+  /** World point the head should look at (eye height of the other actor, or an authored point). */
+  target: Vector3Tuple;
+  /** 0..1 blend (eases in / out so heads never snap). */
+  weight: number;
+}
+
+function eyePoint(other: ActorNode, spec: Pick<SceneSpec, 'actors' | 'world'>, time: number): Vector3Tuple {
+  const p = hasPerformance(other) ? resolvePerformance(other, time, spec.actors, spec.world, 1).position : other.position;
+  return [p[0], p[1] + actorHeight(other) * 0.9, p[2]];
+}
+
+/**
+ * Where a performer's head looks at `time` (media mode): the listener while it speaks, the speaker while it listens, otherwise the
+ * latest `lookAt` performance step until it walks again. null = no head turn (the clip alone). Pure, so studio, Player and MP4 agree.
+ */
+export function gazeAt(
+  actor: ActorNode,
+  spec: Pick<SceneSpec, 'mode' | 'actors' | 'world'> & Partial<Pick<SceneSpec, 'dialogue' | 'durationSeconds'>>,
+  time: number
+): Gaze | null {
+  if (spec.mode !== 'media') return null;
+  const ramp = (start: number, end = Infinity) => smooth((time - start) / GAZE_EASE) * (1 - smooth((time - end) / GAZE_EASE));
+  // Dialogue first: conversations override authored looks.
+  if (spec.dialogue?.length) {
+    let best: Gaze | null = null;
+    for (const tl of dialogueTimeline({ actors: spec.actors, dialogue: spec.dialogue, durationSeconds: spec.durationSeconds })) {
+      if (time < tl.start || time > tl.end + GAZE_EASE) continue;
+      const otherId = tl.line.speaker === actor.id ? tl.line.listener : tl.line.listener === actor.id ? tl.line.speaker : undefined;
+      const other = otherId && otherId !== actor.id ? spec.actors.find((a) => a.id === otherId) : undefined;
+      if (!other) continue;
+      const weight = ramp(tl.start, tl.end);
+      if (weight > 0.001 && (!best || weight > best.weight)) best = { target: eyePoint(other, spec, time), weight };
+    }
+    if (best) return best;
+  }
+  if (!hasPerformance(actor)) return null;
+  let look: { step: PerformanceStep; at: number } | null = null;
+  let walkingUntil = -Infinity;
+  for (const step of sortedSteps(actor)) {
+    if (step.time > time) break;
+    if (Array.isArray(step.moveTo)) {
+      look = null; // a walk ends the previous look; the eyes follow the path
+      walkingUntil = step.time + Math.max(0.2, step.duration ?? 2);
+    }
+    if (step.faceDeg !== undefined) look = null;
+    if (step.lookAt !== undefined) look = { step, at: Math.max(step.time, walkingUntil) };
+  }
+  if (!look || time < look.at) return null;
+  const l = look.step.lookAt!;
+  let target: Vector3Tuple | undefined;
+  if (Array.isArray(l) && l.length === 3 && l.every((n) => Number.isFinite(Number(n)))) target = l.map(Number) as Vector3Tuple;
+  else if (typeof l === 'string') {
+    const other = spec.actors.find((a) => a.id === l);
+    if (other && other.id !== actor.id) target = eyePoint(other, spec, time);
+  }
+  return target ? { target, weight: ramp(look.at) } : null;
 }
 
 // --------------------------------------------------------------------------------------------- clips

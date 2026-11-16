@@ -21,6 +21,8 @@ paths:
   `npm run test:e2e:gpu`. Never import `three/webgpu` outside `src/render3d/webgpu`.
 - 3D host: React Three Fiber (editor tools: gizmos, selection, orbit). Badges stay WebGL sprites (`THREE.CanvasTexture`), never DOM `<Html>` portals (React 19 unmount races).
 - Multi-instance rigs use `SkeletonUtils.clone`; dispose bone textures/mixers when an actor is removed.
+- Phase 9 pose layer: head look-at and foot IK run in `RigPoseLayer` (`src/render3d/rigPose.ts`) AFTER the mixer update, in both the
+  studio (`RiggedGltfModel`) and the Player; where to look comes only from `gazeAt` (cinematics). Keep `tests/rigPose.test.ts` green.
 - 2D: `StageCanvas2D.tsx` works in a 1000×600 design space. Platformer physics constants (jump vy −520, gravity 9.8×90, run 320)
   are mirrored in `src/verification/sceneVerifier.ts` (`PLATFORMER_PHYSICS`). Change both together and re-run `npm test`.
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
