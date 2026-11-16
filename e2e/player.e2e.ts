@@ -56,6 +56,32 @@ test('3D tap to unbox: tapping the gift box counts taps even though the logic gr
   expect(p.errors).toEqual([]);
 });
 
+test('3D state machine: an enemy waits, chases the player and catches them (Phase 9)', async ({ page }) => {
+  const spec = template('coin-rush-playable');
+  const hero = spec.actors.find((a) => a.physicsRole === 'player')!;
+  const [hx, , hz] = hero.position;
+  const ex = hx > 0 ? hx - 3 : hx + 3;
+  spec.actors.push({ ...hero, id: 'e2e-enemy', name: 'Enemy', physicsRole: 'static', onClickAction: 'none', position: [ex, 0, hz],
+    stateMachine: { initial: 'idle', states: {
+      idle: { move: 'stay', transitions: [{ to: 'chase', when: { type: 'timer', seconds: 0.5 } }] },
+      chase: { move: 'chase-player', speed: 2, transitions: [{ to: 'caught', when: { type: 'player-near', distance: 1 } }] },
+      caught: { onEnter: [{ type: 'spawn-vfx', vfx: 'sparkles' }] },
+    } } });
+  const p = await openExport(page, spec);
+  await p.step(5);
+  expect(await p.state<string>('s.machineStates["e2e-enemy"]')).toBe('idle');
+  let state = 'idle';
+  for (let i = 0; i < 20 && state !== 'caught'; i++) {
+    await p.step(10);
+    state = await p.state<string>('s.machineStates["e2e-enemy"]');
+  }
+  expect(state).toBe('caught');
+  const end = await p.state<number[]>('s.sceneSpec.actors.find((a) => a.id === "e2e-enemy").position');
+  expect(Math.abs(end[0] - ex)).toBeGreaterThan(1.5);
+  expect(await p.state<boolean>('s.sceneSpec.vfx.some((v) => v.id === "runtime-vfx-sm-e2e-enemy")')).toBe(true);
+  expect(p.errors).toEqual([]);
+});
+
 test('2D platformer: the player runs right and the timeline advances deterministically', async ({ page }) => {
   const spec = template('blank-2d-authoring');
   spec.mode = 'game';

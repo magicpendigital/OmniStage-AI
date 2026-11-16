@@ -36,6 +36,8 @@ export interface GameRuntimeState {
   scorePopups: FloatingScoreFeedback[];
   burstEffects: BurstVFXInstance[];
   executionLogs: ExecutionLogEntry[];
+  /** Phase 9: current state per actor / node id with a stateMachine (undefined = machines restart). */
+  machineStates?: Record<string, string>;
   /** Provided by the host store: the studio's version also manages undo history. */
   switchScene: (sceneId: string) => void;
 
@@ -446,6 +448,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(setRaw: SetSt
         gameTimeRemaining: restoredSpec.gameRules.timeLimitSeconds || 15,
         scorePopups: [],
         burstEffects: [],
+        machineStates: undefined,
       };
     }),
 
@@ -508,6 +511,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(setRaw: SetSt
       gameScore: 0,
       unboxTapCounts: {},
       burstEffects: [],
+      machineStates: undefined,
       gameTimeRemaining: target.gameRules.timeLimitSeconds,
     });
     return true;

@@ -5,6 +5,7 @@
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorNode, CameraMode, EngineType, LogicNode, Node2D, SceneSpec, Vector3Tuple, VFXNode, VFXType } from '../types/scene.schema';
 import { runtimeStore } from './host';
+import { runStateMachines, StateMachineRuntime } from './stateMachine';
 
 export const DESIGN_WIDTH = 1000;
 export const DESIGN_HEIGHT = 600;
@@ -62,6 +63,9 @@ export class RuntimeLogicGraph {
   private contacts = new Set<string>();
   generation = 0;
   controlsCamera = false;
+  /** Phase 9 behaviour state machines (actors[].stateMachine / nodes2D[].stateMachine). */
+  readonly machines = new StateMachineRuntime();
+  private machineFrame = { clicked: new Set<string>(), signals: new Set<string>(), contacts: [] as Array<[string, string]> };
 
   constructor(private engine: EngineType, public runtimePosition?: (id: string) => Vector3Tuple | undefined) {}
 
@@ -74,6 +78,8 @@ export class RuntimeLogicGraph {
       this.contacts.clear();
       this.elapsed = 0;
       this.controlsCamera = false;
+      this.machines.reset();
+      this.machineFrame = { clicked: new Set(), signals: new Set(), contacts: [] };
       this.generation++;
       this.previousTime = state.currentTime;
       this.dispatch('scene-start', {});
@@ -84,7 +90,9 @@ export class RuntimeLogicGraph {
   }
 
   emit(event: RuntimeEvent, context: LogicEventContext = {}) {
-    return this.prepare() ? this.dispatch(event, context) : false;
+    const ready = this.prepare();
+    if (ready && event === 'actor-click' && context.actorId) this.machineFrame.clicked.add(context.actorId);
+    return ready ? this.dispatch(event, context) : false;
   }
 
   advance(delta: number) {
@@ -99,6 +107,7 @@ export class RuntimeLogicGraph {
       this.timeline(-1, next % duration);
     }
     state.advanceTimeline(delta);
+    runStateMachines(this.machines, this.engine, delta, { ...this.machineFrame, positionFor: this.runtimePosition });
     this.previousTime = runtimeStore.getState().currentTime;
   }
 
@@ -106,6 +115,7 @@ export class RuntimeLogicGraph {
     if (!this.prepare()) return new Set<string>();
     const next = new Set<string>();
     const handled = new Set<string>();
+    this.machineFrame.contacts = pairs;
     for (const [actorId, otherActorId] of pairs) {
       const key = [actorId, otherActorId].sort().join('\u0000');
       next.add(key);
@@ -270,6 +280,12 @@ export class RuntimeLogicGraph {
     const scene = state.sceneSpec;
     const p = node.params;
     if (node.type === 'robot-hardware') throw new Error('Hardware execution requires a connected hardware runtime');
+    if (p.actionType === 'send-signal') {
+      const signal = String(p.signal ?? '').trim();
+      if (!signal) throw new Error('send-signal needs a signal name');
+      this.machineFrame.signals.add(signal);
+      return `Signal "${signal}" sent to state machines`;
+    }
     const id = p.actorId || eventActorId;
     const actor = scene.actors.find((a) => a.id === id);
     const node2D = scene.nodes2D.find((a) => a.id === id);

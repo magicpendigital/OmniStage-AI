@@ -10,6 +10,7 @@
  * Every generated scene is a declarative SceneSpec; nothing here emits imperative renderer code.
  */
 import { resolvePerformance } from '../runtime/cinematics';
+import { sanitizeStateMachine } from '../runtime/stateMachine';
 import { applyBiomeToScene, BIOME_IDS, biomeEnvironmentPatch, expandBiome } from '../runtime/biomes';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
@@ -235,6 +236,8 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
     endTime: num(raw.endTime, durationSeconds),
     enterEffect: raw.enterEffect ?? 'pop-in',
     visible: raw.visible !== false,
+    // Phase 9: behaviour state machine (cleaned; the verifier repairs bad references).
+    ...(sanitizeStateMachine(raw.stateMachine) ? { stateMachine: sanitizeStateMachine(raw.stateMachine)! } : {}),
   };
 }
 
@@ -256,6 +259,7 @@ function normalizeNode2D(raw: any, index: number): Node2D | null {
     fill: str(raw.fill, '#06B6D4'),
     stroke: str(raw.stroke, '#F8FAFC'),
     physics2D: str(raw.physics2D, 'none') as Node2D['physics2D'],
+    stateMachine: sanitizeStateMachine(raw.stateMachine) ?? undefined,
   };
 }
 

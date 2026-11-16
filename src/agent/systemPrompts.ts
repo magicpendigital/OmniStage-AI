@@ -74,6 +74,27 @@ MECHANIC RECIPES (build the matching chain whenever the user asks for the mechan
 - World / atmosphere:     "On Scene Start" -> "World Stage & Skybox" (params mirror sceneSpec.world).
 Keep the graph, actors, gameRules, camera and world consistent with each other: if you change targetScore, update the gate node; if you change an actor's clip, update its Play Animation node.`;
 
+/** Phase 9: behaviour state machines (actors[].stateMachine / nodes2D[].stateMachine), run by src/runtime/stateMachine.ts. */
+export const STATE_MACHINE_PROMPT_SECTION = `BEHAVIOUR STATE MACHINES (game mode only; put "stateMachine" on an actor (3D) or a Node2D (2D) that should act on its own: enemies, NPCs, doors, guards):
+stateMachine = { initial: "<state name>", health?: 100, seed?: 1, states: { "<name>": State } }   (state names: letters, digits, - or _; max 16 states)
+State = { move?: 'stay'|'patrol'|'move-to'|'chase-player'|'flee-player'|'return-home', points?: [[x,z] or [x,y,z]] (3D metres, arena ±5.5) | [[x,y]] (2D px, 1000x600),
+          speed?: number (default 1.5 m/s 3D, 120 px/s 2D), clip?: one of the actor's availableClips / the sprite's spriteSheet clips, animation?: AnimationType,
+          onEnter?: Action[], transitions?: [{ to: "<state name>", when: Condition }] }   (transitions are checked in order; the first true one wins)
+Condition (closed list, nothing else): { type:'player-near', distance } | { type:'player-far', distance } | { type:'timer', seconds } (time in this state) | { type:'arrived' } (reached
+  move-to / return-home target or finished a patrol loop) | { type:'health-below', value } | { type:'score-at-least', value } | { type:'signal', name } | { type:'collided' } (touching the player)
+  | { type:'clicked' } (tapped) | { type:'random', chance: 0..1, every?: seconds } (seeded, deterministic)
+Action (onEnter): { type:'add-score', amount } | { type:'add-health', amount } (negative = damage) | { type:'spawn-vfx', vfx: VFXType, color? } | { type:'play-sfx', sound: GameAudioEvent }
+  | { type:'send-signal', name } (wakes machines waiting on { type:'signal', name }; a logic-graph action { actionType:'send-signal', signal } does the same) | { type:'set-visible', visible } | { type:'end-game', won }
+Rules: initial MUST name a state; every transition "to" MUST name a state; every state must be reachable from initial; never write code or expressions. Moving states play Walk/Run, 'stay' plays Idle
+when no clip is set. Distances use x/z in 3D and x/y in 2D. Examples:
+- Enemy guard: { initial:"patrol", states:{ patrol:{ move:"patrol", points:[[-3,-2],[3,-2]], transitions:[{to:"chase",when:{type:"player-near",distance:3}}] },
+    chase:{ move:"chase-player", speed:2.4, transitions:[{to:"attack",when:{type:"collided"}},{to:"return",when:{type:"player-far",distance:6}}] },
+    attack:{ clip:"Attack", onEnter:[{type:"add-score",amount:-10},{type:"play-sfx",sound:"hit"}], transitions:[{to:"chase",when:{type:"timer",seconds:1}}] },
+    return:{ move:"return-home", transitions:[{to:"patrol",when:{type:"arrived"}},{to:"chase",when:{type:"player-near",distance:3}}] } } }
+- Friendly NPC: { initial:"idle", states:{ idle:{ move:"stay", transitions:[{to:"wave",when:{type:"player-near",distance:2.5}}] }, wave:{ clip:"Wave", transitions:[{to:"idle",when:{type:"player-far",distance:4}}] } } }
+- Door: { initial:"closed", states:{ closed:{ transitions:[{to:"opening",when:{type:"score-at-least",value:50}}] }, opening:{ animation:"spin", onEnter:[{type:"play-sfx",sound:"click"}],
+    transitions:[{to:"open",when:{type:"timer",seconds:1}}] }, open:{ onEnter:[{type:"set-visible",visible:false},{type:"spawn-vfx",vfx:"sparkles"}] } } }`;
+
 /**
  * Repair-mode guidance, embedded in the agent system prompt. Triggered by user prompts that start with
  * "EXECUTION REPAIR REQUEST" (see buildExecutionRepairPrompt).
@@ -223,6 +244,7 @@ AUTHORING & SPATIAL DESIGN RULES:
    { engine?: 'piper'|'babble', pitch?: -8..8 (small creatures +3..+5, big ones -3) } — each character a different pitch.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
+${STATE_MACHINE_PROMPT_SECTION}
 
 ${EXECUTION_REPAIR_PROMPT_SECTION}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, Trash2, Wand2 } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
+import { StateMachineBadge } from '../StateMachineBadge';
 import {
   ActorClickAction,
   AnimationType,
@@ -214,6 +215,10 @@ export const ActorInspectorPanel: React.FC = () => {
               </select>
             </div>
           </div>
+
+          {selectedActor.stateMachine && (
+            <StateMachineBadge id={selectedActor.id} machine={selectedActor.stateMachine} />
+          )}
 
           {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
             <div className="space-y-1">
