@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, Trash2, Wand2 } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
+import { ShaderEffectControl } from './ShaderEffectControl';
 import {
   ActorClickAction,
   AnimationType,
@@ -258,6 +259,11 @@ export const ActorInspectorPanel: React.FC = () => {
               )}
             </select>
           </div>
+
+          <ShaderEffectControl
+            actor={selectedActor}
+            onChange={(shaderEffect) => updateActorProperty(selectedActor.id, { shaderEffect })}
+          />
 
           <div className="space-y-1">
             <span className="text-[11px] font-mono text-slate-400">

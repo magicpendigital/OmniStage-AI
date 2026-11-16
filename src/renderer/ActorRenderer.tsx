@@ -17,6 +17,7 @@ import { Built } from './Built';
 import { actorBadgeText, actorMotion } from '../render3d/actorMotion';
 import { matchClipName, performedActor } from '../runtime/cinematics';
 import { RigPoseLayer, rigPoseInputFor } from '../render3d/rigPose';
+import { ActorShaderEffect } from '../render3d/shaderEffects';
 
 interface ActorRendererProps {
   actor: ActorNode;
@@ -164,6 +165,7 @@ function CompositeProceduralMesh({ actor, unboxTapCount = 0 }: { actor: ActorNod
 export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected, onRuntimeClick }) => {
   const outerGroupRef = useRef<THREE.Group>(null);
   const animGroupRef = useRef<THREE.Group>(null);
+  const fxRef = useRef<ActorShaderEffect | null>(null);
   const [hovered, setHovered] = useState(false);
   const [clickPulse, setClickPulse] = useState(0);
 
@@ -218,7 +220,18 @@ export const ActorRenderer: React.FC<ActorRendererProps> = ({ actor, isSelected,
     anim.rotation.z = THREE.MathUtils.damp(anim.rotation.z, rotZ, 10, delta);
 
     anim.scale.setScalar(THREE.MathUtils.damp(anim.scale.x, motion.scale, 10, delta));
+
+    // Phase 6 Batch 3: shader effect presets (shared builder, same maths as the Player).
+    if (fxRef.current && fxRef.current.root !== anim) {
+      fxRef.current.dispose();
+      fxRef.current = null;
+    }
+    if (performed.shaderEffect || fxRef.current) (fxRef.current ??= new ActorShaderEffect(anim)).update(performed.shaderEffect, { time: currentTime });
   });
+  useEffect(() => () => {
+    fxRef.current?.dispose();
+    fxRef.current = null;
+  }, []);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();

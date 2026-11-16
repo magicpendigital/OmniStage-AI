@@ -221,6 +221,10 @@ AUTHORING & SPATIAL DESIGN RULES:
    leave ~0.4 s between lines and never two lines at once; the last line must end before durationSeconds. The listener is who the speaker
    turns to. Do not also put dialogue text in captions (dialogue shows as captions automatically). Optional actors[].voice =
    { engine?: 'piper'|'babble', pitch?: -8..8 (small creatures +3..+5, big ones -3) } — each character a different pitch.
+14. SHADER EFFECTS (3D actors; data only — never write shader code): actors[].shaderEffect = { preset: 'hologram'|'dissolve'|'toon'|
+   'forcefield'|'lava'|'rainbow', color?: '#rrggbb', intensity?: 0..3 (1), speed?: 0..5 (1), progress?: 0..1 (dissolve only),
+   progressTween?: { from, to, start, duration } (seconds; dissolve-in = from 1 to 0, dissolve-out = from 0 to 1) }.
+   Use sparingly (a ghost / AI projection = hologram, a shield = forcefield, a magic vanish = dissolve, a stylised hero = toon).
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 

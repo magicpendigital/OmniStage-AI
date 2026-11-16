@@ -24,6 +24,7 @@ import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
+import { sanitizeShaderEffect, shaderEffectProblem } from '../runtime/shaderEffects';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -449,6 +450,23 @@ function verifyRecipes(spec: SceneSpec, issues: VerificationIssue[]) {
   }
 }
 
+/** Phase 6 Batch 3 — actor shader effects are one of the fixed presets with clamped params (never shader code). */
+function verifyShaderEffects(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const a of spec.actors || []) {
+    const problem = a.shaderEffect === undefined ? null : shaderEffectProblem(a.shaderEffect);
+    if (problem) issues.push(issue('actor.shader-effect-invalid', 'warning', `Actor "${a.name}" shaderEffect ${problem}.`, true, a.id));
+  }
+}
+
+function fixShaderEffect(spec: SceneSpec, targetId: string | undefined): string | null {
+  const a = spec.actors.find((x) => x.id === targetId);
+  if (!a || a.shaderEffect === undefined) return null;
+  const clean = sanitizeShaderEffect(a.shaderEffect);
+  if (clean) a.shaderEffect = clean;
+  else delete a.shaderEffect;
+  return clean ? `Cleaned "${a.name}" shader effect` : `Removed "${a.name}" unknown shader effect`;
+}
+
 function fixRecipe(spec: SceneSpec, targetId: string | undefined): string | null {
   const [libName, id] = String(targetId || '').split(/:(.*)/s);
   const def = RECIPE_LIBS.find((d) => d.lib === libName);
@@ -670,6 +688,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
   verifyRecipes(spec, issues);
+  verifyShaderEffects(spec, issues);
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
@@ -736,6 +755,8 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
       return fixMobile(spec, i);
     case 'recipe.invalid':
       return fixRecipe(spec, i.targetId);
+    case 'actor.shader-effect-invalid':
+      return fixShaderEffect(spec, i.targetId);
     case 'media.performance-invalid': {
       const a = spec.actors.find((x) => x.id === i.targetId);
       if (!a?.performance) return null;

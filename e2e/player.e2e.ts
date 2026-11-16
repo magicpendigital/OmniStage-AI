@@ -3,7 +3,7 @@
  * deterministic `step()` hook (no timing flakiness). Run: npm run test:e2e
  */
 import { expect, test } from '@playwright/test';
-import { openExport, template } from './exportFixture';
+import { openExport, shaderFxScene, template } from './exportFixture';
 import { applyBiomeToScene } from '../src/runtime/biomes';
 
 const PLAYER_3D = 's.sceneSpec.actors.find((a) => a.physicsRole === "player").position';
@@ -156,4 +156,31 @@ test('3D dialogue: the speaker talks, turns to its listener and the line is capt
   expect(during.actors.robot.yaw).toBeCloseTo(Math.PI / 2, 1);
   await expect(page.locator('.omni-captions')).toContainText('Xin chào! Mình là chú robot nhỏ.');
   expect(p.errors).toEqual([]);
+});
+
+test('3D shader effects: every preset applies to the rigged robot and composites, dissolve burns away (Phase 6)', async ({ page }) => {
+  const spec = shaderFxScene();
+  const p = await openExport(page, spec);
+  await p.waitAssets();
+  await p.step(20, 0.05);
+  const view = await p.view3d();
+  for (const a of spec.actors) expect(view.actors[a.id].fx, `${a.id} (${a.shaderEffect!.preset}) has effect meshes`).toBeGreaterThan(0);
+  const a = await p.pixelStats();
+  expect(a.std, 'a lit frame, not a blank canvas').toBeGreaterThan(8);
+  await page.screenshot({ path: test.info().outputPath('shader-fx.png') });
+
+  // Same scene without effects looks different (the effects really draw).
+  const plain = shaderFxScene();
+  for (const actor of plain.actors) delete actor.shaderEffect;
+  const page2 = await page.context().newPage();
+  const q = await openExport(page2, plain);
+  await q.waitAssets();
+  await q.step(20, 0.05);
+  expect((await q.view3d()).actors.robot.fx).toBe(0);
+  const b = await q.pixelStats();
+  expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std), 'effects change the frame').toBeGreaterThan(1);
+
+  await p.step(80, 0.05); // t ≈ 5 s: dissolve finished, everything else still animating
+  expect(p.errors).toEqual([]);
+  expect(q.errors).toEqual([]);
 });

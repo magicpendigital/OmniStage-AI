@@ -387,8 +387,12 @@ the verifier only checks playability. Fix in layers: contract → production too
 - [x] AI-authored particle/SFX recipes (2026-11-14): the director may write `particleLibrary` / `sfxLibrary` recipes itself
   (prompt section + `custom-vfx-recipes` skill); shared sanitizers in `src/extensions/validate.ts`; verifier rule `recipe.invalid`
   (fixable: clamp, drop renamed built-ins / junk, max 24). Procedural tween + sprite-sheet animation already ship as data.
-- [ ] GLSL shader effects — deferred: generated shader code conflicts with invariant 1 (no generated / eval'd rendering code) and
-  would need a WebGL/WebGPU (TSL) parity story; revisit as a fixed set of parameterised, reviewed shader presets instead.
+- [x] Shader effects as a FIXED set of parameterised, reviewed presets (never generated shader code — invariant 1):
+  `actors[].shaderEffect = { preset: hologram|dissolve|toon|forcefield|lava|rainbow, color?, intensity? 0..3, speed? 0..5, progress? 0..1,
+  progressTween? }`. Pure params in `src/runtime/shaderEffects.ts`; shared builder `ActorShaderEffect` (`src/render3d/shaderEffects.ts`,
+  onBeforeCompile material twins, works on skinned GLTF + composites, clock = timeline time × speed) with its TSL twin in
+  `src/render3d/webgpu/shaderEffects.ts`; verifier rule `actor.shader-effect-invalid` (fixable), prompt rule 14, normaliser, inspector
+  control; WebGL e2e + WebGPU parity scene.
 
 ### Later
 - [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.

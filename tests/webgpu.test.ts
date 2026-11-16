@@ -31,6 +31,7 @@ function fakeBackend(calls: string[]): NodeBackend {
     particles: built('particles'),
     studioEnvironment: () => { calls.push('env'); return () => undefined; },
     bloom: () => ({ render: () => undefined, setSize: () => undefined, setCamera: () => undefined, dispose: () => undefined }),
+    shaderFx: () => ({ material: (m) => Object.assign(m.clone(), { name: 'node-fx' }), set: () => undefined, dispose: () => undefined }),
   };
 }
 

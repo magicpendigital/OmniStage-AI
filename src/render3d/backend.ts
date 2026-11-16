@@ -10,6 +10,7 @@ import type { EnvironmentConfig, WorldSpec } from '../types/scene.schema';
 import type { Built3D, RenderQuality } from './types';
 import type { GpuParticleOptions } from './gpuParticles';
 import type { BloomOptions, PostFx } from './postfx';
+import type { ShaderFxKit } from './shaderEffects';
 
 export interface NodeBackend {
   readonly name: 'webgpu';
@@ -19,6 +20,8 @@ export interface NodeBackend {
   particles(opts: GpuParticleOptions): Built3D;
   studioEnvironment(renderer: unknown, scene: THREE.Scene): () => void;
   bloom(renderer: unknown, scene: THREE.Scene, camera: THREE.Camera, opts?: BloomOptions): PostFx;
+  /** Phase 6 Batch 3: TSL twin of the actor shader-effect presets (src/render3d/shaderEffects.ts). */
+  shaderFx(): ShaderFxKit;
 }
 
 let backend: NodeBackend | null = null;
