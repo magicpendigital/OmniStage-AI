@@ -10,6 +10,7 @@
  * Every generated scene is a declarative SceneSpec; nothing here emits imperative renderer code.
  */
 import { resolvePerformance } from '../runtime/cinematics';
+import { sanitizeStateMachine } from '../runtime/stateMachine';
 import { applyBiomeToScene, BIOME_IDS, biomeEnvironmentPatch, expandBiome } from '../runtime/biomes';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
@@ -45,6 +46,7 @@ import { autoFixSceneSpec } from '../verification/sceneVerifier';
 import { aiHeaders } from './aiClient';
 import { describeDirectorReview } from './directorQA';
 import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
+import { sanitizeShaderEffect } from '../runtime/shaderEffects';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -208,6 +210,8 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
     ...(raw.rigCost && Number.isFinite(raw.rigCost.bones) && Number.isFinite(raw.rigCost.vertices)
       ? { rigCost: { bones: raw.rigCost.bones, vertices: raw.rigCost.vertices, ...(Number.isFinite(raw.rigCost.textureSize) ? { textureSize: raw.rigCost.textureSize } : {}) } }
       : {}),
+    // Phase 6 Batch 3: one of the fixed shader presets, params clamped (never shader code).
+    ...(sanitizeShaderEffect(raw.shaderEffect) ? { shaderEffect: sanitizeShaderEffect(raw.shaderEffect)! } : {}),
     // Phase 10C: character voice. The AI never picks 'elevenlabs' (paid, the creator's own key): only the creator does, in the Dialogue panel.
     ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
       ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
@@ -235,6 +239,8 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
     endTime: num(raw.endTime, durationSeconds),
     enterEffect: raw.enterEffect ?? 'pop-in',
     visible: raw.visible !== false,
+    // Phase 9: behaviour state machine (cleaned; the verifier repairs bad references).
+    ...(sanitizeStateMachine(raw.stateMachine) ? { stateMachine: sanitizeStateMachine(raw.stateMachine)! } : {}),
   };
 }
 
@@ -256,6 +262,7 @@ function normalizeNode2D(raw: any, index: number): Node2D | null {
     fill: str(raw.fill, '#06B6D4'),
     stroke: str(raw.stroke, '#F8FAFC'),
     physics2D: str(raw.physics2D, 'none') as Node2D['physics2D'],
+    stateMachine: sanitizeStateMachine(raw.stateMachine) ?? undefined,
   };
 }
 

@@ -89,6 +89,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   gameTimeRemaining: initialScene3D.gameRules.timeLimitSeconds,
   gameWon: false,
   gameEnded: false,
+  machineStates: undefined,
   unboxTapCounts: {},
   scorePopups: [],
   burstEffects: [],

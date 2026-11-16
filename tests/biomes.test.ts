@@ -79,6 +79,22 @@ test('verifier: silent films, broken soundtracks, landmarks on the stage', () =>
   }
 });
 
+test('verifier: world sky (hdri) needs a url and a known format', () => {
+  const sky = { url: '/api/library/file/personal/abc', name: 'Harbour', source: 'custom' as const, showBackground: true, intensity: 1 };
+  const spec = film();
+  spec.world = { ...spec.world, hdri: { ...sky, format: 'image' } };
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code === 'world.hdri-invalid'), 'a generated skybox picture is valid');
+  spec.world = { ...spec.world, hdri: { ...sky, format: 'exr' as any } };
+  assert.ok(verifySceneSpec(spec).issues.some((i) => i.code === 'world.hdri-invalid'));
+  let fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(fixed.world.hdri!.format, undefined);
+  assert.equal(fixed.world.hdri!.url, sky.url);
+  spec.world = { ...spec.world, hdri: { ...sky, url: ' ' } };
+  fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(fixed.world.hdri, undefined);
+  assert.ok(!verifySceneSpec(fixed).issues.some((i) => i.code === 'world.hdri-invalid'));
+});
+
 test('offline director: films get a biome set and a soundtrack (waterfall when asked)', () => {
   const prompt = 'Làm phim 3D 3 cảnh: chú robot đi tìm thác nước trong rừng cùng bạn cáo';
   const plan = buildLocalStoryboardPlan(prompt, detectStoryboardIntent(prompt)!);

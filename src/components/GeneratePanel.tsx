@@ -1,23 +1,26 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bone, Loader2, Plus, Puzzle, Sparkles } from 'lucide-react';
+import { Bone, Globe2, Loader2, Plus, Puzzle, Sparkles } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { GENERATION_PROVIDERS } from '../extensions/types';
-import { generationKeyFor } from '../extensions/generationHelpers';
+import { generationKeyFor, isSkyboxAsset } from '../extensions/generationHelpers';
 import { AvailableGenerator, GenerationJob, LibraryAsset, workspaceApi } from '../workspace/workspaceClient';
 
 /**
  * Phase 6 Batch 3 — "Generate": text or picture → 3D model (Meshy / Tripo / Rodin), 2D sprite or animated sprite
- * sheet (fal.ai / Replicate / OpenRouter) and sound effects or music (ElevenLabs) through generator extensions.
+ * sheet (fal.ai / Replicate / OpenRouter), sound effects or music (ElevenLabs), 360° skyboxes (Blockade Labs) and
+ * rig + animation of a library model (Meshy / Tripo) through generator extensions.
  * The key stays in this browser and goes to the local server per request; results land in the library.
  */
 export const GeneratePanel: React.FC<{
   scopeKey: string;
   /** Library pictures an image-to-3D generator can start from. */
   pictures: LibraryAsset[];
+  /** Library GLB models a rig generator can start from. */
+  models: LibraryAsset[];
   onSaved: (asset: LibraryAsset) => void;
   onPlace: (asset: LibraryAsset) => void;
   onRig: (asset: LibraryAsset) => void;
-}> = ({ scopeKey, pictures, onSaved, onPlace, onRig }) => {
+}> = ({ scopeKey, pictures, models, onSaved, onPlace, onRig }) => {
   const installed = useStudioStore((s) => s.installedExtensions);
   const settings = useStudioStore((s) => s.settings);
   const updateSettings = useStudioStore((s) => s.updateSettings);
@@ -26,6 +29,7 @@ export const GeneratePanel: React.FC<{
   const [selected, setSelected] = useState('');
   const [prompt, setPrompt] = useState('');
   const [pictureId, setPictureId] = useState('');
+  const [modelId, setModelId] = useState('');
   const [job, setJob] = useState<GenerationJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
@@ -43,7 +47,9 @@ export const GeneratePanel: React.FC<{
   const running = job?.status === 'running';
   const fromPicture = gen?.input === 'image';
   const picture = pictures.find((p) => p.id === pictureId) || (fromPicture ? pictures[0] : undefined);
-  const promptOk = fromPicture ? true : prompt.trim().length >= 3;
+  const fromModel = gen?.input === 'model';
+  const sourceModel = models.find((m) => m.id === modelId) || (fromModel ? models[0] : undefined);
+  const promptOk = fromPicture || fromModel ? true : prompt.trim().length >= 3;
 
   const poll = (id: string, providerKey: string, delay: number) => {
     timer.current = window.setTimeout(async () => {
@@ -66,9 +72,13 @@ export const GeneratePanel: React.FC<{
       setError('Add a picture to the library first (PNG, JPEG or WebP).');
       return;
     }
+    if (fromModel && !sourceModel) {
+      setError('Add a GLB model to the library first.');
+      return;
+    }
     try {
       const started = await workspaceApi.startGeneration(
-        { extensionId: gen.extensionId, generatorId: gen.id, prompt: prompt.trim(), scope: scopeKey, ...(fromPicture && picture ? { imageAssetId: picture.id, imageScope: scopeKey } : {}) },
+        { extensionId: gen.extensionId, generatorId: gen.id, prompt: prompt.trim(), scope: scopeKey, ...(fromPicture && picture ? { imageAssetId: picture.id, imageScope: scopeKey } : {}), ...(fromModel && sourceModel ? { modelAssetId: sourceModel.id, modelScope: scopeKey } : {}) },
         key
       );
       setJob(started);
@@ -83,7 +93,7 @@ export const GeneratePanel: React.FC<{
     return (
       <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5">
         <div className="flex items-center gap-1.5 font-semibold text-slate-200"><Sparkles className="w-3.5 h-3.5 text-fuchsia-300" /> Generate with AI</div>
-        <p className="text-[11px] text-slate-500">Install a generator (Meshy, Tripo, Rodin, fal.ai, Replicate, OpenRouter, ElevenLabs) to make 3D models, sprites, sprite sheets and sounds from a prompt with your own API key.</p>
+        <p className="text-[11px] text-slate-500">Install a generator (Meshy, Tripo, Rodin, fal.ai, Replicate, OpenRouter, ElevenLabs, Blockade Labs) to make 3D models, sprites, sprite sheets, sounds and skyboxes from a prompt, or rig and animate a model, with your own API key.</p>
         <button type="button" onClick={() => setExtensionsOpen(true)} className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-500/40 text-violet-200">
           <Puzzle className="w-3 h-3" /> Extensions → Catalog
         </button>
@@ -93,14 +103,18 @@ export const GeneratePanel: React.FC<{
 
   const what = !gen
     ? 'asset'
-    : gen.output === 'model'
+    : gen.provider === 'blockade'
+      ? 'skybox'
+      : gen.output === 'model'
       ? '3D model'
       : gen.output === 'audio'
         ? gen.audio === 'music' ? 'music' : 'sound'
         : gen.frames ? 'sprite sheet' : gen.sprite ? 'sprite' : 'image';
   const placeholder = !gen
     ? ''
-    : fromPicture
+    : gen.provider === 'blockade'
+      ? 'e.g. sunset over a fantasy harbour, warm light, distant mountains'
+      : fromPicture
       ? 'Optional: describe materials or details to guide the model'
       : gen.output === 'model'
         ? 'e.g. a low-poly wooden treasure chest with gold trim'
@@ -142,6 +156,18 @@ export const GeneratePanel: React.FC<{
           <p className="text-[11px] text-amber-300">Add a picture to this library first (PNG, JPEG or WebP, one subject on a plain background).</p>
         )
       )}
+      {fromModel && (
+        models.length ? (
+          <select value={sourceModel?.id || ''} onChange={(e) => setModelId(e.target.value)} disabled={running} aria-label="Model to rig and animate" className="w-full px-2 py-1 rounded bg-slate-900 border border-slate-700 text-slate-100">
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        ) : (
+          <p className="text-[11px] text-amber-300">Add a GLB model to this library first (one character, textured, standing in a T- or A-pose).</p>
+        )
+      )}
+      {!fromModel && (
       <textarea
         rows={2}
         value={prompt}
@@ -150,14 +176,15 @@ export const GeneratePanel: React.FC<{
         placeholder={placeholder}
         className="w-full px-2 py-1.5 rounded bg-slate-900 border border-slate-700 text-slate-100 placeholder-slate-600 resize-none"
       />
+      )}
       <button
         type="button"
         onClick={generate}
-        disabled={running || !promptOk || (fromPicture && !picture) || (!key && !gen?.serverKey)}
+        disabled={running || !promptOk || (fromPicture && !picture) || (fromModel && !sourceModel) || (!key && !gen?.serverKey)}
         className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-fuchsia-600 text-white font-semibold disabled:opacity-40"
       >
         {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-        {running ? `${job!.stage} · ${job!.progress}%` : `Generate ${what}`}
+        {running ? `${job!.stage} · ${job!.progress}%` : fromModel ? 'Rig & animate' : `Generate ${what}`}
       </button>
       {provider && (
         <p className="text-[10px] text-slate-500">
@@ -169,10 +196,10 @@ export const GeneratePanel: React.FC<{
         <div className="flex items-center gap-1.5 text-emerald-300 text-[11px]">
           <span className="truncate">✓ Saved “{job.asset.name}”</span>
           <span className="ml-auto flex gap-1">
-            {job.asset.kind === 'model' && (
+            {job.asset.kind === 'model' && !job.asset.tags.includes('rigged') && (
               <button type="button" onClick={() => onRig(job.asset!)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-violet-500/40 text-violet-200" title="Auto-rig this model with OmniRig"><Bone className="w-3 h-3" /> Rig</button>
             )}
-            <button type="button" onClick={() => onPlace(job.asset!)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-cyan-500/40 text-cyan-200"><Plus className="w-3 h-3" /> {job.asset.kind === 'audio' ? 'Add track' : 'Place'}</button>
+            <button type="button" onClick={() => onPlace(job.asset!)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-cyan-500/40 text-cyan-200">{isSkyboxAsset(job.asset) ? <Globe2 className="w-3 h-3" /> : <Plus className="w-3 h-3" />} {job.asset.kind === 'audio' ? 'Add track' : isSkyboxAsset(job.asset) ? 'Use as sky' : 'Place'}</button>
           </span>
         </div>
       )}

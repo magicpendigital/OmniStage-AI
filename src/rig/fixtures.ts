@@ -84,3 +84,60 @@ export function sampleQuadruped(): MeshData {
   }
   return done(b);
 }
+
+/** Joints of the sample bird (canonical, 0.49 m tall before normalisation; wings spread along ±x). */
+export const SAMPLE_BIRD_JOINTS: Record<string, Vec3> = {
+  leftShoulder: [0.07, 0.31, 0], leftWingTip: [0.59, 0.31, -0.02], leftAnkle: [0.04, 0.03, 0], head: [0, 0.44, 0.15], tailTip: [0, 0.29, -0.31],
+};
+
+/** A blocky bird with spread wings (thin sheets at mid height), two thin legs, a beak and a flat tail, facing +Z. */
+export function sampleBird(): MeshData {
+  const b: Builder = { positions: [], indices: [] };
+  box(b, [0, 0.27, 0], [0.08, 0.075, 0.15], 6); // body
+  box(b, [0, 0.37, 0.12], [0.035, 0.05, 0.035]); // neck
+  box(b, [0, 0.44, 0.15], [0.045, 0.05, 0.055], 5); // head (top 0.49)
+  box(b, [0, 0.43, 0.23], [0.012, 0.012, 0.035]); // beak
+  box(b, [0, 0.29, -0.22], [0.06, 0.012, 0.09], 5); // tail fan
+  for (const side of [1, -1]) {
+    box(b, [side * 0.17, 0.31, 0], [0.09, 0.012, 0.09], 8); // inner wing 0.08..0.26
+    box(b, [side * 0.345, 0.31, -0.01], [0.085, 0.012, 0.07], 8); // middle 0.26..0.43
+    box(b, [side * 0.51, 0.31, -0.02], [0.08, 0.012, 0.05], 8); // outer 0.43..0.59
+    box(b, [side * 0.04, 0.11, 0], [0.01, 0.1, 0.01], 6); // leg 0.01..0.21
+    box(b, [side * 0.04, 0.012, 0.03], [0.022, 0.012, 0.05]); // foot, toes forward
+  }
+  return done(b);
+}
+
+/** A blocky serpent 2 m long lying along z (tail tip at z = -1, snout at z = +1), tapering to the tail, head wider. */
+export function sampleSerpent(): MeshData {
+  const b: Builder = { positions: [], indices: [] };
+  for (let z = -0.95; z <= 0.8 + 1e-9; z += 0.125) {
+    const s = (z + 1) / 2; // 0 tail → 1 head
+    const r = 0.012 + 0.043 * Math.min(1, s / 0.45) - (s > 0.82 ? 0.012 : 0);
+    box(b, [0, r * 0.8, z], [r, r * 0.8, 0.08], 4);
+  }
+  box(b, [0, 0.042, 0.92], [0.062, 0.042, 0.08], 5); // head 0.84..1.0
+  return done(b);
+}
+
+/** Knuckles (first finger joint) of the left hand of `sampleHumanoidWithFingers` (canonical). */
+export const SAMPLE_FINGER_KNUCKLES: Record<string, Vec3> = {
+  Index: [0.785, 1.42, 0.039], Middle: [0.785, 1.42, 0.013], Ring: [0.785, 1.42, -0.013], Pinky: [0.785, 1.42, -0.039], Thumb: [0.77, 1.415, 0.04],
+};
+
+/** The sample humanoid with open hands: a flat palm, four separated fingers along the arm and a thumb pointing forward. */
+export function sampleHumanoidWithFingers(): MeshData {
+  const b: Builder = { positions: [], indices: [] };
+  box(b, [0, 1.2, 0], [0.19, 0.3, 0.11], 6);
+  box(b, [0, 1.53, 0], [0.05, 0.04, 0.05]);
+  box(b, [0, 1.68, 0.01], [0.11, 0.12, 0.12], 5);
+  for (const side of [1, -1]) {
+    box(b, [side * 0.46, 1.42, 0], [0.27, 0.05, 0.05], 8); // arm 0.19..0.73
+    box(b, [side * 0.765, 1.42, 0], [0.035, 0.015, 0.05], 5); // palm 0.73..0.80, 3 cm thick
+    for (const z of [0.039, 0.013, -0.013, -0.039]) box(b, [side * 0.84, 1.42, z], [0.042, 0.007, 0.007], 6); // fingers 0.798..0.882
+    box(b, [side * 0.77, 1.415, 0.077], [0.008, 0.008, 0.03], 6); // thumb forward, z 0.047..0.107
+    box(b, [side * 0.1, 0.5, 0], [0.065, 0.42, 0.065], 8);
+    box(b, [side * 0.1, 0.04, 0.07], [0.065, 0.04, 0.14]);
+  }
+  return done(b);
+}

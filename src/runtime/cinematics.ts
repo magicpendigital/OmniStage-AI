@@ -252,17 +252,19 @@ export function gazeAt(
 
 const CLIP_SYNONYMS: Record<string, string[]> = {
   idle: ['idle', 'survey', 'breath', 'stand'],
-  walk: ['walk', 'walking'],
+  walk: ['walk', 'walking', 'slither', 'crawl'],
   run: ['run', 'running', 'gallop', 'sprint'],
+  // OmniRig bird / serpent clips (Flying, Gliding, Peck, Attack): the AI says "fly", "flap", "glide", "bite" ...
+  fly: ['fly', 'flying', 'flap', 'hover'],
+  glide: ['glid', 'soar'],
+  peck: ['peck', 'feed'],
+  attack: ['attack', 'strike', 'bite', 'lunge'],
   sit: ['sit', 'sitting'],
   wave: ['wave', 'hello'],
 };
 
-/** Finds the model clip for a requested name: exact → case-insensitive → contains → synonyms → idle → first. */
-export function matchClipName(wanted: string | undefined, names: string[]): string | undefined {
-  if (!names.length) return undefined;
-  const idle = () => names.find((n) => /idle|survey|breath/i.test(n)) || names[0];
-  if (!wanted) return idle();
+/** Like `matchClipName` but without the idle / first-clip fallback: undefined when no clip means `wanted`. */
+export function resolveClipName(wanted: string, names: string[]): string | undefined {
   const w = wanted.toLowerCase();
   const found =
     names.find((n) => n === wanted) ||
@@ -270,13 +272,21 @@ export function matchClipName(wanted: string | undefined, names: string[]): stri
     names.find((n) => n.toLowerCase().includes(w)) ||
     names.find((n) => w.includes(n.toLowerCase().replace(/[_\s]+$/, '')) && n.length > 2);
   if (found) return found;
-  for (const [key, list] of Object.entries(CLIP_SYNONYMS)) {
+  for (const list of Object.values(CLIP_SYNONYMS)) {
     if (list.some((s) => w.includes(s))) {
-      const hit = names.find((n) => list.some((s) => n.toLowerCase().includes(s))) || (key === 'idle' ? idle() : undefined);
+      const hit = names.find((n) => list.some((s) => n.toLowerCase().includes(s)));
       if (hit) return hit;
     }
   }
-  return idle();
+  return undefined;
+}
+
+/** Finds the model clip for a requested name: exact → case-insensitive → contains → synonyms → idle → first. */
+export function matchClipName(wanted: string | undefined, names: string[]): string | undefined {
+  if (!names.length) return undefined;
+  const idle = () => names.find((n) => /idle|survey|breath/i.test(n)) || names[0];
+  if (!wanted) return idle();
+  return resolveClipName(wanted, names) ?? idle();
 }
 
 // --------------------------------------------------------------------------------------------- shots

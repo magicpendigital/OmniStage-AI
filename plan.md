@@ -218,7 +218,13 @@ Publish → "Mobile App" tab (`src/components/MobileExportPanel.tsx`, pure build
   `mobile.edge-ui` (fixable), `mobile.heavy-scene`, `mobile.keyboard-only` (warnings). Orientation is a checklist item.
 - [x] Rig cost in the mobile budget (2026-11-16): OmniRig characters carry `actors[].rigCost` (bones, skinned vertices, texture size)
   measured on placement; `mobile.rig-cost` warns above 150k skinned vertices, 12 rigged actors, 100 bones or 2048 px textures.
-- [ ] Later: per-device performance profiles measured on real phones.
+- [x] Per-device performance profiles — machinery (2026-11-16): low / mid / high tiers as data (`src/runtime/deviceProfiles.ts`;
+  `mid` = `MOBILE_REFERENCE`), `verifySceneSpec(spec, { target: 'mobile', deviceTier })` (same rule ids; particle budget under
+  `mobile.heavy-scene`). App builds detect the tier (cores, memory, GPU string, screen) and run an adaptive governor
+  (`src/runtime/qualityGovernor.ts`: bloom → pixel ratio → shadows → particles, hysteresis + oscillation lock); never in ad
+  exports or frame-stepped capture. Hidden overlay (5 taps top-left / `?omniPerf=1`), `__omniPlayer.perf()`, report saved
+  under `omnistage.perf.<appId>`. Guide: `docs/mobile-performance.md`.
+- [ ] Measure the tier budgets on real phones and fill in the table in `docs/mobile-performance.md`; 2D quality steps.
 
 ### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
 Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
@@ -262,9 +268,24 @@ vertices, texture size of OmniRig characters).
   convolution, so scrubbing and frame-stepped exports match); films only, in `RigPoseLayer`.
 - [x] FBX clip import (2026-11-16): OmniRig "Import clips" accepts Mixamo `.fbx` (FBXLoader) as well as `.glb`; not yet checked
   against a real Mixamo download.
-- [ ] LLM state machine JSON.
-- [ ] Weight painting; bird / serpent templates; finger bones.
-- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
+- [x] LLM state machine JSON (2026-11-16): `actors[].stateMachine` / `nodes2D[].stateMachine` = states with moves (patrol, chase,
+  flee, move-to, return-home), closed-list conditions and actions; interpreted by `src/runtime/stateMachine.ts` (studio, Play Test,
+  Player; seeded, game mode only); verifier `machine.*` (auto-fixed), prompt + `behaviour-state-machines` skill, inspector badge.
+- [ ] Weight painting.
+- [x] Bird / serpent templates (2026-11-16): `bird` = thin wings spread wide at mid height + legs (spine, neck, head, 3-bone
+  wings, 2 legs, tail; clips Idle / Walking / Running / Flying / Gliding / Peck; stress poses wings up / down, peck); `serpent` =
+  long and low, normalised to 2 m long (10–16 spine bones + head + jaw; travelling-wave slither Idle / Walking / Running + Attack;
+  coil / S-curve / rear up). Both auto-detected or picked in OmniRig; samples grade A on the synthetic meshes.
+- [x] Finger bones (2026-11-16): open hands with separated fingers get Mixamo chains (`mixamorigLeftHandIndex1..4` …, thumb
+  included) from a 2D distance transform of the hand in the palm plane; weights stay on one finger per vertex; clips curl the
+  fingers; Mixamo finger tracks retarget. Mitten / touching / curled fingers keep one hand bone with a warning. Not yet checked
+  on real models.
+- [x] Provider plugins (2026-11-16): Meshy rig + animation (`meshy-rig-animator`: rigging → animations with Animation Library
+  action ids) and Tripo rig + retarget (`tripo-rig-animator`: v3 upload → rig → retarget presets, biped + quadruped), BYO keys.
+  The source is a GLB from My Library; the result's clips are renamed to Idle / Walking / Running… (`server/generate/glb.ts`)
+  so `matchClipName` and the AI drive them; placing it registers a `gltf-rigged` entry with those clips. Mocked HTTP only —
+  not yet run against the real APIs.
+- [ ] UniRig / Puppeteer via an optional local GPU ML server.
 
 ### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
 Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;
@@ -365,7 +386,10 @@ the verifier only checks playability. Fix in layers: contract → production too
   - Tests: `tests/directorQA.test.ts`.
   - (2026-11-16) Manual "Director QA" button (AI drawer header + command bar) for any 3D scene with keyframes; runs even when
     automatic Director QA is off, asks for a vision connection otherwise; the result is undoable like an AI turn.
-  - Not done: Blockade skybox, Meshy animation; a real vision-model run on a generated film.
+  - (2026-11-16) Blockade Labs skybox generator (`blockade-skybox-generator`): prompt → equirect JPG in My Library → "Use as
+    sky" sets `world.hdri` with the new `format: 'image'` (studio TextureLoader + drei Environment map; Player TextureLoader);
+    verifier `world.hdri-invalid`. Meshy animation: see Phase 9 provider plugins. Mocked HTTP only.
+  - Not done: a real vision-model run on a generated film; real-key runs of Blockade / Meshy / Tripo rig.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`
@@ -387,10 +411,21 @@ the verifier only checks playability. Fix in layers: contract → production too
 - [x] AI-authored particle/SFX recipes (2026-11-14): the director may write `particleLibrary` / `sfxLibrary` recipes itself
   (prompt section + `custom-vfx-recipes` skill); shared sanitizers in `src/extensions/validate.ts`; verifier rule `recipe.invalid`
   (fixable: clamp, drop renamed built-ins / junk, max 24). Procedural tween + sprite-sheet animation already ship as data.
-- [ ] GLSL shader effects — deferred: generated shader code conflicts with invariant 1 (no generated / eval'd rendering code) and
-  would need a WebGL/WebGPU (TSL) parity story; revisit as a fixed set of parameterised, reviewed shader presets instead.
+- [x] Shader effects as a FIXED set of parameterised, reviewed presets (never generated shader code — invariant 1):
+  `actors[].shaderEffect = { preset: hologram|dissolve|toon|forcefield|lava|rainbow, color?, intensity? 0..3, speed? 0..5, progress? 0..1,
+  progressTween? }`. Pure params in `src/runtime/shaderEffects.ts`; shared builder `ActorShaderEffect` (`src/render3d/shaderEffects.ts`,
+  onBeforeCompile material twins, works on skinned GLTF + composites, clock = timeline time × speed) with its TSL twin in
+  `src/render3d/webgpu/shaderEffects.ts`; verifier rule `actor.shader-effect-invalid` (fixable), prompt rule 14, normaliser, inspector
+  control; WebGL e2e + WebGPU parity scene.
 
 ### Later
-- [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.
-- [ ] Exporter plugins beyond the web runtime (e.g. SceneSpec → Godot project) for heavy 3D games, consoles and Steam.
+- [x] Desktop packaging (2026-11-16): `desktop/` Electron app runs the bundled server (`npm run build:server`) on 127.0.0.1, adds
+  the AI CLI install dirs to PATH, Help → Diagnostics; NSIS + portable built on Windows (unsigned); dmg / AppImage configured,
+  not built. Docs: `docs/desktop.md`. Playwright E2E was done in Phase 7C.
+- [ ] Rapier3D + lightweight ECS.
+- [x] SceneSpec → Godot 4 project (2026-11-16): `src/exporter/godotExport.ts` (Publish → Godot 4 project): tscn scenes, fixed
+  GDScript templates for score / win-lose / movement / scene links, logic graph compiled to rule data; everything not converted
+  (VFX, audio, cinematics, state machines, shader effects…) is listed as warnings + `OMNISTAGE_EXPORT_NOTES.md`. Not yet opened
+  in a real Godot (the headless check runs when `godot` / `GODOT_BIN` is available).
+- [ ] Further exporter plugins (consoles, Steam).
 - [x] Deterministic video (WebCodecs) with audio — done in 10B; NodeGraphView wheel zoom uses a non-passive listener (2026-11-16).

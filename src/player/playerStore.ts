@@ -48,7 +48,7 @@ export function createPlayerStore(scenes: SceneSpec[], startSceneId?: string) {
         gameTimeRemaining: spec.gameRules?.timeLimitSeconds || 60,
       });
     },
-    ...createGameRuntimeSlice<PlayerState>(set, get),
+    ...createGameRuntimeSlice<PlayerState>(set, get, (s) => s.scenes.find((x) => x.id === s.sceneSpec.id)),
   }));
 }
 

@@ -1,0 +1,19 @@
+{
+  "name": "omnistage-desktop",
+  "productName": "OmniStage AI",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OmniStage AI desktop app: the local studio server + window, no terminal needed.",
+  "author": "OmniStage",
+  "main": "main.cjs",
+  "scripts": {
+    "icon": "node scripts/make-icon.mjs",
+    "start": "node node_modules/electron/install.js && electron .",
+    "dist": "electron-builder --config electron-builder.yml",
+    "dist:dir": "electron-builder --config electron-builder.yml --dir"
+  },
+  "devDependencies": {
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0"
+  }
+}

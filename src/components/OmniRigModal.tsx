@@ -7,8 +7,8 @@ import { useStudioStore } from '../state/useStudioStore';
 import { workspaceApi } from '../workspace/workspaceClient';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import type { CharacterCategory } from '../rig/analyze';
-import { sampleHumanoid, sampleQuadruped } from '../rig/fixtures';
-import type { RigSkeleton } from '../rig/skeleton';
+import { sampleBird, sampleHumanoidWithFingers, sampleQuadruped, sampleSerpent } from '../rig/fixtures';
+import { fingerChainOf, type RigSkeleton } from '../rig/skeleton';
 import { stressPoses } from '../rig/skin';
 import { exportRiggedGlb, extractClipLibrary, readAnimationFile, rigCostOf, rerigAsync, rigCharacterAsync, RigResult, withImportedClips } from '../rig/omnirig3d';
 import { retargetLibrary, type SourceClipLibrary } from '../rig/clipLibrary';
@@ -44,13 +44,16 @@ const REST = '__rest';
 
 const SAMPLE_MODELS = ['gltf-soldier', 'gltf-robot-expressive', 'gltf-fox', 'gltf-horse'].filter((id) => ASSET_REGISTRY[id]?.modelUrl);
 
-function sampleObject(kind: 'humanoid' | 'quadruped'): THREE.Object3D {
-  const data = kind === 'humanoid' ? sampleHumanoid() : sampleQuadruped();
+const SAMPLES = { humanoid: sampleHumanoidWithFingers, quadruped: sampleQuadruped, bird: sampleBird, serpent: sampleSerpent } as const;
+const SAMPLE_COLOR = { humanoid: '#60a5fa', quadruped: '#f59e0b', bird: '#34d399', serpent: '#a78bfa' } as const;
+
+function sampleObject(kind: keyof typeof SAMPLES): THREE.Object3D {
+  const data = SAMPLES[kind]();
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
   g.setIndex(Array.from(data.indices));
   g.computeVertexNormals();
-  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: kind === 'humanoid' ? '#60a5fa' : '#f59e0b', roughness: 0.6 }));
+  const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: SAMPLE_COLOR[kind], roughness: 0.6 }));
   const root = new THREE.Group();
   root.add(mesh);
   return root;
@@ -192,9 +195,12 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
     group.add(result.object);
     group.add(new THREE.SkeletonHelper(result.object));
     const jointMat = new THREE.MeshBasicMaterial({ color: '#fbbf24', depthTest: false, transparent: true, opacity: 0.9 });
-    const r = result.report.height * 0.018;
+    // serpents are long, not tall: size the joints and the camera by the larger of height and length
+    const span = Math.max(result.report.height, result.report.length);
+    const r = span * 0.018;
     for (const b of result.skeleton.bones) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), jointMat);
+      const finger = !!fingerChainOf(b.name);
+      const s = new THREE.Mesh(new THREE.SphereGeometry(finger ? r * 0.3 : r, 10, 8), jointMat);
       s.position.set(...b.head);
       s.renderOrder = 10;
       s.userData.bone = b.name;
@@ -204,7 +210,7 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
     v.content = group;
     v.scene.add(group);
     v.controls.target.set(0, result.report.height * 0.5, 0);
-    v.camera.position.set(result.report.height * 0.9, result.report.height * 0.8, result.report.height * 1.9);
+    v.camera.position.set(span * 0.9, result.report.height * 0.5 + span * 0.3, span * 1.9);
     v.mixer = new THREE.AnimationMixer(result.object);
     editedSkeleton.current = { ...result.skeleton, bones: result.skeleton.bones.map((b) => ({ ...b, head: [...b.head] as typeof b.head })) };
   }, [result, source]);
@@ -447,8 +453,9 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
                 <input type="file" accept=".glb,.gltf" className="hidden" onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
               </label>
               <div className="flex flex-wrap gap-1">
-                <button type="button" className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700" onClick={() => { const s = { name: 'Sample humanoid', root: sampleObject('humanoid') }; setName(s.name); setSource(s); run(s); }}>Sample humanoid</button>
-                <button type="button" className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700" onClick={() => { const s = { name: 'Sample quadruped', root: sampleObject('quadruped') }; setName(s.name); setSource(s); run(s); }}>Sample quadruped</button>
+                {(['humanoid', 'quadruped', 'bird', 'serpent'] as const).map((kind) => (
+                  <button key={kind} type="button" className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700" onClick={() => { const s = { name: `Sample ${kind}`, root: sampleObject(kind) }; setName(s.name); setSource(s); run(s); }}>Sample {kind}</button>
+                ))}
                 {SAMPLE_MODELS.map((id) => (
                   <button key={id} type="button" className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700" onClick={() => loadUrl(id)} title="Re-rig a built-in model">{ASSET_REGISTRY[id].name.replace(/\s*\(.*\)/, '')}</button>
                 ))}
@@ -475,6 +482,8 @@ export const OmniRigModal: React.FC<{ onClose: () => void; initialModel?: { name
                     <select value={r.report.category} onChange={(e) => source && run(source, e.target.value as CharacterCategory)} className="flex-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700">
                       <option value="humanoid">Humanoid</option>
                       <option value="quadruped">Four-legged</option>
+                      <option value="bird">Bird (wings)</option>
+                      <option value="serpent">Serpent (snake, worm)</option>
                       <option value="prop">Prop (one piece)</option>
                     </select>
                     <span className="text-slate-500">{Math.round(r.report.categoryConfidence * 100)} %</span>

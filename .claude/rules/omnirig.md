@@ -10,7 +10,8 @@ paths:
   only `omnirig3d.ts` touches Three.js. Keep it deterministic (seeded sampling, no Math.random).
 - Canonical frame for every step: up +Y, facing +Z, character's left +X, feet on y = 0. Bones have identity rest rotations,
   so clip rotations are about these axes. Humanoid bones use loader-style Mixamo names (`MIXAMO('LeftArm')` → `mixamorigLeftArm`).
-- Clip names must stay the ones the AI and `matchClipName` already use (Idle, Walking, Running, Wave, Jump, Yes, No, Sitting, Dance).
+- Clip names must stay the ones the AI and `matchClipName` already use (Idle, Walking, Running, Wave, Jump, Yes, No, Sitting, Dance;
+  bird adds Flying / Gliding / Peck, serpent Attack). Finger bones are optional: code that walks the hand must work without them.
 - Retarget with `retargetClip` (rest-pose deltas), never `SkeletonUtils.retargetClip`. Imported libraries go through
   `clipLibrary.ts` (`retargetLibrary`, `matchRestDirections: true`); extraction from glTF is `extractClipLibrary` in omnirig3d.
   Clip files are read only through `readAnimationFile` (GLB/glTF or Mixamo FBX). Placed characters get `rigCost` from `rigCostOf`.

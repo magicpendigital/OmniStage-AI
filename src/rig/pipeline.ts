@@ -46,7 +46,7 @@ export function skinStage(mesh: MeshData, skeleton: RigSkeleton, opts: { maxTria
 export function rigMeshData(data: MeshData, opts: { forceCategory?: CharacterCategory; skeleton?: RigSkeleton; maxTriangles?: number; target?: number } = {}): CoreRigResult {
   const { report, points } = analyzeMesh(data, { forceCategory: opts.forceCategory });
   const positions = canonicalPositions(data, report.frame);
-  const skeleton = opts.skeleton || fitSkeleton(report.category, points);
+  const skeleton = opts.skeleton || fitSkeleton(report.category, points, { positions, indices: data.indices });
   const stage = skinStage({ positions, indices: data.indices }, skeleton, opts);
   return { report, positions, skeleton, ...stage };
 }

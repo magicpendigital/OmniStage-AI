@@ -3,7 +3,7 @@
  * deterministic `step()` hook (no timing flakiness). Run: npm run test:e2e
  */
 import { expect, test } from '@playwright/test';
-import { openExport, template } from './exportFixture';
+import { openExport, shaderFxScene, template } from './exportFixture';
 import { applyBiomeToScene } from '../src/runtime/biomes';
 
 const PLAYER_3D = 's.sceneSpec.actors.find((a) => a.physicsRole === "player").position';
@@ -53,6 +53,34 @@ test('3D tap to unbox: tapping the gift box counts taps even though the logic gr
   const taps = await p.state<number>('Object.values(s.unboxTapCounts).reduce((a, b) => a + b, 0)');
   expect(taps).toBe(required);
   expect(await p.state<number>('s.gameScore'), 'opening the box scores').toBeGreaterThan(0);
+  expect(p.errors).toEqual([]);
+});
+
+test('3D state machine: an enemy waits, chases the player and catches them (Phase 9)', async ({ page }) => {
+  const spec = template('coin-rush-playable');
+  const hero = spec.actors.find((a) => a.physicsRole === 'player')!;
+  const [hx, , hz] = hero.position;
+  const ex = hx > 0 ? hx - 3 : hx + 3;
+  spec.actors.push({ ...hero, id: 'e2e-enemy', name: 'Enemy', physicsRole: 'static', onClickAction: 'none', position: [ex, 0, hz],
+    stateMachine: { initial: 'idle', states: {
+      idle: { move: 'stay', transitions: [{ to: 'chase', when: { type: 'timer', seconds: 0.5 } }] },
+      chase: { move: 'chase-player', speed: 2, transitions: [{ to: 'caught', when: { type: 'player-near', distance: 1 } }] },
+      caught: { onEnter: [{ type: 'spawn-vfx', vfx: 'sparkles' }] },
+    } } });
+  const p = await openExport(page, spec);
+  // Real-time rAF frames run before manual(true) takes over (many on a loaded machine): restart so the timer starts from zero.
+  await page.evaluate(() => (window as any).__omniPlayer.restart());
+  await p.step(5);
+  expect(await p.state<string>('s.machineStates["e2e-enemy"]')).toBe('idle');
+  let state = 'idle';
+  for (let i = 0; i < 20 && state !== 'caught'; i++) {
+    await p.step(10);
+    state = await p.state<string>('s.machineStates["e2e-enemy"]');
+  }
+  expect(state).toBe('caught');
+  const end = await p.state<number[]>('s.sceneSpec.actors.find((a) => a.id === "e2e-enemy").position');
+  expect(Math.abs(end[0] - ex)).toBeGreaterThan(1.5);
+  expect(await p.state<boolean>('s.sceneSpec.vfx.some((v) => v.id === "runtime-vfx-sm-e2e-enemy")')).toBe(true);
   expect(p.errors).toEqual([]);
 });
 
@@ -156,4 +184,79 @@ test('3D dialogue: the speaker talks, turns to its listener and the line is capt
   expect(during.actors.robot.yaw).toBeCloseTo(Math.PI / 2, 1);
   await expect(page.locator('.omni-captions')).toContainText('Xin chào! Mình là chú robot nhỏ.');
   expect(p.errors).toEqual([]);
+});
+
+test('app build: device tier + adaptive quality steps down on slow frames (Phase 8)', async ({ page }) => {
+  const p = await openExport(page, template('open-world-nature-island'), { app: { saveKey: 'com.omnistage.perftest', tier: 'high' } });
+  await p.step(10);
+  const perf = () => page.evaluate(() => (window as any).__omniPlayer.perf());
+  const quality = () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d.quality);
+  let report = await perf();
+  expect(report.tier).toBe('high');
+  expect(report.rung).toBe(0);
+  expect(await quality()).toMatchObject({ shadows: 'full', postFx: true, particleScale: 1 });
+  // Frame-stepping (MP4 / manual mode) never feeds the governor.
+  const framesBefore = report.frames;
+  await p.step(20);
+  expect((await perf()).frames).toBe(framesBefore);
+  // 25 fps for ~12 s of synthetic frames → several steps down the ladder.
+  await page.evaluate(() => (window as any).__omniPlayer.perfSample(40, 300));
+  report = await perf();
+  expect(report.steps.length).toBeGreaterThanOrEqual(2);
+  expect(report.steps.every((s: any) => s.reason === 'slow')).toBe(true);
+  expect(report.rung).toBeGreaterThan(1);
+  expect((await quality()).postFx).toBe(false);
+  await p.step(5);
+  const px = await p.pixelStats();
+  expect(px.std, 'still renders after the quality change').toBeGreaterThan(8);
+  expect(p.errors).toEqual([]);
+});
+
+test('app build: auto tier detection picks low on software rendering; ad exports report no profile (Phase 8)', async ({ page }) => {
+  const app = await openExport(page, template('coin-rush-playable'), { quality: 'auto', app: { saveKey: 'com.omnistage.autotier' } });
+  await app.step(5);
+  const report = await page.evaluate(() => (window as any).__omniPlayer.perf());
+  expect(report.tier).toBe('low');
+  expect(report.reasons.join(' ')).toMatch(/software/);
+  expect(app.errors).toEqual([]);
+
+  const ad = await openExport(page, template('coin-rush-playable'));
+  await ad.step(5);
+  expect(await page.evaluate(() => (window as any).__omniPlayer.perf())).toBeNull();
+});
+
+test('3D shader effects: every preset applies to the rigged robot and composites, dissolve burns away (Phase 6)', async ({ page }) => {
+  const spec = shaderFxScene();
+  const p = await openExport(page, spec);
+  // The rAF loop runs a few real-time frames before manual(true) takes over; start both pages from t = 0 so the comparison below is deterministic.
+  await page.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
+  await p.waitAssets();
+  await p.step(20, 0.05);
+  const view = await p.view3d();
+  for (const a of spec.actors) expect(view.actors[a.id].fx, `${a.id} (${a.shaderEffect!.preset}) has effect meshes`).toBeGreaterThan(0);
+  const a = await p.pixelStats();
+  expect(a.std, 'a lit frame, not a blank canvas').toBeGreaterThan(8);
+  await page.screenshot({ path: test.info().outputPath('shader-fx.png') });
+
+  // Same scene without effects looks different (the effects really draw).
+  const plain = shaderFxScene();
+  for (const actor of plain.actors) delete actor.shaderEffect;
+  const page2 = await page.context().newPage();
+  const q = await openExport(page2, plain);
+  await page2.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
+  await q.waitAssets();
+  await q.step(20, 0.05);
+  expect((await q.view3d()).actors.robot.fx).toBe(0);
+  const b = await q.pixelStats();
+  // The global mean / std of two different pictures can cancel out (they differed by 0.2..1.0 run to run), so also compare
+  // the frames pixel by pixel: six effect props must change many pixels, not just the average.
+  const ga = await p.pixelGrid();
+  const gb = await q.pixelGrid();
+  const meanAbsDiff = ga.reduce((sum, v, i) => sum + Math.abs(v - gb[i]), 0) / ga.length;
+  expect(meanAbsDiff, 'effects change the frame (mean per-pixel luminance difference)').toBeGreaterThan(3);
+  expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std) + meanAbsDiff, 'effects change the frame').toBeGreaterThan(1);
+
+  await p.step(80, 0.05); // t ≈ 5 s: dissolve finished, everything else still animating
+  expect(p.errors).toEqual([]);
+  expect(q.errors).toEqual([]);
 });

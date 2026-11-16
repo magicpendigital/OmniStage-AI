@@ -8,7 +8,7 @@
  */
 import type { Vec3 } from './analyze';
 import { MIXAMO, type RigSkeleton } from './skeleton';
-import { Quat, quatAxisAngle } from './skin';
+import { fingerCurlPose, Quat, quatAxisAngle } from './skin';
 
 export interface ClipTrack {
   bone: string;
@@ -70,11 +70,14 @@ function humanoidClips(sk: RigSkeleton): ClipData[] {
   const hips = m('Hips');
   // arms from T-pose down to the sides (A-ish), shared by most clips
   const down = (side: 'Left' | 'Right', extra: Quat = [0, 0, 0, 1]) => mul(extra, Z(side === 'Left' ? -72 : 72));
+  // finger curl (empty without finger bones): relaxed hands are slightly curled, never ramrod straight
+  const curl = (deg: number, sides?: Array<'Left' | 'Right'>) => fingerCurlPose(sk.bones, deg, deg * 0.6, sides);
   const relaxed = (): Record<string, Quat> => ({
     [m('LeftArm')]: down('Left'),
     [m('RightArm')]: down('Right'),
     [m('LeftForeArm')]: Y(-12),
     [m('RightForeArm')]: Y(12),
+    ...curl(18),
   });
   const gait = (u: number, amp: number, knee: number, armAmp: number, lean: number, bob: number) => {
     const ph = u * TAU;
@@ -98,6 +101,7 @@ function humanoidClips(sk: RigSkeleton): ClipData[] {
         [m('Spine')]: mul(X(lean), Y(6 * s)),
         [m('Spine2')]: Y(-6 * s),
         [m('Head')]: Y(-3 * s),
+        ...curl(armAmp > 30 ? 48 : 22), // running: loose fists
       },
       root: [0, -bob * Math.abs(Math.cos(ph)), 0] as Vec3,
     };
@@ -111,7 +115,7 @@ function humanoidClips(sk: RigSkeleton): ClipData[] {
     sample('Walking', 1.05, true, (u) => gait(u, stride, 38, 22, 3, 0.012 * H), hips),
     sample('Running', 0.66, true, (u) => gait(u, stride * 1.5, 75, 40, 12, 0.03 * H), hips),
     sample('Wave', 2.0, true, (u) => ({
-      rot: { ...relaxed(), [m('RightArm')]: Z(-150), [m('RightForeArm')]: Z(-25 + 22 * Math.sin(u * TAU * 2)), [m('Head')]: Z(4) },
+      rot: { ...relaxed(), ...curl(4, ['Right']), [m('RightArm')]: Z(-150), [m('RightForeArm')]: Z(-25 + 22 * Math.sin(u * TAU * 2)), [m('Head')]: Z(4) },
     }), hips),
     sample('Jump', 1.1, false, (u) => {
       const crouch = u < 0.25 ? u / 0.25 : u < 0.4 ? 1 - (u - 0.25) / 0.15 : u > 0.82 ? Math.sin(((u - 0.82) / 0.18) * Math.PI) : 0;
@@ -122,6 +126,7 @@ function humanoidClips(sk: RigSkeleton): ClipData[] {
           [m('LeftLeg')]: X(80 * crouch + 30 * air), [m('RightLeg')]: X(80 * crouch + 30 * air),
           [m('Spine')]: X(20 * crouch),
           [m('LeftArm')]: down('Left', Z(140 * air)), [m('RightArm')]: down('Right', Z(-140 * air)),
+          ...curl(20 + 15 * crouch),
         },
         root: [0, -0.16 * legLen * crouch + 0.45 * legLen * air, 0],
       };
@@ -147,6 +152,7 @@ function humanoidClips(sk: RigSkeleton): ClipData[] {
           [m('Spine')]: Z(8 * Math.sin(u * TAU)), [m('Head')]: Z(-8 * Math.sin(u * TAU)),
           [m('LeftUpLeg')]: X(-15 * Math.max(0, b)), [m('RightUpLeg')]: X(-15 * Math.max(0, -b)),
           [m('LeftLeg')]: X(30 * Math.max(0, b)), [m('RightLeg')]: X(30 * Math.max(0, -b)),
+          ...curl(30),
         },
         root: [0.03 * H * Math.sin(u * TAU), -0.02 * H * Math.abs(b), 0],
       };
@@ -188,6 +194,122 @@ function quadrupedClips(sk: RigSkeleton): ClipData[] {
   ];
 }
 
+// ================================================================================================ bird
+
+/** Mirror a left-side rotation to the right side (reflection across the x = 0 plane). */
+const mirrorQ = (q: Quat): Quat => [q[0], -q[1], -q[2], q[3]];
+
+function birdClips(sk: RigSkeleton): ClipData[] {
+  const has = (n: string) => sk.bones.some((b) => b.name === n);
+  const H = Math.max(...sk.bones.map((b) => b.head[1]));
+  const both = (name: string, q: Quat): Record<string, Quat> => (has(`Left${name}`) ? { [`Left${name}`]: q, [`Right${name}`]: mirrorQ(q) } : {});
+  const tail = (q: Quat): Record<string, Quat> => (has('Tail1') ? { Tail1: q } : {});
+  // wings folded along the body: shoulder back and down, elbow forward, wrist back
+  const folded = (open = 0): Record<string, Quat> => ({
+    ...both('Wing1', mul(Y(65 * (1 - open)), Z(-15 * (1 - open)))),
+    ...both('Wing2', Y(-120 * (1 - open))),
+    ...both('Wing3', Y(110 * (1 - open))),
+  });
+  const tucked = (): Record<string, Quat> => ({ ...both('UpLeg', X(60)), ...both('Leg', X(-50)), ...both('Foot', X(40)) });
+  const flap = (u: number, amp: number, fold: number) => {
+    const ph = u * TAU;
+    return {
+      ...both('Wing1', Z(10 + amp * Math.sin(ph))),
+      ...both('Wing2', mul(Y(-fold * Math.max(0, -Math.sin(ph))), Z(amp * 0.35 * Math.sin(ph - 0.6)))),
+      ...both('Wing3', mul(Y(fold * Math.max(0, -Math.sin(ph))), Z(amp * 0.45 * Math.sin(ph - 1.2)))),
+    };
+  };
+  const walk = (u: number, amp: number, bob: number, open: number) => {
+    const ph = u * TAU, s = Math.sin(ph);
+    return {
+      rot: {
+        ...folded(open),
+        ...(has('LeftUpLeg') ? { LeftUpLeg: X(-amp * s), RightUpLeg: X(amp * s) } : {}),
+        ...(has('LeftLeg') ? { LeftLeg: X(amp * 0.8 * Math.max(0, Math.cos(ph))), RightLeg: X(amp * 0.8 * Math.max(0, -Math.cos(ph))) } : {}),
+        Neck: X(8 * Math.sin(ph * 2)), // the head bobs with every step
+        Head: X(-6 * Math.sin(ph * 2)),
+        ...tail(X(4 * Math.sin(ph * 2))),
+      },
+      root: [0, -bob * Math.abs(Math.cos(ph)), 0] as Vec3,
+    };
+  };
+  return [
+    sample('Idle', 2.4, true, (u) => ({
+      // breathing, a head that turns in steps, a tail flick
+      rot: { ...folded(), Spine: X(1.5 * Math.sin(u * TAU)), Head: Y(28 * Math.sign(Math.sin(u * TAU)) * Math.min(1, Math.abs(Math.sin(u * TAU)) * 4)), ...tail(X(8 * Math.max(0, Math.sin(u * TAU * 3)) ** 4)) },
+      root: [0, -0.004 * H * (1 - Math.cos(u * TAU)), 0],
+    }), 'Hips'),
+    sample('Walking', 0.8, true, (u) => walk(u, 28, 0.02 * H, 0), 'Hips'),
+    sample('Running', 0.45, true, (u) => walk(u, 42, 0.04 * H, 0.35), 'Hips'),
+    sample('Flying', 0.6, true, (u) => ({
+      rot: { ...flap(u, 45, 35), ...tucked(), Neck: X(-4 * Math.sin(u * TAU)), ...tail(X(6 * Math.sin(u * TAU))) },
+      root: [0, 0.04 * H * Math.sin(u * TAU + Math.PI / 2), 0],
+    }), 'Hips'),
+    sample('Gliding', 2.0, true, (u) => ({
+      rot: { ...both('Wing1', Z(4 + 3 * Math.sin(u * TAU))), ...both('Wing3', Z(5 * Math.sin(u * TAU - 1))), ...tucked(), Spine: Z(5 * Math.sin(u * TAU)), ...tail(Y(5 * Math.sin(u * TAU))) },
+      root: [0, 0.02 * H * Math.sin(u * TAU), 0],
+    }), 'Hips'),
+    sample('Peck', 1.2, true, (u) => {
+      const p = Math.max(0, Math.sin(u * TAU * 2)) ** 2;
+      return { rot: { ...folded(), Spine: X(10 * p), Neck: X(50 * p), Head: X(20 * p), ...tail(X(-10 * p)) } };
+    }, 'Hips'),
+  ];
+}
+
+// ================================================================================================ serpent
+
+/**
+ * Serpent clips: a travelling sine wave of the body's heading (serpenoid curve) from head to tail. Every body bone gets
+ * the heading of the curve at its joint as a world yaw; local = own yaw − parent yaw (all about +Y, so they commute).
+ */
+function serpentClips(sk: RigSkeleton): ClipData[] {
+  const body = sk.bones.filter((b) => /^(Hips|Spine\d+|Neck|Tail\d+)$/.test(b.name));
+  const headBone = sk.bones.find((b) => b.name === 'Head');
+  const zs = sk.bones.map((b) => b.head[2]);
+  const zHead = headBone ? headBone.head[2] : Math.max(...zs), zTail = Math.min(...zs);
+  const span = Math.max(1e-6, zHead - zTail);
+  const sOf = (z: number) => Math.min(1, Math.max(0, (zHead - z) / span)); // 0 at the head, 1 at the tail tip
+  const has = (n: string) => sk.bones.some((b) => b.name === n);
+  const index = new Map(sk.bones.map((b, i) => [b.name, i]));
+  /** Local yaws for a heading function of s, plus extra local rotations applied after the yaw. */
+  const wave = (heading: (s: number) => number, extra: Record<string, Quat> = {}): Record<string, Quat> => {
+    const world = new Map<string, number>();
+    for (const b of body) world.set(b.name, heading(sOf(b.head[2])));
+    if (headBone) world.set('Head', 0.35 * heading(0));
+    const rot: Record<string, Quat> = {};
+    for (const [name, yaw] of world) {
+      const b = sk.bones[index.get(name)!];
+      const parent = b.parent >= 0 ? sk.bones[b.parent].name : null;
+      const local = yaw - (parent && world.has(parent) ? world.get(parent)! : 0);
+      rot[name] = extra[name] ? mul(Y(local), extra[name]) : Y(local);
+    }
+    for (const [name, q] of Object.entries(extra)) if (!rot[name] && has(name)) rot[name] = q;
+    return rot;
+  };
+  const serpenoid = (u: number, amp: number, waves: number) => (s: number) => amp * (0.45 + 0.55 * s) * Math.sin(TAU * (waves * s - u));
+  const front = body.filter((b) => /^(Spine\d+|Neck)$/.test(b.name));
+  const lift = (deg: number): Record<string, Quat> => {
+    // raise the front of the body: the first bones behind the head pitch up, the head levels out
+    const out: Record<string, Quat> = {};
+    front.slice(-3).forEach((b) => { out[b.name] = X(-deg / 3); });
+    if (headBone) out.Head = X(deg * 0.8);
+    return out;
+  };
+  return [
+    sample('Idle', 3.0, true, (u) => ({ rot: wave(serpenoid(u, 7, 0.8), { ...lift(12 + 3 * Math.sin(u * TAU)) }) }), 'Hips'),
+    sample('Walking', 1.4, true, (u) => ({ rot: wave(serpenoid(u, 26, 1.2), lift(6)) }), 'Hips'),
+    sample('Running', 0.8, true, (u) => ({ rot: wave(serpenoid(u, 36, 1.4), lift(4)) }), 'Hips'),
+    sample('Attack', 1.4, false, (u) => {
+      const rear = u < 0.45 ? Math.sin((u / 0.45) * (Math.PI / 2)) : u < 0.6 ? 1 - (u - 0.45) / 0.15 : 0;
+      const strike = u >= 0.45 && u < 0.85 ? Math.sin(((u - 0.45) / 0.4) * Math.PI) : 0;
+      const extra: Record<string, Quat> = { ...lift(45 * rear) };
+      if (has('Neck')) extra.Neck = mul(extra.Neck || [0, 0, 0, 1], X(25 * strike));
+      if (has('Jaw')) extra.Jaw = X(40 * Math.max(rear * 0.5, strike));
+      return { rot: wave(serpenoid(u * 0.3, 8 * (1 - strike), 1), extra) };
+    }, 'Hips'),
+  ];
+}
+
 function propClips(): ClipData[] {
   return [
     sample('Idle', 2.0, true, (u) => ({ rot: { Body: Z(3 * Math.sin(u * TAU)) }, root: [0, 0.02 * Math.sin(u * TAU), 0] }), 'Root'),
@@ -197,7 +319,13 @@ function propClips(): ClipData[] {
 }
 
 export function proceduralClips(sk: RigSkeleton): ClipData[] {
-  return sk.category === 'humanoid' ? humanoidClips(sk) : sk.category === 'quadruped' ? quadrupedClips(sk) : propClips();
+  switch (sk.category) {
+    case 'humanoid': return humanoidClips(sk);
+    case 'quadruped': return quadrupedClips(sk);
+    case 'bird': return birdClips(sk);
+    case 'serpent': return serpentClips(sk);
+    default: return propClips();
+  }
 }
 
 // ================================================================================================ retargeting
