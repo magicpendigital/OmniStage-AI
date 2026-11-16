@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bone, HardDrive, Loader2, Plus, Trash2, Upload } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { LibraryAsset, workspaceApi } from '../workspace/workspaceClient';
-import { spriteSheetFromMeta } from '../extensions/generationHelpers';
+import { isSkyboxAsset, riggedEntryFromMeta, skyboxHdri, spriteSheetFromMeta } from '../extensions/generationHelpers';
 import { GeneratePanel } from './GeneratePanel';
 import { OmniRigModal } from './OmniRigModal';
 
@@ -16,6 +16,8 @@ export const PersonalLibraryPanel: React.FC = () => {
   const activeProject = useStudioStore((s) => s.activeProject);
   const registerAndSpawnCustomAsset = useStudioStore((s) => s.registerAndSpawnCustomAsset);
   const addAudioTrack = useStudioStore((s) => s.addAudioTrack);
+  const updateWorld = useStudioStore((s) => s.updateWorld);
+  const setEngineType = useStudioStore((s) => s.setEngineType);
   const [scope, setScope] = useState<'personal' | 'project'>('personal');
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const [busy, setBusy] = useState(false);
@@ -61,7 +63,14 @@ export const PersonalLibraryPanel: React.FC = () => {
     const url = workspaceApi.assetUrl(scopeKey, a.id);
     setError(null);
     setNotice(null);
-    if (a.kind === 'model') registerAndSpawnCustomAsset(a.name, url, 'glb');
+    if (a.kind === 'model') registerAndSpawnCustomAsset(a.name, url, 'glb', riggedEntryFromMeta(a.meta, a.name));
+    else if (isSkyboxAsset(a)) {
+      // A generated skybox is an equirectangular picture: it becomes the world sky, not a sprite.
+      const spec = useStudioStore.getState().sceneSpec;
+      if (spec.engineType === '2d') setEngineType('3d');
+      updateWorld({ hdri: skyboxHdri(url, a.name, spec.world?.hdri) });
+      setNotice(`“${a.name}” is now the world sky.`);
+    }
     else if (a.mime === 'image/svg+xml') registerAndSpawnCustomAsset(a.name, url, 'svg');
     else if (a.kind === 'image' || a.kind === 'spritesheet') {
       const sheet = spriteSheetFromMeta(a.meta);
@@ -94,7 +103,7 @@ export const PersonalLibraryPanel: React.FC = () => {
           <button type="button" onClick={() => setScope('project')} disabled={!activeProject} title={activeProject ? `Shared by games in ${activeProject.name}` : 'Open a project first'} className={`px-2 py-0.5 rounded text-[10px] disabled:opacity-40 ${scope === 'project' ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-400'}`}>Project</button>
         </div>
       </div>
-      <GeneratePanel scopeKey={scopeKey} pictures={assets.filter((a) => (a.kind === 'image' || a.kind === 'spritesheet') && a.mime !== 'image/svg+xml' && a.mime !== 'image/gif')} onSaved={() => reload()} onPlace={place} onRig={rig} />
+      <GeneratePanel scopeKey={scopeKey} pictures={assets.filter((a) => (a.kind === 'image' || a.kind === 'spritesheet') && a.mime !== 'image/svg+xml' && a.mime !== 'image/gif')} models={assets.filter((a) => a.kind === 'model' && /\.glb$/i.test(a.file))} onSaved={() => reload()} onPlace={place} onRig={rig} />
       <input ref={fileRef} type="file" multiple className="hidden" accept=".glb,.gltf,.png,.jpg,.jpeg,.webp,.svg,.gif,.mp3,.wav,.ogg,.hdr" onChange={(e) => e.target.files && upload(e.target.files)} />
       <button type="button" onClick={() => fileRef.current?.click()} disabled={busy} className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-dashed border-slate-600 text-slate-300 hover:border-cyan-400 disabled:opacity-50">
         {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />} Add files (.glb, .png, .svg, .mp3…)

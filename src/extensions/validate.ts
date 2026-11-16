@@ -9,7 +9,7 @@ import type {
   ParticleRecipe,
   SfxRecipe,
 } from './types';
-import { GENERATION_PROVIDERS, PERMISSION_INFO, SPRITE_SHEET_FRAMES } from './types';
+import { GENERATION_PROVIDERS, PERMISSION_INFO, RIG_CLIP_NAMES, SPRITE_SHEET_FRAMES } from './types';
 
 /** owner/name model ids for fal.ai and Replicate (no traversal, no versions, no query strings). */
 export const GENERATION_MODEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}(\/[a-z0-9][a-z0-9._-]{0,63}){1,3}$/;
@@ -155,8 +155,22 @@ export function validateManifest(m: any): string[] {
     if (!info) errors.push(`${label} has unknown provider "${g?.provider}" (use ${Object.keys(GENERATION_PROVIDERS).join(', ')})`);
     else if (g.output !== info.output) errors.push(`${label}: ${info.label} generates ${info.output}s`);
     if (g?.model !== undefined && (typeof g.model !== 'string' || !GENERATION_MODEL_RE.test(g.model) || g.model.includes('..'))) errors.push(`${label} has an invalid model id`);
-    if (g?.input !== undefined && g.input !== 'text' && g.input !== 'image') errors.push(`${label}: input must be "text" or "image"`);
+    if (g?.input !== undefined && g.input !== 'text' && g.input !== 'image' && g.input !== 'model') errors.push(`${label}: input must be "text", "image" or "model"`);
     if (g?.input === 'image' && info && !info.imageInput) errors.push(`${label}: ${info.label} cannot start from a picture`);
+    if (g?.input === 'model' && info && !info.modelInput) errors.push(`${label}: ${info.label} cannot rig a model`);
+    if (g?.rigType !== undefined) {
+      if (g.rigType !== 'biped' && g.rigType !== 'quadruped') errors.push(`${label}: rigType must be "biped" or "quadruped"`);
+      if (g.input !== 'model') errors.push(`${label}: rigType only applies to rig generators (input "model")`);
+      if (g.rigType === 'quadruped' && g.provider === 'meshy') errors.push(`${label}: Meshy only rigs bipeds`);
+    }
+    if (g?.clips !== undefined) {
+      const okClips = Array.isArray(g.clips) && g.clips.length >= 1 && g.clips.length <= 5 && g.clips.every((c: unknown) => (RIG_CLIP_NAMES as readonly unknown[]).includes(c)) && new Set(g.clips).size === g.clips.length;
+      if (!okClips) errors.push(`${label}: clips must be 1–5 distinct names from ${RIG_CLIP_NAMES.join(', ')}`);
+      if (g.input !== 'model') errors.push(`${label}: clips only apply to rig generators (input "model")`);
+    }
+    if (g?.styleId !== undefined && (g.provider !== 'blockade' || !Number.isInteger(g.styleId) || g.styleId < 1 || g.styleId > 100000)) {
+      errors.push(`${label}: styleId must be a positive whole number (Blockade Labs only)`);
+    }
     if (g?.frames !== undefined) {
       const okFrames = Number.isInteger(g.frames) && g.frames >= SPRITE_SHEET_FRAMES.min && g.frames <= SPRITE_SHEET_FRAMES.max;
       if (!okFrames) errors.push(`${label}: frames must be a whole number from ${SPRITE_SHEET_FRAMES.min} to ${SPRITE_SHEET_FRAMES.max}`);

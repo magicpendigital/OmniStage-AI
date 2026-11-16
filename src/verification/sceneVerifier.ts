@@ -341,6 +341,10 @@ function verifyWorldFeatures(spec: SceneSpec, issues: VerificationIssue[]) {
   if (spec.world.biome !== undefined && !BIOME_IDS.includes(spec.world.biome)) {
     issues.push(issue('world.biome-invalid', 'warning', `Unknown biome "${spec.world.biome}" (biomes: ${BIOME_IDS.join(', ')}).`, true));
   }
+  const hdri = spec.world.hdri;
+  if (hdri && (typeof hdri.url !== 'string' || !hdri.url.trim() || (hdri.format !== undefined && hdri.format !== 'hdr' && hdri.format !== 'image'))) {
+    issues.push(issue('world.hdri-invalid', 'warning', `world.hdri needs a url and format 'hdr' (Radiance .hdr) or 'image' (equirectangular JPEG/PNG skybox).`, true));
+  }
   for (const f of spec.world.features || []) {
     if (!f || !WORLD_FEATURE_TYPES.includes(f.type) || !Array.isArray(f.position) || f.position.length !== 3 || f.position.some((v) => !Number.isFinite(v))) {
       issues.push(issue('world.feature-invalid', 'warning', `World feature "${f?.id ?? '?'}" is invalid (types: ${WORLD_FEATURE_TYPES.join(', ')}; position [x, y, z]).`, true, f?.id));
@@ -821,6 +825,16 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
       if (st.cues) st.cues = st.cues.filter((c) => c && Number.isFinite(c.time) && c.time >= 0 && c.time < duration &&
         ((SFX_PRESET_IDS as string[]).includes(c.sfx) || !!spec.sfxLibrary?.[c.sfx]));
       return 'Repaired the soundtrack (mood / ambience / cues)';
+    }
+    case 'world.hdri-invalid': {
+      const h = spec.world?.hdri;
+      if (!h) return null;
+      if (typeof h.url !== 'string' || !h.url.trim()) {
+        delete spec.world.hdri;
+        return 'Removed a world sky without a url';
+      }
+      delete h.format;
+      return 'Reset the world sky format to .hdr';
     }
     case 'world.biome-invalid':
       delete spec.world.biome;
