@@ -6,6 +6,7 @@ import {
   canReachSurface,
   MAX_GAP,
   MAX_STEP_UP,
+  mobileRigBudget,
   verifySceneSpec,
 } from '../src/verification/sceneVerifier';
 import type { Node2D, SceneSpec } from '../src/types/scene.schema';
@@ -177,4 +178,31 @@ test('mobile target: rules are opt-in and auto-fix raises small text', () => {
   assert.ok(verifySceneSpec(spec, { target: 'mobile' }).issues.some((i) => i.code === 'mobile.text-small' && i.targetId === 'hud'));
   const fixed = autoFixSceneSpec(spec, { target: 'mobile' });
   assert.ok(!fixed.report.issues.some((i) => i.code === 'mobile.text-small'));
+});
+
+test('mobile target: rig cost budget (vertices, bones, textures, rigged actor count)', () => {
+  const spec = createBlankSceneSpec('3d', 'Rig budget');
+  const base = spec.actors[0];
+  const light = { ...base, id: 'light', name: 'Light', rigCost: { bones: 65, vertices: 20_000, textureSize: 1024 } };
+  spec.actors = [light];
+  assert.equal(mobileRigBudget(spec).issues.length, 0);
+  assert.ok(!verifySceneSpec(spec, { target: 'mobile' }).issues.some((i) => i.code === 'mobile.rig-cost'));
+
+  const heavy = { ...base, id: 'heavy', name: 'Heavy', rigCost: { bones: 160, vertices: 140_000, textureSize: 4096 } };
+  spec.actors = [light, heavy];
+  const budget = mobileRigBudget(spec);
+  assert.equal(budget.vertices, 160_000);
+  assert.equal(budget.heaviest?.id, 'heavy');
+  assert.deepEqual(budget.issues.map((i) => i.id).sort(), ['bones', 'texture', 'vertices']);
+  const rig = verifySceneSpec(spec, { target: 'mobile' }).issues.filter((i) => i.code === 'mobile.rig-cost');
+  assert.equal(rig.length, 3);
+  assert.ok(rig.every((i) => i.severity === 'warning'));
+  assert.ok(rig.some((i) => i.targetId === 'heavy'));
+  // Opt-in: no mobile rules without the mobile target.
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code === 'mobile.rig-cost'));
+
+  spec.actors = Array.from({ length: 13 }, (_, n) => ({ ...light, id: `r${n}`, rigCost: { bones: 30, vertices: 2_000 } }));
+  assert.deepEqual(mobileRigBudget(spec).issues.map((i) => i.id), ['actors']);
+  spec.actors = spec.actors.map((a, n) => (n ? a : { ...a, visible: false }));
+  assert.equal(mobileRigBudget(spec).issues.length, 0, 'hidden actors do not count');
 });

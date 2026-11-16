@@ -79,7 +79,8 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
   big reveal or victory 'epic'; loss 'sad'; magic or night secrets 'mysterious'. Keep one mood across consecutive shots of a sequence
   so the score flows over the cuts; change it only when the story turns.
 - ambience.type 'auto' matches the place (biome, waterfall, river, rain, night); name one only to override (e.g. 'cave', 'space').
-- cues land on the action, from the script: footstep when a walk starts, splash at the water, whoosh on fast moves / camera whips,
+- footsteps follow every walk automatically (soundtrack.footsteps: false only for silent feet) — never add footstep cues for walks.
+- cues land on the action, from the script: splash at the water, whoosh on fast moves / camera whips,
   pop or chime when something appears, powerup / win on a triumph, hit on a fall. 2-5 cues per 10 s; never stack two within 0.3 s.
 - Keep music.volume 0.4-0.6 under dialogue-heavy captions; 0.7 for montage.`,
   },

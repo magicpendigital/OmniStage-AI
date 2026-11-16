@@ -332,6 +332,13 @@ export type AmbienceId =
   | 'cave'
   | 'space';
 
+/** Skinning cost of one rigged model: bones in its skeleton, skinned vertices and its largest texture side (px). */
+export interface RigCost {
+  bones: number;
+  vertices: number;
+  textureSize?: number;
+}
+
 /** Phase 10B: a timed sound effect on the film timeline (seconds from the scene start). */
 export interface SoundtrackCue {
   time: number;
@@ -349,6 +356,8 @@ export interface SoundtrackSpec {
   music?: { mood: MusicMood; /** 0..1, default 0.55 */ volume?: number; /** BPM override */ tempo?: number };
   ambience?: { type: AmbienceId; /** 0..1, default 0.5 */ volume?: number };
   cues?: SoundtrackCue[];
+  /** Footsteps synced to the performers' walks (src/audio/footsteps.ts). Default on; false = silent feet. */
+  footsteps?: boolean;
   /** Overall 0..1, default 0.9 */
   volume?: number;
 }
@@ -563,6 +572,11 @@ export interface ActorNode {
   performance?: PerformanceStep[];
   /** Phase 10C: how this character sounds when it speaks dialogue lines. */
   voice?: ActorVoice;
+  /**
+   * Phase 8/9: measured skinning cost of a rigged model (set when an OmniRig character is placed), used by the mobile budget
+   * (`mobile.rig-cost`). Never authored by the AI.
+   */
+  rigCost?: RigCost;
   /**
    * Phase 10C (runtime only, never authored): 0..1 speaking level at the current time, set by performedActor so the
    * renderers can add talk motion. Not saved.

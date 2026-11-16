@@ -23,6 +23,7 @@ import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
+import { ASSET_REGISTRY } from '../registry/assetRegistry';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -492,7 +493,44 @@ export const MOBILE_REFERENCE = {
   },
   maxActors3D: 60,
   maxNodes2D: 300,
+  /** Rig cost (Phase 9 characters): skinned vertices in view at once, skinned models, bones per skeleton, texture side. */
+  maxSkinnedVertices: 150_000,
+  maxSkinnedActors: 12,
+  maxBones: 100,
+  maxTextureSize: 2048,
 };
+
+/** Skinning budget of a 3D scene for phones: totals from measured `rigCost`, rigged library models counted without one. */
+export function mobileRigBudget(spec: Pick<SceneSpec, 'actors'>): {
+  skinnedActors: number;
+  vertices: number;
+  heaviest?: { id: string; name: string; bones: number; vertices: number; textureSize?: number };
+  issues: Array<{ id: string; message: string; actorId?: string }>;
+} {
+  const R = MOBILE_REFERENCE;
+  const shown = (spec.actors || []).filter((a) => a.visible !== false);
+  const rigged = shown.filter((a) => a.rigCost || (ASSET_REGISTRY[a.assetId]?.category === 'gltf-rigged' && (ASSET_REGISTRY[a.assetId]?.embeddedClips?.length ?? 0) > 0));
+  const measured = shown.filter((a) => a.rigCost);
+  const vertices = measured.reduce((s, a) => s + Math.max(0, a.rigCost!.vertices), 0);
+  const heaviest = measured.slice().sort((a, b) => b.rigCost!.vertices - a.rigCost!.vertices)[0];
+  const issues: Array<{ id: string; message: string; actorId?: string }> = [];
+  if (vertices > R.maxSkinnedVertices) {
+    issues.push({ id: 'vertices', message: `Rigged characters skin ${Math.round(vertices / 1000)}k vertices every frame; phones stay smooth under ${R.maxSkinnedVertices / 1000}k. Use fewer or lighter characters (heaviest: "${heaviest!.name}", ${Math.round(heaviest!.rigCost!.vertices / 1000)}k).` });
+  }
+  if (rigged.length > R.maxSkinnedActors) {
+    issues.push({ id: 'actors', message: `${rigged.length} animated rigged characters may drop frames on low-end phones (keep under ${R.maxSkinnedActors}).` });
+  }
+  for (const a of measured) {
+    if (a.rigCost!.bones > R.maxBones) issues.push({ id: 'bones', actorId: a.id, message: `"${a.name}" has ${a.rigCost!.bones} bones; keep skeletons under ${R.maxBones} for phones.` });
+    if ((a.rigCost!.textureSize ?? 0) > R.maxTextureSize) issues.push({ id: 'texture', actorId: a.id, message: `"${a.name}" uses ${a.rigCost!.textureSize} px textures; phones need ${R.maxTextureSize} px or less.` });
+  }
+  return {
+    skinnedActors: rigged.length,
+    vertices,
+    heaviest: heaviest ? { id: heaviest.id, name: heaviest.name, ...heaviest.rigCost! } : undefined,
+    issues,
+  };
+}
 
 export interface MobileStageGeometry {
   /** CSS px per 2D design unit. */
@@ -579,8 +617,11 @@ function verifyMobile(spec: SceneSpec, issues: VerificationIssue[]) {
     if ((spec.nodes2D || []).length > MOBILE_REFERENCE.maxNodes2D) {
       issues.push(issue('mobile.heavy-scene', 'warning', `${spec.nodes2D.length} 2D nodes may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxNodes2D}).`, false));
     }
-  } else if ((spec.actors || []).length > MOBILE_REFERENCE.maxActors3D) {
-    issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxActors3D}).`, false));
+  } else {
+    if ((spec.actors || []).length > MOBILE_REFERENCE.maxActors3D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxActors3D}).`, false));
+    }
+    for (const r of mobileRigBudget(spec).issues) issues.push(issue('mobile.rig-cost', 'warning', r.message, false, r.actorId));
   }
 
   if (spec.mode === 'game') {

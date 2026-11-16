@@ -2,17 +2,30 @@
  * Phase 9 — procedural pose layer on top of skeletal clips, shared by the studio viewport and the OmniStage Player:
  *  - head look-at: neck + head turn toward a world point (from `gazeAt`), clamped like a real neck and blended by weight;
  *  - foot IK on terrain: each leg is solved as a two-bone chain so the feet follow the ground under them (the clip's own
- *    foot lift is kept), and the hips drop when one foot has to reach lower.
+ *    foot lift is kept), and the hips drop when one foot has to reach lower;
+ *  - spring bones: tails, ears, hair, capes lag behind the body's acceleration and overshoot when it stops. The spring is solved
+ *    as a convolution of the performer's past motion (damped-oscillator impulse response), so it is a pure function of time:
+ *    scrubbing, Preview and frame-stepped exports agree.
  * Works on Mixamo / OmniRig bone names (mixamorig prefixes ignored). Runs after the mixer each frame; bones the mixer does not
  * drive are restored to their base pose first, so corrections never accumulate.
  */
 import * as THREE from 'three';
-import { gazeAt, terrainGroundY } from '../runtime/cinematics';
+import { gazeAt, hasPerformance, resolvePerformance, terrainGroundY } from '../runtime/cinematics';
 import type { ActorNode, SceneSpec } from '../types/scene.schema';
 
 export const LOOK_LIMITS = { yaw: (70 * Math.PI) / 180, pitch: (30 * Math.PI) / 180, neckShare: 0.4 };
 /** Feet only follow terrain within this height difference (m); a bigger step is a ledge, not a slope. */
 export const FOOT_IK_MAX_STEP = 0.6;
+/** Spring bones: natural frequency (Hz), damping ratio, history window (s), sampling step (s), bend limit (rad), gain. */
+export const SPRING = { hz: 1.6, damping: 0.25, window: 1.6, dt: 1 / 30, maxBend: (40 * Math.PI) / 180, gain: 1.6 };
+/** Bone names (prefix-free, lower case, letters + digits) that swing as spring chains. "forearm" is not an ear. */
+export const SPRING_NAME = /(tail|hair|ponytail|braid|antenna|cape|skirt|^(left|right|l|r)?ear(left|right|l|r)?\d*(end)?$)/;
+
+/** Root motion of a performer at a time: world position + facing. */
+export interface MotionSample {
+  position: [number, number, number];
+  yaw: number;
+}
 
 interface LegChain {
   upper: THREE.Bone;
@@ -35,6 +48,39 @@ export interface RigPoseInput {
   groundAt?: (x: number, z: number) => number;
   /** Facing of the actor root in radians around +y (0 = +z). */
   yaw: number;
+  /** Spring bones: the performer's root motion at any time (deterministic), and the current time. */
+  motion?: { at: (time: number) => MotionSample; time: number };
+}
+
+interface SpringChain {
+  bones: THREE.Bone[];
+  length: number;
+  /** Chain root relative to the model root, in the actor's facing frame (set on first use). */
+  offset?: THREE.Vector3;
+}
+
+/**
+ * Displacement (m) of a spring-hung point relative to its support for the support's past motion: y'' + 2ζωy' + ω²y = -a,
+ * solved as y(t) = -∫ g(τ) a(t-τ) dτ with g(τ) = e^(-ζωτ) sin(ω_d τ) / ω_d. `pointAt(k)` is the support at t - k·dt.
+ */
+export function springDisplacement(pointAt: (k: number) => THREE.Vector3, opts = SPRING): THREE.Vector3 {
+  const w = 2 * Math.PI * opts.hz;
+  const z = opts.damping;
+  const wd = w * Math.sqrt(1 - z * z);
+  const dt = opts.dt;
+  const K = Math.ceil(opts.window / dt);
+  const pts: THREE.Vector3[] = [];
+  for (let k = 0; k <= K + 2; k++) pts.push(pointAt(k));
+  const out = new THREE.Vector3();
+  const acc = new THREE.Vector3();
+  for (let j = 0; j <= K; j++) {
+    // Acceleration at t - (j + 1)·dt (backward second difference).
+    acc.copy(pts[j]).addScaledVector(pts[j + 1], -2).add(pts[j + 2]).divideScalar(dt * dt);
+    const tau = (j + 1) * dt;
+    const g = (Math.exp(-z * w * tau) * Math.sin(wd * tau)) / wd;
+    out.addScaledVector(acc, -g * dt);
+  }
+  return out;
 }
 
 const bare = (name: string) => name.replace(/^mixamorig\d*[:_]?/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -100,9 +146,11 @@ export class RigPoseLayer {
   private neck?: THREE.Bone;
   private hips?: THREE.Bone;
   private legs: LegChain[] = [];
+  private springs: SpringChain[] = [];
   private tracked = new Map<THREE.Bone, Tracked>();
   readonly hasHead: boolean;
   readonly hasLegs: boolean;
+  readonly hasSprings: boolean;
 
   constructor(private readonly root: THREE.Object3D) {
     const bones = findBones(root);
@@ -117,7 +165,10 @@ export class RigPoseLayer {
     }
     this.hasHead = !!(this.head || this.neck);
     this.hasLegs = this.legs.length === 2;
-    for (const bone of [this.head, this.neck, this.hips, ...this.legs.flatMap((l) => [l.upper, l.lower])]) {
+    this.springs = findSpringChains(root);
+    this.hasSprings = this.springs.length > 0;
+    const springBones = this.springs.flatMap((c) => c.bones);
+    for (const bone of [this.head, this.neck, this.hips, ...this.legs.flatMap((l) => [l.upper, l.lower]), ...springBones]) {
       if (bone) this.tracked.set(bone, { bone, base: bone.quaternion.clone(), written: new THREE.Quaternion(NaN, NaN, NaN, NaN) });
     }
     if (this.hips) {
@@ -147,12 +198,43 @@ export class RigPoseLayer {
   }
 
   apply(input: RigPoseInput) {
-    if (!this.hasHead && !this.hasLegs) return;
+    if (!this.hasHead && !this.hasLegs && !this.hasSprings) return;
     this.restore();
     this.root.updateWorldMatrix(true, true);
     if (input.groundAt && this.hasLegs) this.placeFeet(input.groundAt, input.yaw);
     if (input.gaze && input.gaze.weight > 0.001 && this.hasHead) this.lookAt(input.gaze.target, input.gaze.weight, input.yaw);
+    if (input.motion && this.hasSprings) this.swing(input.motion, input.yaw);
     this.remember();
+  }
+
+  private swing(motion: NonNullable<RigPoseInput['motion']>, yaw: number) {
+    const rootPos = worldPos(this.root, new THREE.Vector3());
+    const samples: MotionSample[] = [];
+    const sampleAt = (k: number) => (samples[k] ||= motion.at(Math.max(0, motion.time - k * SPRING.dt)));
+    for (const chain of this.springs) {
+      // The chain root's place on the body, measured once in the actor's facing frame.
+      const offset = (chain.offset ||= worldPos(chain.bones[0], new THREE.Vector3()).sub(rootPos).applyAxisAngle(UP, -yaw));
+      const y = springDisplacement((k) => {
+        const m = sampleAt(k);
+        return new THREE.Vector3(...m.position).add(offset.clone().applyAxisAngle(UP, m.yaw));
+      });
+      const mag = y.length() * SPRING.gain;
+      if (mag < 1e-4) continue;
+      const bend = Math.min(SPRING.maxBend, Math.atan2(mag, chain.length));
+      const dir = y.normalize();
+      // Spread the bend down the chain, later links more (1, 2, 3 …), like a whip.
+      const n = chain.bones.length;
+      const total = (n * (n + 1)) / 2;
+      chain.bones.forEach((bone, i) => {
+        const a = worldPos(bone, new THREE.Vector3());
+        const child = bone.children.find((c) => (c as THREE.Bone).isBone);
+        const along = child ? worldPos(child, new THREE.Vector3()).sub(a) : a.clone().sub(worldPos(bone.parent || bone, new THREE.Vector3()));
+        if (along.lengthSq() < 1e-10) return;
+        const axis = new THREE.Vector3().crossVectors(along.normalize(), dir);
+        if (axis.lengthSq() < 1e-8) return;
+        rotateBoneWorld(bone, new THREE.Quaternion().setFromAxisAngle(axis.normalize(), (bend * (i + 1)) / total));
+      });
+    }
   }
 
   private lookAt(target: [number, number, number], weight: number, yaw: number) {
@@ -209,6 +291,34 @@ export class RigPoseLayer {
   }
 }
 
+/** Chains of spring bones: each starts at a matching bone whose parent does not match and follows matching children. */
+function findSpringChains(root: THREE.Object3D): SpringChain[] {
+  const chains: SpringChain[] = [];
+  const isSpring = (o: THREE.Object3D | null | undefined) => !!o && (o as THREE.Bone).isBone && SPRING_NAME.test(bare(o.name));
+  root.updateWorldMatrix(true, true);
+  root.traverse((o) => {
+    if (!isSpring(o) || isSpring(o.parent)) return;
+    const bones: THREE.Bone[] = [];
+    let cur: THREE.Object3D | undefined = o;
+    while (cur && bones.length < 8) {
+      bones.push(cur as THREE.Bone);
+      cur = cur.children.find((c) => isSpring(c));
+    }
+    const p = new THREE.Vector3();
+    const q = new THREE.Vector3();
+    let length = 0;
+    for (let i = 1; i < bones.length; i++) length += bones[i - 1].getWorldPosition(p).distanceTo(bones[i].getWorldPosition(q));
+    const last = bones[bones.length - 1];
+    const tip = last.children.find((c) => (c as THREE.Bone).isBone);
+    if (tip) length += last.getWorldPosition(p).distanceTo(tip.getWorldPosition(q));
+    if (length < 1e-3) return; // a lone end bone cannot swing
+    // An end bone only marks the tip; rotating it does nothing visible.
+    const swing = bones.length > 1 && !tip && /end$/.test(bare(last.name)) ? bones.slice(0, -1) : bones;
+    chains.push({ bones: swing, length });
+  });
+  return chains;
+}
+
 /** Feet are treated as standing when the root is within this distance of the terrain. */
 const STANDING_TOLERANCE = 0.15;
 
@@ -225,9 +335,19 @@ export function rigPoseInputFor(
   const t = spec.world?.terrain;
   const [x, y, z] = performed.position;
   const onTerrain = !!t && t.type !== 'flat-grid' && t.type !== 'none' && Math.abs(y - terrainGroundY(spec.world, x, z)) < STANDING_TOLERANCE;
+  const moves = spec.mode === 'media' && hasPerformance(baseActor);
   return {
     yaw: performed.rotation?.[1] ?? 0,
     gaze: gazeAt(baseActor, spec, time),
     groundAt: onTerrain ? (gx, gz) => terrainGroundY(spec.world, gx, gz) : undefined,
+    motion: moves
+      ? {
+          time,
+          at: (t) => {
+            const p = resolvePerformance(baseActor, t, spec.actors, spec.world);
+            return { position: p.position, yaw: p.yaw };
+          },
+        }
+      : undefined,
   };
 }

@@ -216,7 +216,9 @@ Publish → "Mobile App" tab (`src/components/MobileExportPanel.tsx`, pure build
   data-safety report + privacy policy draft, checklist (identity, orientation, offline, SDK 36, signing, closed testing 12×14 days).
 - [x] Mobile verifier rules (`verifySceneSpec(spec, { target: 'mobile' })`): `mobile.text-small`, `mobile.touch-target`,
   `mobile.edge-ui` (fixable), `mobile.heavy-scene`, `mobile.keyboard-only` (warnings). Orientation is a checklist item.
-- [ ] Later: per-device performance profiles measured on real phones; rig cost in the mobile budget.
+- [x] Rig cost in the mobile budget (2026-11-16): OmniRig characters carry `actors[].rigCost` (bones, skinned vertices, texture size)
+  measured on placement; `mobile.rig-cost` warns above 150k skinned vertices, 12 rigged actors, 100 bones or 2048 px textures.
+- [ ] Later: per-device performance profiles measured on real phones.
 
 ### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
 Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
@@ -256,7 +258,11 @@ vertices, texture size of OmniRig characters).
 
 **Not yet**
 - [ ] Vision-LLM classification / scoring of rendered views; MediaPipe landmarks for arms-down (I-pose) characters.
-- [ ] Spring bones, LLM state machine JSON; FBX clip import (now GLB only).
+- [x] Spring bones (2026-11-16): tail / hair / ear / cape chains swing from the root's past acceleration (damped spring as a
+  convolution, so scrubbing and frame-stepped exports match); films only, in `RigPoseLayer`.
+- [x] FBX clip import (2026-11-16): OmniRig "Import clips" accepts Mixamo `.fbx` (FBXLoader) as well as `.glb`; not yet checked
+  against a real Mixamo download.
+- [ ] LLM state machine JSON.
 - [ ] Weight painting; bird / serpent templates; finger bones.
 - [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
 
@@ -308,7 +314,9 @@ the verifier only checks playability. Fix in layers: contract → production too
     `soundtrack.invalid`, `world.biome-invalid`, `world.feature-invalid`, `world.feature-on-stage` (all auto-fixed).
   - UI: World tab → Film Soundtrack panel, Biome & Water section; Publish → MP4 is frame-perfect with a Soundtrack switch.
   - Tests: `tests/soundtrack.test.ts`, `tests/biomes.test.ts`, E2E waterfall-valley film in the exported Player.
-  - Not yet: dialogue / TTS (10C); footsteps synced to walk cycles; lighting presets per biome are a patch, not a full outdoor rig.
+  - Not yet: dialogue / TTS (10C); lighting presets per biome are a patch, not a full outdoor rig.
+  - [x] Footsteps synced to walk cycles (2026-11-16): `src/audio/footsteps.ts` lands a step every half stride actually travelled
+    (runs faster and louder), mixed into the film soundtrack; `soundtrack.footsteps: false` turns them off.
 - [x] **10C (done 2026-11-13)** Dialogue:
   - `sceneSpec.dialogue[]` = { time, speaker, text, emotion?, listener? } + `actors[].voice` { engine piper | babble, voiceId, pitch, rate }.
     `src/audio/voices.ts` (pure) times lines, writes captions (speaker-prefixed when several talk), drives talk levels and mixes the voice

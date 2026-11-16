@@ -9,6 +9,7 @@
 import type { AmbienceId, MusicMood, SceneSpec, WorldSpec } from '../types/scene.schema';
 import { BUILTIN_SFX_RECIPES, SfxRecipeDef } from './sfxRecipes';
 import { dialogueKey, renderDialogueTrack } from './voices';
+import { footstepCues } from './footsteps';
 
 export const MUSIC_MOODS: MusicMood[] = ['none', 'calm', 'happy', 'playful', 'adventure', 'epic', 'tense', 'sad', 'mysterious'];
 export const AMBIENCE_IDS: AmbienceId[] = [
@@ -25,7 +26,7 @@ export interface StereoPcm {
 }
 
 export type SoundtrackScene = Pick<SceneSpec, 'soundtrack' | 'durationSeconds'> &
-  Partial<Pick<SceneSpec, 'id' | 'world' | 'engineType' | 'sfxLibrary' | 'sequence' | 'actors' | 'dialogue'>>;
+  Partial<Pick<SceneSpec, 'id' | 'world' | 'engineType' | 'sfxLibrary' | 'sequence' | 'actors' | 'dialogue' | 'mode'>>;
 
 /** Phase 10C: dialogue speaks even in a scene without music / ambience. */
 function hasDialogue(scene: SoundtrackScene) {
@@ -113,14 +114,24 @@ export function resolveSoundtrack(scene: SoundtrackScene): ResolvedSoundtrack | 
   const duration = Math.max(0.1, num(scene.durationSeconds, 8));
   const cues = (st.cues || [])
     .filter((c) => c && library[c.sfx] && num(c.time, -1) >= 0 && c.time < duration)
-    .map((c) => ({ time: c.time, recipe: library[c.sfx], volume: clamp(num(c.volume, 0.8), 0, 1) }));
+    .map((c) => ({ time: c.time, recipe: library[c.sfx], volume: clamp(num(c.volume, 0.8), 0, 1), sfx: c.sfx as string }));
+  // Footsteps follow the walks (on by default); an authored footstep right on an automatic one is dropped (no doubled steps).
+  if (st.footsteps !== false) {
+    const steps = footstepCues(scene);
+    if (steps.length) {
+      const kept = cues.filter((c) => c.sfx !== 'footstep' || !steps.some((f) => Math.abs(f.time - c.time) < 0.25));
+      cues.length = 0;
+      cues.push(...kept, ...steps.map((f) => ({ time: f.time, recipe: BUILTIN_SFX_RECIPES.footstep, volume: f.volume, sfx: 'footstep' })));
+      cues.sort((a, b) => a.time - b.time);
+    }
+  }
   return {
     mood,
     musicGain: clamp(num(st.music?.volume, DEFAULT_MUSIC_VOLUME), 0, 1) / DEFAULT_MUSIC_VOLUME,
     tempo: st.music?.tempo ? clamp(st.music.tempo, 50, 180) : undefined,
     ambience,
     ambienceGain: clamp(num(st.ambience?.volume, DEFAULT_AMBIENCE_VOLUME), 0, 1) / DEFAULT_AMBIENCE_VOLUME,
-    cues,
+    cues: cues.map(({ time, recipe, volume }) => ({ time, recipe, volume })),
     volume: clamp(num(st.volume, 0.9), 0, 1),
     seed: hashString(scene.sequence?.storyboardId || scene.id || 'omnistage'),
   };

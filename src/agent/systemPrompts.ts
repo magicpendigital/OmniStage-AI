@@ -211,7 +211,8 @@ AUTHORING & SPATIAL DESIGN RULES:
 12. SOUND (media mode — a silent film feels unfinished): sceneSpec.soundtrack = {
      music: { mood: 'calm'|'happy'|'playful'|'adventure'|'epic'|'tense'|'sad'|'mysterious'|'none', volume? },
      ambience: { type: 'auto' (follows the biome / water / weather) | 'forest'|'meadow'|'beach'|'river'|'waterfall'|'rain'|'wind'|'night'|'city'|'cave'|'space'|'none' },
-     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }] }.
+     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }],
+     footsteps?: false }. Footsteps are generated from every moveTo walk (synced to the stride) — do not add footstep cues for walks.
    Everything is synthesised (no audio URLs). Pick the mood from the beat, keep the same mood across consecutive shots of one sequence
    (the music then continues across the cut), and put cues on the script's actions (a splash when someone reaches the water, a whoosh on a fast move).
 13. DIALOGUE (media mode — characters speak; voice, captions and talk motion are generated from it):

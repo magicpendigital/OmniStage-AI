@@ -333,6 +333,35 @@ export function extractClipLibrary(scene: THREE.Object3D, animations: THREE.Anim
   return { skeleton: { bones }, rootBone: root.name, clips };
 }
 
+/**
+ * Reads an animation file for the clip library: binary / JSON glTF, or FBX (Mixamo "FBX Binary", with or without skin;
+ * FBX names come back as `mixamorigHips`, which `boneKey` already maps). FBX is in centimetres; only rotations and the hips
+ * motion relative to the hips height are used, so the unit does not matter.
+ */
+export async function readAnimationFile(buffer: ArrayBuffer, fileName: string): Promise<{ scene: THREE.Object3D; animations: THREE.AnimationClip[] }> {
+  if (/\.fbx$/i.test(fileName)) {
+    const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+    const group = new FBXLoader().parse(buffer, '');
+    return { scene: group, animations: group.animations || [] };
+  }
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  const gltf = await new GLTFLoader().parseAsync(buffer, '');
+  return { scene: gltf.scene, animations: gltf.animations };
+}
+
+/** Skinning cost of a rigged character for the mobile budget (textures are exported at 2048 px at most). */
+export function rigCostOf(result: Pick<RigResult, 'mesh'>): { bones: number; vertices: number; textureSize: number } {
+  let textureSize = 0;
+  const mats = ([] as THREE.Material[]).concat(result.mesh.material || []);
+  for (const m of mats) {
+    for (const key of ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'normalMap'] as const) {
+      const img = ((m as any)[key] as THREE.Texture | undefined)?.image as { width?: number; height?: number } | undefined;
+      if (img?.width && img?.height) textureSize = Math.max(textureSize, Math.min(2048, Math.max(img.width, img.height)));
+    }
+  }
+  return { bones: result.mesh.skeleton.bones.length, vertices: result.mesh.geometry.getAttribute('position').count, textureSize };
+}
+
 /** Rigged character → binary glTF (with every clip). */
 export async function exportRiggedGlb(result: RigResult): Promise<ArrayBuffer> {
   const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');

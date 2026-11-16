@@ -67,6 +67,16 @@ export const SoundtrackPanel: React.FC = () => {
             />
           </div>
 
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer" title="Footsteps follow every walk, synced to the stride">
+            <input
+              type="checkbox"
+              checked={st.footsteps !== false}
+              onChange={(e) => updateSoundtrack({ footsteps: e.target.checked ? undefined : false })}
+              className="accent-pink-500"
+            />
+            Footsteps on walks
+          </label>
+
           <div className="space-y-1 pt-1 border-t border-slate-800">
             <div className="flex items-center justify-between text-[11px] text-slate-400">
               <span>Timed SFX cues</span>
