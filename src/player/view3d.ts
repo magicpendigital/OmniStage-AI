@@ -5,6 +5,7 @@
  * water, clouds, GPU weather / VFX / bursts, scatter props, procedural composite actors and their motion. This file only
  * adds what the studio gets from R3F/drei: GLB loading + skeletal clips, HDRI, camera modes and the frame loop.
  */
+import { RigPoseInput, RigPoseLayer, rigPoseInputFor } from '../render3d/rigPose';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
@@ -46,6 +47,9 @@ interface ActorView {
   badge?: Built3D<THREE.Sprite>;
   badgeText?: string;
   clickPulse: number;
+  /** Phase 9: head look-at + foot IK on the loaded skeleton (after the mixer). */
+  pose?: RigPoseLayer;
+  poseInput?: RigPoseInput;
   /** Phase 10C: current talk level (inspect / tests). */
   talk?: number;
 }
@@ -221,6 +225,8 @@ export class View3D {
               model.scale.setScalar(entry?.defaultScale ?? 1);
               anim.add(model);
               target.hasRig = true;
+              const layer = new RigPoseLayer(model);
+              if (layer.hasHead || layer.hasLegs) target.pose = layer;
               const clips: THREE.AnimationClip[] = (source as any).animations || [];
               if (clips.length) {
                 target.mixer = new THREE.AnimationMixer(model);
@@ -265,6 +271,7 @@ export class View3D {
         }
         view.mixer.timeScale = actor.animationSpeed ?? 1;
       }
+      if (view.pose) view.poseInput = rigPoseInputFor(baseActor, actor, spec, time);
       // Procedural motion + click pulse: the studio ActorRenderer's exact maths (src/render3d/actorMotion).
       const motion = actorMotion(actor, spec.mode, time, view.hasRig, view.clickPulse, this.clock);
       view.talk = actor.talkLevel || 0;
@@ -496,7 +503,10 @@ export class View3D {
     this.syncActors(state.sceneSpec, state.currentTime, dt);
     this.syncVfx(state.sceneSpec.vfx || [], state.sceneSpec, ctx, state.isPlaying);
     this.syncBursts(state.burstEffects as any, ctx);
-    for (const view of this.actors.values()) view.mixer?.update(dt);
+    for (const view of this.actors.values()) {
+      view.mixer?.update(dt);
+      if (view.pose && view.poseInput) view.pose.apply(view.poseInput);
+    }
     for (const part of this.worldParts) part.update?.(ctx);
     this.updateCamera(state.sceneSpec, state.currentTime, sceneChanged);
     for (const part of this.worldParts) part.prerender?.(this.renderer, this.scene);
