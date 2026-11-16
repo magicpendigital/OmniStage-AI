@@ -224,7 +224,8 @@ AUTHORING & SPATIAL DESIGN RULES:
    - actors[].performance = timed steps applied from the actor's position: { time, clip?, moveTo?: [x,0,z], duration?, arriveClip?,
      lookAt?: actorId | [x,y,z], faceDeg?, animation?, speed?, label? }. While moving without a clip the actor walks (or runs when fast)
      and faces where it walks; afterwards it plays arriveClip (default Idle). Use only clips listed in the asset's embeddedClips
-     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump). The hero needs >= 3 different actions per scene.
+     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump; OmniRig-rigged characters: humanoid / quadruped Idle, Walking,
+     Running; bird Idle, Walking, Flying, Gliding, Peck; serpent Idle, Walking (slither), Running, Attack). The hero needs >= 3 different actions per scene.
    - camera.shots = [{ start, end?, type: 'establishing'|'wide'|'medium'|'close-up'|'over-shoulder'|'low-angle'|'high-angle'|'tracking',
      subject?: actorId (whose face we see), partner?: actorId (over-shoulder only: the camera looks over THIS actor's shoulder at the
      subject — "over the robot's shoulder at the fox" = { subject: fox, partner: robot }), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',

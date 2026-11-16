@@ -667,6 +667,10 @@ function verifyMobile(spec: SceneSpec, issues: VerificationIssue[], tier: Device
     if ((spec.actors || []).length > B.maxActors3D) {
       issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${B.maxActors3D}).${t}`, false));
     }
+    const shaded = (spec.actors || []).filter((a) => a.shaderEffect && a.visible !== false).length;
+    if (shaded > B.maxShaderEffects) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${shaded} actors with shader effects may drop frames on phones (keep under ${B.maxShaderEffects}); use effects on the hero only.${t}`, false));
+    }
     for (const r of mobileRigBudget(spec, tier).issues) issues.push(issue('mobile.rig-cost', 'warning', r.message, false, r.actorId));
   }
 

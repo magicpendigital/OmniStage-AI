@@ -204,6 +204,19 @@ test('verifier: mobile budgets follow the chosen device tier (default mid, same 
   assert.equal(heavy().length, 1);
   assert.equal(heavy('high').length, 0);
 
+  // Shader effects per tier (hologram / lava ... cost extra fragment work).
+  spec.actors = Array.from({ length: 4 }, (_, n) => ({ ...base, id: `fx${n}`, name: `Fx${n}`, shaderEffect: { preset: 'hologram' as const } }));
+  const shaded = (tier?: 'low' | 'mid' | 'high') =>
+    verifySceneSpec(spec, { target: 'mobile', deviceTier: tier }).issues.filter((i) => i.code === 'mobile.heavy-scene' && /shader/.test(i.message));
+  assert.equal(shaded().length, 0, '4 effects fit mid');
+  assert.equal(shaded('low').length, 1);
+  assert.match(shaded('low')[0].message, /keep under 2\).*low tier/);
+  spec.actors.push(...Array.from({ length: 3 }, (_, n) => ({ ...base, id: `fy${n}`, name: `Fy${n}`, shaderEffect: { preset: 'lava' as const } })));
+  assert.equal(shaded().length, 1, '7 effects exceed mid');
+  assert.equal(shaded('high').length, 0);
+  spec.actors.forEach((a) => { a.visible = false; });
+  assert.equal(shaded('low').length, 0, 'hidden actors are not counted');
+
   // Rig cost per tier.
   const rigged = { ...base, id: 'hero', name: 'Hero', rigCost: { bones: 90, vertices: 90_000, textureSize: 2048 } };
   spec.actors = [rigged];

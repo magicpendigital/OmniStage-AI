@@ -322,6 +322,56 @@ test('unmapped features become warnings and are listed in the notes file', () =>
   assert.match(text(clean, GODOT_NOTES_FILE), /Nothing: every feature/);
 });
 
+test('state machines and shader effects are reported as not converted (3D and 2D)', () => {
+  const scene = coinRush();
+  scene.actors[0].stateMachine = { initial: 'idle', states: { idle: { transitions: [{ to: 'idle', when: { type: 'timer', seconds: 1 } }] } } };
+  scene.actors[0].shaderEffect = { preset: 'hologram' };
+  const build = buildGodotProject([scene]);
+  const sm = build.warnings.find((w) => w.feature === 'State machines');
+  const fx = build.warnings.find((w) => w.feature === 'Shader effects');
+  assert.ok(sm && sm.detail.includes('not converted'), 'state machine warning');
+  assert.ok(fx && fx.detail.includes('hologram'), 'shader warning');
+  const notes = text(build, GODOT_NOTES_FILE);
+  assert.match(notes, /State machines/);
+  assert.match(notes, /Shader effects/);
+
+  const flat = platformer2D();
+  flat.nodes2D.find((n) => n.id === 'coin-a')!.stateMachine = { initial: 'a', states: { a: {} } };
+  const flatBuild = buildGodotProject([flat]);
+  assert.ok(flatBuild.warnings.some((w) => w.feature === 'State machines' && w.detail.includes('Coin A')));
+  assert.ok(!flatBuild.warnings.some((w) => w.feature === 'Shader effects'));
+});
+
+test('logic-graph send-signal is reported and the chain continues', () => {
+  const scene = syncGraphWithScene(coinRush());
+  const graph = scene.logicGraph!;
+  const trigger = graph.nodes.find((n) => n.type === 'trigger')!;
+  const action = graph.nodes.find((n) => n.type !== 'trigger' && n.type !== 'condition' && n.outputs.length === 0)!;
+  const signal = { ...action, id: 'sig', title: 'Signal', params: { actionType: 'send-signal', signal: 'alarm' } };
+  graph.nodes.push(signal);
+  graph.edges.push({ id: 'e-sig', sourceNodeId: trigger.id, sourcePortId: trigger.outputs[0].id, targetNodeId: 'sig', targetPortId: signal.inputs[0].id });
+  const warnings: string[] = [];
+  compileLogicRules(scene, (_f, d) => warnings.push(d));
+  assert.ok(warnings.some((w) => w.includes('send-signal') && w.includes('state machines')), warnings.join(' | '));
+  assert.ok(!warnings.some((w) => w.includes('send-signal') && w.includes('no runtime effect')), 'send-signal is a known action, not "unsupported"');
+});
+
+test('JPEG panorama skybox (hdri.format "image") is embedded as the panorama sky', () => {
+  const scene = coinRush();
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 16, 1, 1, 17, 0, 0xff, 0xd9]);
+  scene.world.hdri = { url: 'https://example.com/sky.jpg', name: 'Blockade sky', source: 'custom', showBackground: true, intensity: 1, format: 'image' };
+  const build = buildGodotProject([scene], { assets: { 'https://example.com/sky.jpg': { bytes: jpg } } });
+  assert.ok(!build.warnings.some((w) => w.feature === 'HDRI'), 'no HDRI warning');
+  const tex = build.files.find((f) => /^textures\/sky-[0-9a-f]{8}\.jpg$/.test(f.name));
+  assert.ok(tex, 'jpg texture copied into the project');
+  const tscn = sceneFile(build);
+  assert.match(tscn, /PanoramaSkyMaterial/);
+  assert.ok(tscn.includes(`res://${tex.name}`));
+  // Not embeddable (HTML error page saved as the sky): reported, procedural sky used.
+  const bad = buildGodotProject([scene], { assets: { 'https://example.com/sky.jpg': { bytes: new TextEncoder().encode('<html>nope</html>') } } });
+  assert.ok(bad.warnings.some((w) => w.feature === 'HDRI'));
+});
+
 test('failed downloads and non-embeddable models are reported, not dropped', () => {
   const scene = coinRush();
   const player = scene.actors.find((a) => a.physicsRole === 'player')!;

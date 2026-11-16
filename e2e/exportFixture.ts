@@ -87,6 +87,21 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
         const mean = sum / n;
         return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), width: src.width, height: src.height };
       }),
+    /** Like pixelStats, but returns the 64 x 36 luminance grid (to compare two frames pixel by pixel). */
+    pixelGrid: () =>
+      page.evaluate(() => {
+        (window as any).__omniPlayer.step(1 / 60);
+        const src = document.querySelector('canvas.omni-stage') as HTMLCanvasElement;
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 36;
+        const g = c.getContext('2d')!;
+        g.drawImage(src, 0, 0, 64, 36);
+        const d = g.getImageData(0, 0, 64, 36).data;
+        const out: number[] = [];
+        for (let i = 0; i < d.length; i += 4) out.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+        return out;
+      }),
   };
 }
 

@@ -235,7 +235,7 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
               <th className="text-left font-normal">Target</th>
               <th className="text-left font-normal">3D actors / 2D nodes</th>
               <th className="text-left font-normal">Skinned verts · bones · tex</th>
-              <th className="text-left font-normal">Particles</th>
+              <th className="text-left font-normal">Particles · shader fx</th>
               <th className="text-left font-normal">Start quality</th>
             </tr>
           </thead>
@@ -249,7 +249,7 @@ export const MobileExportPanel: React.FC<{ onNotice: (msg: string) => void }> = 
                   <td>{p.targetFps} fps</td>
                   <td>{p.budget.maxActors3D} / {p.budget.maxNodes2D}</td>
                   <td>{p.budget.maxSkinnedVertices / 1000}k · {p.budget.maxBones} · {p.budget.maxTextureSize}</td>
-                  <td>{p.budget.maxParticles}</td>
+                  <td>{p.budget.maxParticles} · {p.budget.maxShaderEffects}</td>
                   <td>DPR ≤ {q.pixelRatioCap}, shadows {q.shadows}{q.postFx ? ', bloom' : ''}</td>
                 </tr>
               );

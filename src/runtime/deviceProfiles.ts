@@ -37,6 +37,8 @@ export interface DeviceBudget {
   maxTextureSize: number;
   /** Live particles at once (3D GPU points + 2D emitters, see mobileParticleCount). */
   maxParticles: number;
+  /** Actors with a shader effect (hologram / lava / ...): each adds fragment work on top of the normal material. */
+  maxShaderEffects: number;
 }
 
 export interface DeviceProfile {
@@ -69,7 +71,7 @@ export const DEVICE_PROFILES: Record<DeviceTier, DeviceProfile> = {
     label: 'Low-end phone',
     examples: '2–3 GB RAM, 4–8 slow cores, Mali-G52 / Adreno 610 / PowerVR GE8320 (e.g. Galaxy A0x/A1x, Redmi 9–12C)',
     targetFps: 30,
-    budget: { maxActors3D: 30, maxNodes2D: 150, maxSkinnedVertices: 60_000, maxSkinnedActors: 6, maxBones: 75, maxTextureSize: 1024, maxParticles: 400 },
+    budget: { maxActors3D: 30, maxNodes2D: 150, maxSkinnedVertices: 60_000, maxSkinnedActors: 6, maxBones: 75, maxTextureSize: 1024, maxParticles: 400, maxShaderEffects: 2 },
     startRung: 4,
     playerQuality: 'low',
   },
@@ -78,7 +80,7 @@ export const DEVICE_PROFILES: Record<DeviceTier, DeviceProfile> = {
     label: 'Mid-range phone',
     examples: '4–6 GB RAM, Adreno 618–660 / Mali-G68–G78 (e.g. Galaxy A3x/A5x, Pixel 6a, iPhone 11–12)',
     targetFps: 60,
-    budget: { maxActors3D: 60, maxNodes2D: 300, maxSkinnedVertices: 150_000, maxSkinnedActors: 12, maxBones: 100, maxTextureSize: 2048, maxParticles: 800 },
+    budget: { maxActors3D: 60, maxNodes2D: 300, maxSkinnedVertices: 150_000, maxSkinnedActors: 12, maxBones: 100, maxTextureSize: 2048, maxParticles: 800, maxShaderEffects: 5 },
     startRung: 2,
     playerQuality: 'high',
   },
@@ -87,7 +89,7 @@ export const DEVICE_PROFILES: Record<DeviceTier, DeviceProfile> = {
     label: 'High-end phone',
     examples: '8+ GB RAM, Adreno 730+ / Mali-G710+ / Immortalis / Apple A15+ (e.g. Galaxy S22+, Pixel 8, iPhone 13+)',
     targetFps: 60,
-    budget: { maxActors3D: 100, maxNodes2D: 500, maxSkinnedVertices: 300_000, maxSkinnedActors: 20, maxBones: 150, maxTextureSize: 4096, maxParticles: 2000 },
+    budget: { maxActors3D: 100, maxNodes2D: 500, maxSkinnedVertices: 300_000, maxSkinnedActors: 20, maxBones: 150, maxTextureSize: 4096, maxParticles: 2000, maxShaderEffects: 12 },
     startRung: 0,
     playerQuality: 'ultra',
   },

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBlankSceneSpec } from '../src/registry/assetRegistry';
+import { cloneSceneSpec, createBlankSceneSpec, SCENE_TEMPLATES } from '../src/registry/assetRegistry';
 import { createPlayerStore } from '../src/player/playerStore';
 import { bindRuntimeStore } from '../src/runtime/host';
 import { RuntimeLogicGraph } from '../src/runtime/logicGraph';
@@ -330,6 +330,8 @@ test('RuntimeLogicGraph runs machines through the bound store (positions, clips,
   store.setState({ isPlaying: true });
   runtime.advance(0.1);
   assert.equal(store.getState().machineStates!.guard, 'patrol');
+  // ... and the moved guard is back at its authored spot (resetGameSession alone keeps moved poses of non-template scenes).
+  assert.deepEqual(guard().position, [0, 0, -3]);
 });
 
 test('machines do nothing in media mode or after the game ended', () => {
@@ -341,4 +343,52 @@ test('machines do nothing in media mode or after the game ended', () => {
   for (let i = 0; i < 5; i++) runtime.advance(0.1);
   assert.equal(store.getState().machineStates, undefined);
   assert.deepEqual(store.getState().sceneSpec.actors.find((a) => a.id === 'guard')!.position, [0, 0, -3]);
+});
+
+// --- OmniRig bird / serpent clips (Flying, Gliding, Peck, Attack) -----------------------------------------------
+
+test('bird / serpent clip names resolve through synonyms in the verifier and at runtime', async () => {
+  const { lookForState } = await import('../src/runtime/stateMachine');
+  const { matchClipName, resolveClipName } = await import('../src/runtime/cinematics');
+  const bird = ['Idle', 'Walking', 'Flying', 'Gliding', 'Peck'];
+  const serpent = ['Idle', 'Walking', 'Running', 'Attack'];
+  assert.equal(matchClipName('Flying', bird), 'Flying');
+  assert.equal(matchClipName('Fly', bird), 'Flying');
+  assert.equal(matchClipName('flap', bird), 'Flying');
+  assert.equal(matchClipName('Glide', bird), 'Gliding');
+  assert.equal(matchClipName('Soar', bird), 'Gliding');
+  assert.equal(matchClipName('Peck', bird), 'Peck');
+  assert.equal(matchClipName('Bite', serpent), 'Attack');
+  assert.equal(matchClipName('Slither', serpent), 'Walking');
+  assert.equal(matchClipName('Teleport', bird), 'Idle', 'unknown still falls back to idle');
+  assert.equal(resolveClipName('Teleport', bird), undefined, 'strict form has no fallback');
+
+  // Verifier: "Fly" on a bird is fine, a clip the rig does not have still warns.
+  const scene = gameScene3D({ initial: 'a', states: { a: { clip: 'Fly', transitions: [{ to: 'b', when: { type: 'timer', seconds: 1 } }] }, b: { clip: 'Attack' } } });
+  scene.actors[2].availableClips = bird;
+  const issues = verifySceneSpec(scene).issues.filter((i) => i.code === 'machine.clip-missing');
+  assert.equal(issues.length, 1);
+  assert.match(issues[0].message, /b: Attack/);
+  assert.doesNotMatch(issues[0].message, /Fly/);
+
+  // Runtime: the state's clip resolves to the real clip; a fast chase picks the serpent's Running clip.
+  assert.equal(lookForState({ clip: 'Fly' }, { clips: bird }, { clip: 'Idle' }, '3d').clip, 'Flying');
+  assert.equal(lookForState({ clip: 'Bite' }, { clips: serpent }, { clip: 'Idle' }, '3d').clip, 'Attack');
+  assert.equal(lookForState({ move: 'chase-player', speed: 3 }, { clips: serpent }, { clip: 'Idle' }, '3d').clip, 'Running');
+});
+
+test('Player replay restores the authored scene, also when it started from a built-in template (machines included)', () => {
+  const scene = cloneSceneSpec(SCENE_TEMPLATES['coin-rush-playable']);
+  const hero = scene.actors.find((a) => a.physicsRole === 'player')!;
+  scene.actors.push({ ...hero, id: 'e2e-enemy', name: 'Enemy', physicsRole: 'static', onClickAction: 'none', position: [3, 0, 3], stateMachine: GUARD });
+  const store = createPlayerStore([scene]);
+  bindRuntimeStore(store);
+  const runtime = new RuntimeLogicGraph('3d');
+  for (let i = 0; i < 20; i++) runtime.advance(0.1);
+  const enemy = () => store.getState().sceneSpec.actors.find((a) => a.id === 'e2e-enemy');
+  assert.notDeepEqual(enemy()!.position, [3, 0, 3], 'the machine moved the enemy');
+  store.getState().resetGameSession();
+  assert.ok(enemy(), 'the user-added actor survives a replay (not replaced by the template)');
+  assert.deepEqual(enemy()!.position, [3, 0, 3]);
+  assert.deepEqual(enemy()!.stateMachine, GUARD);
 });

@@ -26,6 +26,8 @@ Mã nguồn:
 - **Governor**: trung bình thời gian khung trong 90 khung. Chậm hơn ngân sách × 1,2 → hạ một bậc. Đạt mục tiêu 4 cửa sổ
   liền → nâng một bậc (không vượt bậc khởi đầu của hạng). Sau mỗi bước: bỏ một cửa sổ, chờ 3 giây. Nếu vừa nâng mà phải hạ
   lại trong 20 giây thì khoá trần ở bậc thấp đó (không dao động). Khung > 250 ms (chuyển tab, GC, tải) bị bỏ qua.
+- **Shader effect** (`actors[].shaderEffect`): governor không tắt hiệu ứng shader (chúng là một phần của giao diện nhân vật), nhưng verifier
+  mobile cảnh báo `mobile.heavy-scene` khi số actor có shader effect vượt `maxShaderEffects` của hạng (low 2 / mid 5 / high 12).
 - **Không ảnh hưởng xuất xác định**: governor chỉ chạy trong vòng `requestAnimationFrame` của bản app. Bản quảng cáo
   (không có `app`), MP4 (`manual(true)` + `step()`) và test E2E không bao giờ đổi chất lượng.
 - 2D: canvas 2D cố định 1000×600 nên governor chỉ đo và báo cáo, chưa có gì để hạ (hạt 2D vẫn theo `rate` của scene).

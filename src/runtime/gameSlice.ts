@@ -73,7 +73,15 @@ export function clickRunsBuiltIn(actor: Pick<ActorNode, 'onClickAction' | 'asset
   return mode === 'game' || actor.onClickAction !== 'none';
 }
 
-export function createGameRuntimeSlice<S extends GameRuntimeState>(setRaw: SetState<S>, getRaw: GetState<S>) {
+export function createGameRuntimeSlice<S extends GameRuntimeState>(
+  setRaw: SetState<S>,
+  getRaw: GetState<S>,
+  /**
+   * Host hook: the untouched authored copy of the active scene, if the host keeps one (the Player does). Without it a session reset
+   * falls back to the built-in template of the same id, else the current (already played-with) spec.
+   */
+  pristineScene?: (state: S) => SceneSpec | undefined,
+) {
   // The slice only touches GameRuntimeState fields; widen for the implementation.
   const set = setRaw as unknown as SetState<GameRuntimeState>;
   const get = getRaw as unknown as GetState<GameRuntimeState>;
@@ -432,8 +440,11 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(setRaw: SetSt
 
   resetGameSession: () =>
     set((state) => {
+      const pristine = pristineScene?.(state as unknown as S);
       const tpl = SCENE_TEMPLATES[state.sceneSpec.id];
-      const restoredSpec = tpl
+      const restoredSpec = pristine
+        ? syncGraphWithScene(cloneSceneSpec(pristine))
+        : tpl
         ? syncGraphWithScene(cloneSceneSpec(tpl))
         : syncGraphWithScene(cloneSceneSpec(state.sceneSpec));
       restoredSpec.mode = state.sceneSpec.mode;

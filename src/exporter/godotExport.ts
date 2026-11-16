@@ -13,9 +13,11 @@
  */
 import type {
   ActorNode,
+  ActorStateMachine,
   LogicNode,
   Node2D,
   SceneSpec,
+  ShaderEffect,
   Vector3Tuple,
 } from '../types/scene.schema';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
@@ -541,6 +543,11 @@ function compileAction(
     warn('robot / hardware nodes need a connected hardware runtime and were not exported; the branch after it stops.');
     return true;
   }
+  if (p.actionType === 'send-signal') {
+    // Runtime: queues a signal for the behaviour state machines, then the chain continues.
+    warn('"send-signal" only drives behaviour state machines, which are not exported; the signal is skipped and the chain continues.');
+    return false;
+  }
   if (p.actorId && !entityIds.has(p.actorId)) {
     warn(`references missing actor "${String(p.actorId)}"; the branch after it stops (same as the runtime).`);
     return true;
@@ -819,6 +826,17 @@ function build3DScene(ctx: SceneContext): string {
   return tscn.toString();
 }
 
+/** Phase 9 state machines and Phase 6 shader effects have no Godot equivalent: never drop them silently. */
+function warnMachineAndShader(warn: (feature: string, detail: string) => void, entity: { stateMachine?: ActorStateMachine; shaderEffect?: ShaderEffect }, label: string) {
+  if (entity.stateMachine) {
+    const states = Object.keys(entity.stateMachine.states || {}).length;
+    warn('State machines', `${label}: behaviour state machine (${states} state${states === 1 ? '' : 's'}, initial "${entity.stateMachine.initial}") is not converted; the node stays at its start pose. Recreate the behaviour with GDScript or an AnimationTree.`);
+  }
+  if (entity.shaderEffect) {
+    warn('Shader effects', `${label}: shader effect "${entity.shaderEffect.preset}" is not converted; the model keeps its plain material. Recreate it as a Godot ShaderMaterial.`);
+  }
+}
+
 function build3DActor(ctx: SceneContext, actor: ActorNode, name: string) {
   const { tscn, warn, scene } = ctx;
   const entry = ASSET_REGISTRY[actor.assetId];
@@ -894,6 +912,7 @@ function build3DActor(ctx: SceneContext, actor: ActorNode, name: string) {
   if (actor.enterEffect && actor.enterEffect !== 'none') warn('Animation', `${label}: enter effect "${actor.enterEffect}" is not exported.`);
   if (actor.revealAssetId) warn('Gameplay', `${label}: the unbox reveal model swap ("${actor.revealAssetId}") is not exported; the box simply wins the game.`);
   if (click === 'trigger-vfx') warn('Gameplay', `${label}: click effect "trigger-vfx" is exported as a score tap without the visual effect.`);
+  warnMachineAndShader(warn, actor, label);
   if (role === 'dynamic') warn('Physics', `${label}: "dynamic" becomes a Godot RigidBody3D (real gravity), which can move differently from OmniStage.`);
 }
 
@@ -1057,6 +1076,7 @@ function build2DNode(ctx: SceneContext, node: Node2D) {
   }
 
   if (node.keyframeTrack?.length) warn('Animation', `${label}: ${node.keyframeTrack.length} keyframe(s) are not exported (the node stays at its start pose).`);
+  warnMachineAndShader(warn, node, label);
   if (node.type === 'parallax-layer') warn('2D', `${label}: parallax scrolling is not exported (static layer).`);
   if (role === 'bouncing') warn('Physics', `${label}: the "bouncing" role is not exported (static node).`);
 }

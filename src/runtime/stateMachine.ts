@@ -28,7 +28,7 @@ import type {
   VFXType,
 } from '../types/scene.schema';
 import { runtimeStore } from './host';
-import { matchClipName } from './cinematics';
+import { matchClipName, resolveClipName } from './cinematics';
 import { playSceneSfx } from '../audio/audioBus';
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -211,7 +211,9 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
-const hasClip = (names: string[], clip: string) => names.some((n) => n.toLowerCase() === clip.toLowerCase());
+/** 3D clips resolve like `matchClipName` ("Fly" -> Flying, "Bite" -> Attack); 2D sprite clips need the exact (case-insensitive) key. */
+const hasClip = (names: string[], clip: string, loose: boolean) =>
+  names.some((n) => n.toLowerCase() === clip.toLowerCase()) || (loose && resolveClipName(clip, names) !== undefined);
 
 export interface MachineIssue {
   code: string;
@@ -245,7 +247,7 @@ export function stateMachineIssues(host: MachineHost, spec: Pick<SceneSpec, 'mod
   }
   const names = clipNames(host);
   if (names) {
-    const bad = Object.entries(m.states).filter(([, st]) => st.clip && !hasClip(names, st.clip)).map(([n, st]) => `${n}: ${st.clip}`);
+    const bad = Object.entries(m.states).filter(([, st]) => st.clip && !hasClip(names, st.clip, !isHost2D(host))).map(([n, st]) => `${n}: ${st.clip}`);
     if (bad.length) out.push({ code: 'machine.clip-missing', severity: 'warning', message: `clips the ${isHost2D(host) ? 'spritesheet' : 'model'} does not have (${bad.join(', ')})`, fixable: true });
   }
   const signals = sentSignals(spec);
@@ -282,7 +284,7 @@ export function repairStateMachine(host: MachineHost, code: string): ActorStateM
   }
   if (code === 'machine.clip-missing') {
     const clips = clipNames(host);
-    if (clips) for (const st of Object.values(m.states)) if (st.clip && !hasClip(clips, st.clip)) delete st.clip;
+    if (clips) for (const st of Object.values(m.states)) if (st.clip && !hasClip(clips, st.clip, !isHost2D(host))) delete st.clip;
   }
   return m;
 }
@@ -368,15 +370,15 @@ export function machineDistance(a: Vector3Tuple, b: Vector3Tuple, engine: Engine
   return engine === '2d' ? Math.hypot(a[0] - b[0], a[1] - b[1]) : Math.hypot(a[0] - b[0], a[2] - b[2]);
 }
 
-function findClip(clips: string[] | undefined, wanted: string): string | undefined {
+function findClip(clips: string[] | undefined, wanted: string, loose = false): string | undefined {
   if (!clips?.length) return wanted;
-  return clips.find((c) => c.toLowerCase() === wanted.toLowerCase());
+  return clips.find((c) => c.toLowerCase() === wanted.toLowerCase()) ?? (loose ? resolveClipName(wanted, clips) : undefined);
 }
 
 /** Clip / procedural animation for a state: authored values first, else Walk / Run while moving and the actor's own look at rest. */
 export function lookForState(state: StateMachineState, entity: Pick<MachineEntity, 'clips'>, base: MachineLook, engine: EngineType): MachineLook {
   const moving = !!state.move && state.move !== 'stay';
-  let clip = state.clip ? findClip(entity.clips, state.clip) : undefined;
+  let clip = state.clip ? findClip(entity.clips, state.clip, engine === '3d') : undefined;
   if (!clip && entity.clips?.length && engine === '3d') {
     clip = moving ? matchClipName((state.speed ?? ENGINE['3d'].speed) > 2.6 ? 'Run' : 'Walk', entity.clips) : base.clip ?? matchClipName('Idle', entity.clips);
   }
@@ -389,6 +391,11 @@ export class StateMachineRuntime {
 
   reset() {
     this.runs.clear();
+  }
+
+  /** Where each running entity started (its authored pose), for putting it back when the session restarts. */
+  startPoses(): Map<string, { position: Vector3Tuple; clip?: string; animation?: AnimationType }> {
+    return new Map([...this.runs].map(([id, r]) => [id, { position: [...r.home] as Vector3Tuple, clip: r.base.clip, animation: r.base.animation }]));
   }
 
   /** Current state of an entity (undefined before its first step). */
@@ -559,6 +566,22 @@ export interface MachineFrameInputs {
   positionFor?: (id: string) => Vector3Tuple | undefined;
 }
 
+function restoreStartPoses(engine: EngineType, starts: ReturnType<StateMachineRuntime['startPoses']>) {
+  runtimeStore.setState((current) => {
+    const s = current.sceneSpec;
+    if (engine === '3d') {
+      return { sceneSpec: { ...s, actors: s.actors.map((a) => {
+        const p = starts.get(a.id);
+        return p && a.stateMachine ? { ...a, position: p.position, activeClip: p.clip ?? a.activeClip, activeAnimation: p.animation ?? a.activeAnimation } : a;
+      }) } };
+    }
+    return { sceneSpec: { ...s, nodes2D: s.nodes2D.map((n) => {
+      const p = starts.get(n.id);
+      return p && n.stateMachine ? { ...n, x: p.position[0], y: p.position[1], ...(p.clip && n.spriteSheet?.clips?.[p.clip] ? { spriteSheet: { ...n.spriteSheet, activeClip: p.clip } } : {}) } : n;
+    }) } };
+  });
+}
+
 /** One frame of every state machine in the active game scene. Consumes `clicked` and `signals`. */
 export function runStateMachines(machines: StateMachineRuntime, engine: EngineType, dt: number, frame: MachineFrameInputs) {
   const state = runtimeStore.getState();
@@ -571,8 +594,15 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
     return;
   }
   // resetGameSession / scene switch clear `machineStates`: restart every machine from its initial state.
-  if (!state.machineStates) machines.reset();
-  const entities: MachineEntity[] = hosts.map((h) => 'physics2D' in h
+  if (!state.machineStates) {
+    // ... and put the machine-driven actors back where they started (resetGameSession keeps the moved poses of non-template scenes).
+    const starts = machines.startPoses();
+    if (starts.size) restoreStartPoses(engine, starts);
+    machines.reset();
+  }
+  const fresh = runtimeStore.getState().sceneSpec;
+  const liveHosts: Array<ActorNode | Node2D> = engine === '3d' ? fresh.actors.filter((a) => a.stateMachine) : fresh.nodes2D.filter((n) => n.stateMachine);
+  const entities: MachineEntity[] = liveHosts.map((h) => 'physics2D' in h
     ? { id: h.id, position: [h.x, h.y, 0], machine: h.stateMachine!, clips: Object.keys(h.spriteSheet?.clips || {}), clip: h.spriteSheet?.activeClip }
     : { id: h.id, position: [...h.position], machine: h.stateMachine!, clips: h.availableClips, clip: h.activeClip, animation: h.activeAnimation });
   const player = engine === '3d'

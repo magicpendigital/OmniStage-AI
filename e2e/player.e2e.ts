@@ -68,6 +68,8 @@ test('3D state machine: an enemy waits, chases the player and catches them (Phas
       caught: { onEnter: [{ type: 'spawn-vfx', vfx: 'sparkles' }] },
     } } });
   const p = await openExport(page, spec);
+  // Real-time rAF frames run before manual(true) takes over (many on a loaded machine): restart so the timer starts from zero.
+  await page.evaluate(() => (window as any).__omniPlayer.restart());
   await p.step(5);
   expect(await p.state<string>('s.machineStates["e2e-enemy"]')).toBe('idle');
   let state = 'idle';
@@ -226,6 +228,8 @@ test('app build: auto tier detection picks low on software rendering; ad exports
 test('3D shader effects: every preset applies to the rigged robot and composites, dissolve burns away (Phase 6)', async ({ page }) => {
   const spec = shaderFxScene();
   const p = await openExport(page, spec);
+  // The rAF loop runs a few real-time frames before manual(true) takes over; start both pages from t = 0 so the comparison below is deterministic.
+  await page.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
   await p.waitAssets();
   await p.step(20, 0.05);
   const view = await p.view3d();
@@ -239,11 +243,18 @@ test('3D shader effects: every preset applies to the rigged robot and composites
   for (const actor of plain.actors) delete actor.shaderEffect;
   const page2 = await page.context().newPage();
   const q = await openExport(page2, plain);
+  await page2.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
   await q.waitAssets();
   await q.step(20, 0.05);
   expect((await q.view3d()).actors.robot.fx).toBe(0);
   const b = await q.pixelStats();
-  expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std), 'effects change the frame').toBeGreaterThan(1);
+  // The global mean / std of two different pictures can cancel out (they differed by 0.2..1.0 run to run), so also compare
+  // the frames pixel by pixel: six effect props must change many pixels, not just the average.
+  const ga = await p.pixelGrid();
+  const gb = await q.pixelGrid();
+  const meanAbsDiff = ga.reduce((sum, v, i) => sum + Math.abs(v - gb[i]), 0) / ga.length;
+  expect(meanAbsDiff, 'effects change the frame (mean per-pixel luminance difference)').toBeGreaterThan(3);
+  expect(Math.abs(a.mean - b.mean) + Math.abs(a.std - b.std) + meanAbsDiff, 'effects change the frame').toBeGreaterThan(1);
 
   await p.step(80, 0.05); // t ≈ 5 s: dissolve finished, everything else still animating
   expect(p.errors).toEqual([]);
