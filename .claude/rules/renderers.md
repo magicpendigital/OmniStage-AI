@@ -19,6 +19,8 @@ paths:
 - WebGPU (Phase 7): a builder that uses GLSL (ShaderMaterial, onBeforeCompile, Reflector, EffectComposer) must check `nodeBackend()`
   and hand that part to `src/render3d/webgpu` (TSL port with the same maths). Add the port in the same change and run
   `npm run test:e2e:gpu`. Never import `three/webgpu` outside `src/render3d/webgpu`.
+- Shader effects (`actor.shaderEffect`) are only the fixed presets in `src/runtime/shaderEffects.ts`, applied by `ActorShaderEffect`
+  (studio + Player) to the actor's animated group; change GLSL (`src/render3d/shaderEffects.ts`) and TSL (`webgpu/shaderEffects.ts`) maths together.
 - 3D host: React Three Fiber (editor tools: gizmos, selection, orbit). Badges stay WebGL sprites (`THREE.CanvasTexture`), never DOM `<Html>` portals (React 19 unmount races).
 - Multi-instance rigs use `SkeletonUtils.clone`; dispose bone textures/mixers when an actor is removed.
 - Phase 9 pose layer: head look-at and foot IK run in `RigPoseLayer` (`src/render3d/rigPose.ts`) AFTER the mixer update, in both the

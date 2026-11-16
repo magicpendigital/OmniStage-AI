@@ -586,6 +586,8 @@ export interface ActorNode {
    * renderers can add talk motion. Not saved.
    */
   talkLevel?: number;
+  /** Phase 6 Batch 3: one of the fixed, reviewed shader looks (never shader code), see src/runtime/shaderEffects.ts. */
+  shaderEffect?: ShaderEffect;
   /** Phase 9: behaviour state machine (game mode), run by src/runtime/stateMachine.ts. */
   stateMachine?: ActorStateMachine;
 }
@@ -654,6 +656,23 @@ export interface ActorStateMachine {
   health?: number;
   /** Seed for 'random' conditions (default 1). */
   seed?: number;
+}
+
+/** Phase 6 Batch 3 — parameterised shader presets drawn by src/render3d/shaderEffects.ts (GLSL) and its TSL twin. */
+export type ShaderEffectPreset = 'hologram' | 'dissolve' | 'toon' | 'forcefield' | 'lava' | 'rainbow';
+
+export interface ShaderEffect {
+  preset: ShaderEffectPreset;
+  /** Effect colour (#rrggbb); default per preset. */
+  color?: string;
+  /** Strength 0..3 (default 1). */
+  intensity?: number;
+  /** Animation speed 0..5 (default 1). */
+  speed?: number;
+  /** Dissolve amount 0 (whole) .. 1 (gone); default 0. Ignored by the other presets. */
+  progress?: number;
+  /** Animate progress from → to over [start, start + duration] seconds (overrides progress), e.g. a dissolve-out. */
+  progressTween?: { from: number; to: number; start: number; duration: number };
 }
 
 /**

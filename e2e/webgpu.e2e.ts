@@ -4,7 +4,7 @@
  * WebGPU adapter (the Player then falls back to WebGL, which the first assertion of each test checks).
  */
 import { expect, test } from '@playwright/test';
-import { openExport, template } from './exportFixture';
+import { openExport, shaderFxScene, template } from './exportFixture';
 import { applyBiomeToScene } from '../src/runtime/biomes';
 import { PLAYER_RUNTIME_WEBGPU } from '../src/exporter/generated/playerRuntimeWebgpu';
 
@@ -14,6 +14,11 @@ const scenes = {
     const s = applyBiomeToScene(template('blank-3d-authoring'), 'waterfall-valley');
     s.environment.groundGrid = true;
     s.world.weather = { type: 'snow', intensity: 0.6 };
+    return s;
+  },
+  'shader effect presets (hologram, toon, forcefield, lava, rainbow, dissolve) on GLTF + composites': () => {
+    const s = shaderFxScene();
+    s.actors.find((a) => a.id === 'mine')!.shaderEffect = { preset: 'dissolve', progress: 0.45 };
     return s;
   },
 };

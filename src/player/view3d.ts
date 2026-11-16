@@ -6,6 +6,7 @@
  * adds what the studio gets from R3F/drei: GLB loading + skeletal clips, HDRI, camera modes and the frame loop.
  */
 import { RigPoseInput, RigPoseLayer, rigPoseInputFor } from '../render3d/rigPose';
+import { ActorShaderEffect } from '../render3d/shaderEffects';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
@@ -53,6 +54,8 @@ interface ActorView {
   poseInput?: RigPoseInput;
   /** Phase 10C: current talk level (inspect / tests). */
   talk?: number;
+  /** Phase 6 Batch 3: actor.shaderEffect (shared builder, same as the studio). */
+  fx?: ActorShaderEffect;
 }
 
 const compositeKeyFor = (a: ActorNode, taps: number) => [a.assetId, a.primaryColor, a.secondaryColor, a.metalness, a.roughness, taps].join('|');
@@ -164,8 +167,8 @@ export class View3D {
 
   /** Phase 10A: live actor poses + camera (E2E tests / debugging). */
   inspect() {
-    const actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }> = {};
-    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip, talk: v.talk || 0 };
+    const actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number; fx: number }> = {};
+    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip, talk: v.talk || 0, fx: v.fx?.meshCount ?? 0 };
     // Phase 10B: named world parts (water landmarks, scatter layers) for E2E checks.
     const world: string[] = [];
     this.world.traverse((o) => {
@@ -325,12 +328,14 @@ export class View3D {
       a.position.set(damp(a.position.x, motion.offset[0], 10, dt), damp(a.position.y, motion.offset[1], 10, dt), damp(a.position.z, motion.offset[2], 10, dt));
       a.rotation.set(damp(a.rotation.x, motion.rotation[0], 10, dt), damp(a.rotation.y, motion.rotation[1], 10, dt), damp(a.rotation.z, motion.rotation[2], 10, dt));
       a.scale.setScalar(damp(a.scale.x, motion.scale, 10, dt));
+      if (actor.shaderEffect || view.fx) (view.fx ??= new ActorShaderEffect(view.anim)).update(actor.shaderEffect, { time });
     }
     for (const id of [...this.actors.keys()]) if (!live.has(id)) this.removeActor(id);
   }
 
   private setComposite(view: ActorView, next: THREE.Object3D | undefined) {
     if (view.composite) {
+      view.fx?.release(view.composite);
       view.anim.remove(view.composite);
       disposeObject(view.composite);
     }
@@ -347,6 +352,7 @@ export class View3D {
     const view = this.actors.get(id);
     if (!view) return;
     this.actorsGroup.remove(view.root);
+    view.fx?.dispose();
     this.setComposite(view, undefined);
     view.badge?.dispose();
     view.mixer?.stopAllAction();

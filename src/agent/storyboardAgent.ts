@@ -46,6 +46,7 @@ import { autoFixSceneSpec } from '../verification/sceneVerifier';
 import { aiHeaders } from './aiClient';
 import { describeDirectorReview } from './directorQA';
 import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
+import { sanitizeShaderEffect } from '../runtime/shaderEffects';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -209,6 +210,8 @@ function normalizeActor(raw: any, index: number, durationSeconds: number): Actor
     ...(raw.rigCost && Number.isFinite(raw.rigCost.bones) && Number.isFinite(raw.rigCost.vertices)
       ? { rigCost: { bones: raw.rigCost.bones, vertices: raw.rigCost.vertices, ...(Number.isFinite(raw.rigCost.textureSize) ? { textureSize: raw.rigCost.textureSize } : {}) } }
       : {}),
+    // Phase 6 Batch 3: one of the fixed shader presets, params clamped (never shader code).
+    ...(sanitizeShaderEffect(raw.shaderEffect) ? { shaderEffect: sanitizeShaderEffect(raw.shaderEffect)! } : {}),
     // Phase 10C: character voice. The AI never picks 'elevenlabs' (paid, the creator's own key): only the creator does, in the Dialogue panel.
     ...(raw.voice && typeof raw.voice === 'object' ? { voice: {
       ...(raw.voice.engine === 'babble' || raw.voice.engine === 'piper' ? { engine: raw.voice.engine } : {}),
