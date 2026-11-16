@@ -40,3 +40,5 @@ paths:
 - Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or
   anything DOM-only beyond canvas; they read/write state via `runtimeStore` (`src/runtime/host.ts`). Renderers stay thin wrappers so the
   OmniStage Player runs the same code. Rebuild the Player (`npm run build:player`) after runtime changes.
+- Behaviour state machines (`src/runtime/stateMachine.ts`) run from `RuntimeLogicGraph.advance`, game mode only, seeded, no `Date` /
+  `Math.random`. 3D clip names go through `resolveClipName` (cinematics). Restarts restore start poses (`restoreStartPoses`).

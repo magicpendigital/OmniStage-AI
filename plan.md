@@ -268,7 +268,9 @@ vertices, texture size of OmniRig characters).
   convolution, so scrubbing and frame-stepped exports match); films only, in `RigPoseLayer`.
 - [x] FBX clip import (2026-11-16): OmniRig "Import clips" accepts Mixamo `.fbx` (FBXLoader) as well as `.glb`; not yet checked
   against a real Mixamo download.
-- [ ] LLM state machine JSON.
+- [x] LLM state machine JSON (2026-11-16): `actors[].stateMachine` / `nodes2D[].stateMachine` = states with moves (patrol, chase,
+  flee, move-to, return-home), closed-list conditions and actions; interpreted by `src/runtime/stateMachine.ts` (studio, Play Test,
+  Player; seeded, game mode only); verifier `machine.*` (auto-fixed), prompt + `behaviour-state-machines` skill, inspector badge.
 - [ ] Weight painting.
 - [x] Bird / serpent templates (2026-11-16): `bird` = thin wings spread wide at mid height + legs (spine, neck, head, 3-bone
   wings, 2 legs, tail; clips Idle / Walking / Running / Flying / Gliding / Peck; stress poses wings up / down, peck); `serpent` =
@@ -417,6 +419,13 @@ the verifier only checks playability. Fix in layers: contract → production too
   control; WebGL e2e + WebGPU parity scene.
 
 ### Later
-- [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.
-- [ ] Exporter plugins beyond the web runtime (e.g. SceneSpec → Godot project) for heavy 3D games, consoles and Steam.
+- [x] Desktop packaging (2026-11-16): `desktop/` Electron app runs the bundled server (`npm run build:server`) on 127.0.0.1, adds
+  the AI CLI install dirs to PATH, Help → Diagnostics; NSIS + portable built on Windows (unsigned); dmg / AppImage configured,
+  not built. Docs: `docs/desktop.md`. Playwright E2E was done in Phase 7C.
+- [ ] Rapier3D + lightweight ECS.
+- [x] SceneSpec → Godot 4 project (2026-11-16): `src/exporter/godotExport.ts` (Publish → Godot 4 project): tscn scenes, fixed
+  GDScript templates for score / win-lose / movement / scene links, logic graph compiled to rule data; everything not converted
+  (VFX, audio, cinematics, state machines, shader effects…) is listed as warnings + `OMNISTAGE_EXPORT_NOTES.md`. Not yet opened
+  in a real Godot (the headless check runs when `godot` / `GODOT_BIN` is available).
+- [ ] Further exporter plugins (consoles, Steam).
 - [x] Deterministic video (WebCodecs) with audio — done in 10B; NodeGraphView wheel zoom uses a non-passive listener (2026-11-16).
