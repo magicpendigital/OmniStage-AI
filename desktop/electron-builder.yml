@@ -1,0 +1,58 @@
+﻿# electron-builder config for the OmniStage AI desktop app (see docs/desktop.md).
+# Code signing / notarization are configured ONLY through environment variables - never put secrets here:
+#   Windows: CSC_LINK (path/URL/base64 of the .pfx), CSC_KEY_PASSWORD   (or WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD)
+#   macOS:   CSC_LINK, CSC_KEY_PASSWORD (Developer ID .p12), APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#            (or APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER for notarytool API keys)
+#   Without them, builds are unsigned (Windows SmartScreen / macOS Gatekeeper will warn).
+appId: ai.omnistage.studio
+productName: OmniStage AI
+copyright: Copyright (c) OmniStage
+directories:
+  output: release
+  buildResources: build
+# The Electron main process only; the studio (dist/) and the server bundle (dist-server/) ship as extraResources.
+files:
+  - main.cjs
+  - cliPath.cjs
+  - settings.cjs
+  - package.json
+  - "!**/node_modules/**"
+extraResources:
+  - from: ../dist
+    to: studio
+  - from: ../dist-server
+    to: server
+asar: true
+icon: build/icon.png
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OmniStage AI
+  artifactName: "OmniStage-AI-Setup-${version}.${ext}"
+portable:
+  artifactName: "OmniStage-AI-Portable-${version}.${ext}"
+mac:
+  target:
+    - target: dmg
+      arch: [universal]
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  artifactName: "OmniStage-AI-${version}-mac.${ext}"
+dmg:
+  title: OmniStage AI
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Development
+  artifactName: "OmniStage-AI-${version}-${arch}.${ext}"
