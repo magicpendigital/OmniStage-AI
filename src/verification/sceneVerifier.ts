@@ -16,13 +16,14 @@ import type {
 } from '../types/scene.schema';
 import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
-import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { PARTICLE_2D_PRESETS, particleRuntimeFor } from '../vfx/particles2D';
 import { MAX_SCENE_RECIPES, RECIPE_ID_RE, sameRecipe, sanitizeParticleRecipe, sanitizeSfxRecipe } from '../extensions/validate';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
+import { DEVICE_PROFILES, DeviceTier } from '../runtime/deviceProfiles';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 
 // --- Phase 10A: film craft (media 3D) ---
@@ -60,6 +61,8 @@ export interface VerifyOptions {
   scenes?: SceneSpec[];
   /** Phase 8: 'mobile' adds phone checks (text size, touch targets, safe area, keyboard-only input, scene weight). */
   target?: 'mobile';
+  /** Phase 8: device tier the mobile budgets are checked against (default 'mid' = MOBILE_REFERENCE). */
+  deviceTier?: DeviceTier;
 }
 
 interface Surface {
@@ -491,23 +494,41 @@ export const MOBILE_REFERENCE = {
     portrait: { top: 47, bottom: 34, left: 0, right: 0 },
     landscape: { top: 0, bottom: 21, left: 47, right: 47 },
   },
-  maxActors3D: 60,
-  maxNodes2D: 300,
-  /** Rig cost (Phase 9 characters): skinned vertices in view at once, skinned models, bones per skeleton, texture side. */
-  maxSkinnedVertices: 150_000,
-  maxSkinnedActors: 12,
-  maxBones: 100,
-  maxTextureSize: 2048,
+  /** Content budgets of the 'mid' device tier (src/runtime/deviceProfiles.ts): actors, 2D nodes, rig cost, particles. */
+  ...DEVICE_PROFILES.mid.budget,
 };
 
+const tierNote = (tier: DeviceTier) => (tier === 'mid' ? '' : ` [${tier} tier]`);
+
+/** Live particles at once: 3D GPU points (sparkles 96, confetti 160 × intensity, ambient dust 24) + 2D emitters at steady state. */
+export function mobileParticleCount(spec: Pick<SceneSpec, 'engineType' | 'vfx' | 'nodes2D' | 'particleLibrary'>): number {
+  if (spec.engineType === '3d') {
+    let n = 24;
+    for (const v of spec.vfx || []) {
+      if (v.visible === false) continue;
+      if (v.type === 'sparkles') n += 96;
+      else if (v.type === 'confetti') n += Math.floor(160 * Math.max(0, v.intensity ?? 1));
+    }
+    return n;
+  }
+  const rt = particleRuntimeFor(spec.particleLibrary);
+  let n = 0;
+  for (const node of spec.nodes2D || []) {
+    if (node.visible === false || node.type !== 'particle-emitter' || !node.emitter) continue;
+    n += rt.particlesAt(node.emitter.preset, node.emitter.seed ?? 7, 6, STAGE_W, STAGE_H, node.emitter.rate).length;
+  }
+  return n;
+}
+
 /** Skinning budget of a 3D scene for phones: totals from measured `rigCost`, rigged library models counted without one. */
-export function mobileRigBudget(spec: Pick<SceneSpec, 'actors'>): {
+export function mobileRigBudget(spec: Pick<SceneSpec, 'actors'>, tier: DeviceTier = 'mid'): {
   skinnedActors: number;
   vertices: number;
   heaviest?: { id: string; name: string; bones: number; vertices: number; textureSize?: number };
   issues: Array<{ id: string; message: string; actorId?: string }>;
 } {
-  const R = MOBILE_REFERENCE;
+  const R = DEVICE_PROFILES[tier].budget;
+  const t = tierNote(tier);
   const shown = (spec.actors || []).filter((a) => a.visible !== false);
   const rigged = shown.filter((a) => a.rigCost || (ASSET_REGISTRY[a.assetId]?.category === 'gltf-rigged' && (ASSET_REGISTRY[a.assetId]?.embeddedClips?.length ?? 0) > 0));
   const measured = shown.filter((a) => a.rigCost);
@@ -515,14 +536,14 @@ export function mobileRigBudget(spec: Pick<SceneSpec, 'actors'>): {
   const heaviest = measured.slice().sort((a, b) => b.rigCost!.vertices - a.rigCost!.vertices)[0];
   const issues: Array<{ id: string; message: string; actorId?: string }> = [];
   if (vertices > R.maxSkinnedVertices) {
-    issues.push({ id: 'vertices', message: `Rigged characters skin ${Math.round(vertices / 1000)}k vertices every frame; phones stay smooth under ${R.maxSkinnedVertices / 1000}k. Use fewer or lighter characters (heaviest: "${heaviest!.name}", ${Math.round(heaviest!.rigCost!.vertices / 1000)}k).` });
+    issues.push({ id: 'vertices', message: `Rigged characters skin ${Math.round(vertices / 1000)}k vertices every frame; phones stay smooth under ${R.maxSkinnedVertices / 1000}k. Use fewer or lighter characters (heaviest: "${heaviest!.name}", ${Math.round(heaviest!.rigCost!.vertices / 1000)}k).${t}` });
   }
   if (rigged.length > R.maxSkinnedActors) {
-    issues.push({ id: 'actors', message: `${rigged.length} animated rigged characters may drop frames on low-end phones (keep under ${R.maxSkinnedActors}).` });
+    issues.push({ id: 'actors', message: `${rigged.length} animated rigged characters may drop frames on low-end phones (keep under ${R.maxSkinnedActors}).${t}` });
   }
   for (const a of measured) {
-    if (a.rigCost!.bones > R.maxBones) issues.push({ id: 'bones', actorId: a.id, message: `"${a.name}" has ${a.rigCost!.bones} bones; keep skeletons under ${R.maxBones} for phones.` });
-    if ((a.rigCost!.textureSize ?? 0) > R.maxTextureSize) issues.push({ id: 'texture', actorId: a.id, message: `"${a.name}" uses ${a.rigCost!.textureSize} px textures; phones need ${R.maxTextureSize} px or less.` });
+    if (a.rigCost!.bones > R.maxBones) issues.push({ id: 'bones', actorId: a.id, message: `"${a.name}" has ${a.rigCost!.bones} bones; keep skeletons under ${R.maxBones} for phones.${t}` });
+    if ((a.rigCost!.textureSize ?? 0) > R.maxTextureSize) issues.push({ id: 'texture', actorId: a.id, message: `"${a.name}" uses ${a.rigCost!.textureSize} px textures; phones need ${R.maxTextureSize} px or less.${t}` });
   }
   return {
     skinnedActors: rigged.length,
@@ -589,7 +610,9 @@ function touchKeys(spec: SceneSpec): Set<string> {
   return keys;
 }
 
-function verifyMobile(spec: SceneSpec, issues: VerificationIssue[]) {
+function verifyMobile(spec: SceneSpec, issues: VerificationIssue[], tier: DeviceTier = 'mid') {
+  const B = DEVICE_PROFILES[tier].budget;
+  const t = tierNote(tier);
   const geo = mobileStageGeometry(spec.aspectRatio);
   if (spec.engineType === '2d') {
     const taps = tapTargetIds(spec);
@@ -614,14 +637,19 @@ function verifyMobile(spec: SceneSpec, issues: VerificationIssue[]) {
         }
       }
     }
-    if ((spec.nodes2D || []).length > MOBILE_REFERENCE.maxNodes2D) {
-      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.nodes2D.length} 2D nodes may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxNodes2D}).`, false));
+    if ((spec.nodes2D || []).length > B.maxNodes2D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.nodes2D.length} 2D nodes may drop frames on low-end phones (keep under ${B.maxNodes2D}).${t}`, false));
     }
   } else {
-    if ((spec.actors || []).length > MOBILE_REFERENCE.maxActors3D) {
-      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${MOBILE_REFERENCE.maxActors3D}).`, false));
+    if ((spec.actors || []).length > B.maxActors3D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${B.maxActors3D}).${t}`, false));
     }
-    for (const r of mobileRigBudget(spec).issues) issues.push(issue('mobile.rig-cost', 'warning', r.message, false, r.actorId));
+    for (const r of mobileRigBudget(spec, tier).issues) issues.push(issue('mobile.rig-cost', 'warning', r.message, false, r.actorId));
+  }
+
+  const particles = mobileParticleCount(spec);
+  if (particles > B.maxParticles) {
+    issues.push(issue('mobile.heavy-scene', 'warning', `About ${particles} particles at once may drop frames on phones (keep under ${B.maxParticles}).${t}`, false));
   }
 
   if (spec.mode === 'game') {
@@ -676,7 +704,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifySoundtrack(spec, issues);
   verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
-  if (opts.target === 'mobile') verifyMobile(spec, issues);
+  if (opts.target === 'mobile') verifyMobile(spec, issues, opts.deviceTier);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
 }

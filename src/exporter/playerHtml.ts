@@ -7,6 +7,7 @@ import type { SceneSpec } from '../types/scene.schema';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { formatBytes, PLAYABLE_SIZE_LIMITS } from './playableBundle';
 import type { StandaloneAdNetwork } from './mediaExporter';
+import type { DeviceTier } from '../runtime/deviceProfiles';
 
 export interface PlayerHtmlOptions {
   playerRuntimeSource: string;
@@ -18,8 +19,11 @@ export interface PlayerHtmlOptions {
   quality?: 'auto' | 'low' | 'high' | 'ultra';
   /** Phase 7: 'webgpu' / 'auto' need the WebGPU build of the runtime (PLAYER_RUNTIME_WEBGPU); WebGL is the fallback. */
   renderer?: 'webgl' | 'webgpu' | 'auto';
-  /** Phase 8: app build (PWA / Android / iOS): haptics, saved progress, pause in the background. */
-  app?: { saveKey: string; haptics?: boolean; saves?: boolean };
+  /**
+   * Phase 8: app build (PWA / Android / iOS): haptics, saved progress, pause in the background, device tier detection
+   * and the adaptive quality governor (`tier` 'auto' by default; `governor: false` keeps the start settings).
+   */
+  app?: { saveKey: string; haptics?: boolean; saves?: boolean; tier?: 'auto' | DeviceTier; governor?: boolean };
   /** Phase 8: installable PWA: links the web manifest and registers the service worker (both relative files). */
   pwa?: { manifestHref: string; serviceWorkerHref: string };
   /** Phase 8: browser / status bar colour (default #05070d). */
