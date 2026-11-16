@@ -2,13 +2,15 @@
  * Phase 6 Batch 3 — /api/generate/* (mounted on the workspace router, so it is localhost-only).
  *
  *   GET  /api/generate/generators            generators from enabled extensions that were granted `generate`
- *   POST /api/generate/jobs  {extensionId, generatorId, prompt, scope, imageAssetId?, imageScope?}   header x-generate-key → job
- *        (image-to-3D: the picture is read from the user's library here; the studio never uploads arbitrary files)
+ *   POST /api/generate/jobs  {extensionId, generatorId, prompt, scope, imageAssetId?, imageScope?, modelAssetId?, modelScope?}
+ *        header x-generate-key → job (image-to-3D / rig: the picture or GLB is read from the user's library here;
+ *        the studio never uploads arbitrary files)
  *   GET  /api/generate/jobs/:id                                          header x-generate-key → job (polls upstream)
  *   GET  /api/generate/jobs                                              recent jobs (no keys, ever)
  *
  * The key comes from the request header or the server env (MESHY_API_KEY, TRIPO_API_KEY, RODIN_API_KEY, FAL_KEY,
- * REPLICATE_API_TOKEN, OPENROUTER_API_KEY, ELEVENLABS_API_KEY). It is never logged, stored or echoed back.
+ * REPLICATE_API_TOKEN, OPENROUTER_API_KEY, ELEVENLABS_API_KEY,
+ * BLOCKADE_API_KEY). It is never logged, stored or echoed back.
  */
 import { readFile } from 'node:fs/promises';
 import type { Request, Response, Router } from 'express';
@@ -17,7 +19,7 @@ import type { AssetStore } from '../workspace/assets';
 import { listInstalled } from '../workspace/extensions';
 import { WorkspaceError } from '../workspace/store';
 import { FetchLike, listGenerations, pollGeneration, sniffResult, startGeneration } from './jobs';
-import { GenerationError, PROVIDERS } from './providers';
+import { GenerationError, PROVIDERS, specFor } from './providers';
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
 
@@ -33,7 +35,7 @@ export function availableGenerators(installed: InstalledExtension[], env: NodeJS
     .filter((e) => e.enabled && e.approvedPermissions.includes('generate'))
     .flatMap((e) =>
       (e.manifest.contributes?.generators || [])
-        .filter((g) => PROVIDERS[g.provider] && PROVIDERS[g.provider].output === g.output)
+        .filter((g) => specFor(g)?.output === g.output)
         .map((g) => ({ ...g, extensionId: e.manifest.id, extensionName: e.manifest.name, serverKey: !!env[PROVIDERS[g.provider].envKey] }))
     );
 }
@@ -75,6 +77,25 @@ export async function readSourceImage(store: AssetStore, assetId: unknown): Prom
   return { data, mime: IMAGE_MIME[ext] };
 }
 
+/** Largest GLB sent to a rig provider (Meshy takes it as a data URI, ≤100 MB encoded; Tripo uploads ≤150 MB). */
+export const MAX_SOURCE_MODEL_BYTES = 60 * 1024 * 1024;
+
+/** Reads a library model for rigging; only GLB by content, never by name. */
+export async function readSourceModel(store: AssetStore, assetId: unknown): Promise<{ data: Buffer; name: string }> {
+  if (typeof assetId !== 'string' || !assetId) throw new GenerationError('Pick a 3D model (GLB) from your library to rig.');
+  const { path, asset } = await store.filePath(assetId);
+  if (asset.kind !== 'model') throw new GenerationError('That library item is not a 3D model');
+  if (asset.size > MAX_SOURCE_MODEL_BYTES) throw new GenerationError('That model is larger than 60 MB');
+  const data = await readFile(path);
+  if (data.length > MAX_SOURCE_MODEL_BYTES) throw new GenerationError('That model is larger than 60 MB');
+  try {
+    sniffResult(data, 'model');
+  } catch {
+    throw new GenerationError('Rigging needs a GLB model');
+  }
+  return { data, name: asset.name };
+}
+
 export function registerGenerateRoutes(
   r: Router,
   deps: { route: (h: Handler) => (req: Request, res: Response) => Promise<void>; storeFor: (scope: string) => AssetStore; fetch?: FetchLike }
@@ -101,7 +122,8 @@ export function registerGenerateRoutes(
         const scope = String(body.scope || 'personal');
         const store = deps.storeFor(scope); // validates the scope before any credits are spent
         const image = gen.input === 'image' ? await readSourceImage(deps.storeFor(String(body.imageScope || scope)), body.imageAssetId) : undefined;
-        return startGeneration({ extensionId: gen.extensionId, generator: gen, prompt: body.prompt, scope, image }, keyFrom(req, gen.provider), { fetch: fetcher, store });
+        const model = gen.input === 'model' ? await readSourceModel(deps.storeFor(String(body.modelScope || scope)), body.modelAssetId) : undefined;
+        return startGeneration({ extensionId: gen.extensionId, generator: gen, prompt: body.prompt, scope, image, model }, keyFrom(req, gen.provider), { fetch: fetcher, store });
       })
     )
   );

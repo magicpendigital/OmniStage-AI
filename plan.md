@@ -270,7 +270,12 @@ vertices, texture size of OmniRig characters).
   against a real Mixamo download.
 - [ ] LLM state machine JSON.
 - [ ] Weight painting; bird / serpent templates; finger bones.
-- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
+- [x] Provider plugins (2026-11-16): Meshy rig + animation (`meshy-rig-animator`: rigging → animations with Animation Library
+  action ids) and Tripo rig + retarget (`tripo-rig-animator`: v3 upload → rig → retarget presets, biped + quadruped), BYO keys.
+  The source is a GLB from My Library; the result's clips are renamed to Idle / Walking / Running… (`server/generate/glb.ts`)
+  so `matchClipName` and the AI drive them; placing it registers a `gltf-rigged` entry with those clips. Mocked HTTP only —
+  not yet run against the real APIs.
+- [ ] UniRig / Puppeteer via an optional local GPU ML server.
 
 ### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
 Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;
@@ -371,7 +376,10 @@ the verifier only checks playability. Fix in layers: contract → production too
   - Tests: `tests/directorQA.test.ts`.
   - (2026-11-16) Manual "Director QA" button (AI drawer header + command bar) for any 3D scene with keyframes; runs even when
     automatic Director QA is off, asks for a vision connection otherwise; the result is undoable like an AI turn.
-  - Not done: Blockade skybox, Meshy animation; a real vision-model run on a generated film.
+  - (2026-11-16) Blockade Labs skybox generator (`blockade-skybox-generator`): prompt → equirect JPG in My Library → "Use as
+    sky" sets `world.hdri` with the new `format: 'image'` (studio TextureLoader + drei Environment map; Player TextureLoader);
+    verifier `world.hdri-invalid`. Meshy animation: see Phase 9 provider plugins. Mocked HTTP only.
+  - Not done: a real vision-model run on a generated film; real-key runs of Blockade / Meshy / Tripo rig.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`

@@ -166,6 +166,8 @@ AVAILABLE 3D WORLD & ENVIRONMENT OPTIONS (sceneSpec.world):
   world: { biome: 'forest' } alone is enough — OmniStage fills sky, terrain, props, water and outdoor lighting; add fields only to change them.
 - features (real animated water, never fake it with VFX beams): [{ id, type: 'waterfall' | 'river' | 'pond', position: [x, 0, z], rotationDeg?, size? }].
   Keep them 6+ m from the stage centre, e.g. a waterfall behind the actors at [0, 0, -15] (its cliff faces +z), a river at [-9, 0, 4].
+- hdri: { url, name, source, showBackground, intensity, format? } image sky + lighting; format 'image' for a generated 360° skybox
+  picture (JPEG/PNG equirect, e.g. Blockade Labs in My Library), default 'hdr'. Only reuse urls the user or library gave you.
 
 AVAILABLE LIGHTING STUDIO PRESETS:
 ${lightingSummary}

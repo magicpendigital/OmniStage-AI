@@ -20,6 +20,7 @@ import {
   PollResult,
   PROVIDERS,
   sheetFrames,
+  specFor,
   SyncResult,
   ProviderSpec,
   safeUrl,
@@ -27,6 +28,7 @@ import {
   upstreamErrorMessage,
   UpstreamRequest,
 } from './providers';
+import { renameGlbClips } from './glb';
 
 export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<Response>;
 
@@ -198,23 +200,32 @@ export interface StartInput {
   scope: string;
   /** Image-to-3D: the library picture (already read and sniffed by the route). */
   image?: { data: Buffer; mime: string };
+  /** Rig generators: the library GLB to rig + animate (already read and sniffed by the route). */
+  model?: { data: Buffer; name: string };
 }
 
 export async function startGeneration(input: StartInput, key: string, deps: JobDeps): Promise<GenerationJobView> {
   const now = (deps.now || Date.now)();
   sweep(now);
-  const spec = PROVIDERS[input.generator.provider];
+  const spec = specFor(input.generator);
   if (!spec) throw new GenerationError('Unknown generation provider');
   if (spec.output !== input.generator.output) throw new GenerationError(`${spec.label} generates ${spec.output}s`);
   const imageMode = input.generator.input === 'image';
+  const modelMode = input.generator.input === 'model';
   if (imageMode && !GENERATION_PROVIDERS[spec.id].imageInput) throw new GenerationError(`${spec.label} cannot start from a picture`);
   if (imageMode && !input.image) throw new GenerationError('Pick a picture from your library to turn into a 3D model.');
+  if (modelMode && !GENERATION_PROVIDERS[spec.id].modelInput) throw new GenerationError(`${spec.label} cannot rig a model`);
+  if (modelMode && !input.model) throw new GenerationError('Pick a 3D model (GLB) from your library to rig.');
   if (!key) throw new GenerationError(`Add your ${spec.label} API key in Settings → Generation keys first.`, 401);
   const active = [...jobs.values()].filter((j) => j.status === 'running').length;
   if (active >= MAX_ACTIVE_JOBS) throw new GenerationError(`At most ${MAX_ACTIVE_JOBS} generations can run at once`, 429);
-  // An image-to-3D prompt is optional (it only guides the texture); everything else needs one.
-  const prompt = imageMode && String(input.prompt ?? '').trim().length < 3 ? '' : cleanPrompt(input.prompt);
-  const genInput: GenerateInput = { prompt, generator: input.generator, ...(imageMode ? { image: input.image } : {}) };
+  // An image-to-3D prompt is optional (it only guides the texture); a rig job needs none; everything else needs one.
+  const prompt = modelMode
+    ? `Rig ${String(input.model!.name || 'model').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 60) || 'model'}`
+    : imageMode && String(input.prompt ?? '').trim().length < 3
+      ? ''
+      : cleanPrompt(input.prompt);
+  const genInput: GenerateInput = { prompt, generator: input.generator, ...(imageMode ? { image: input.image } : {}), ...(modelMode ? { model: input.model } : {}) };
   const stage = firstStage(spec.id, input.generator);
   const base = {
     id: randomBytes(12).toString('hex'),
@@ -240,10 +251,12 @@ export async function startGeneration(input: StartInput, key: string, deps: JobD
     void runSync(job, spec, key, deps);
     return view(job);
   }
+  if (spec.upload && spec.parseUpload) genInput.uploadToken = spec.parseUpload(await call(spec, spec.upload(genInput, key), key, deps));
   const ref = spec.parseCreate(await call(spec, spec.create(genInput, key), key, deps), stage);
   const job: Job = { ...base, ref };
-  // The picture is only needed for the create request; do not keep it in memory for two hours.
+  // The picture / model is only needed for the create request; do not keep it in memory for two hours.
   delete job.input.image;
+  delete job.input.model;
   jobs.set(job.id, job);
   return view(job);
 }
@@ -264,7 +277,7 @@ async function runSync(job: Job, spec: ProviderSpec, key: string, deps: JobDeps)
 }
 
 async function advance(job: Job, key: string, deps: JobDeps): Promise<void> {
-  const spec = PROVIDERS[job.provider];
+  const spec = specFor(job.input.generator)!;
   let result: PollResult = spec.parsePoll(await call(spec, spec.poll(job.ref, key), key, deps), job.ref);
   if (result.status === 'succeeded' && !result.resultUrl && spec.result && spec.parseResult) {
     result = spec.parseResult(await call(spec, spec.result(job.ref, key), key, deps));
@@ -300,15 +313,26 @@ async function saveResult(job: Job, spec: ProviderSpec, data: Buffer, deps: JobD
   const generator = job.input.generator;
   const output = generator.output;
   const ext = sniffResult(data, output);
+  const rigMode = generator.input === 'model';
+  let clips: string[] = [];
+  if (rigMode) {
+    try {
+      ({ data, clips } = renameGlbClips(data, spec.clipNames?.(job.input) ?? []));
+    } catch {
+      throw new GenerationError(`${spec.label} returned a GLB OmniStage could not read`, 502);
+    }
+  }
   const frames = output === 'image' ? sheetFrames(generator) : 0;
   const sheet = frames ? sheetMeta(data, frames) : undefined;
-  const name = nameFromPrompt(job.prompt);
+  const name = rigMode ? `${job.prompt.replace(/^Rig /, '').slice(0, 48)} (rigged)` : nameFromPrompt(job.prompt);
   const audioTool = generator.audio === 'music' ? 'music' : 'sfx';
   const kind = output === 'model' ? 'model' : output === 'audio' ? 'audio' : sheet || generator.sprite ? 'spritesheet' : 'image';
   const tags = ['generated', spec.id, TAG_BY_OUTPUT[output]];
   if (output === 'audio') tags.push(audioTool);
   if (sheet) tags.push('animated');
   if (generator.input === 'image') tags.push('from-image');
+  if (rigMode) tags.push('rigged', ...(clips.length ? ['animated'] : []));
+  if (spec.skybox) tags.push('skybox');
   job.asset = await deps.store.add({
     filename: `${name}${ext}`,
     data,
@@ -327,11 +351,14 @@ async function saveResult(job: Job, spec: ProviderSpec, data: Buffer, deps: JobD
       ...(job.ref.id !== 'sync' ? { taskId: job.ref.id } : {}),
       ...(sheet ? { spriteSheet: sheet } : generator.sprite ? { spriteSheet: { columns: 1, rows: 1 } } : {}),
       ...(output === 'image' && (generator.sprite || sheet) ? { transparent: !!generator.removeBackground } : {}),
+      ...(rigMode ? { rigged: true, clips, rigType: generator.rigType === 'quadruped' ? 'quadruped' : 'biped' } : {}),
+      ...(spec.skybox ? { skybox: { projection: 'equirectangular' } } : {}),
       ...(spec.id === 'elevenlabs' ? { audioKind: audioTool, licence: elevenLabsLicenseRecord(audioTool, { prompt: job.prompt }) } : {}),
       generatedAt: new Date().toISOString(),
     },
   });
   delete job.input.image;
+  delete job.input.model;
   job.stage = 'done';
   job.status = 'succeeded';
   job.progress = 100;
@@ -348,7 +375,7 @@ export async function pollGeneration(id: string, key: string, deps: JobDeps): Pr
   if (job.polling) return job.polling;
   const now = (deps.now || Date.now)();
   if (now - job.lastPolledAt < MIN_POLL_MS) return view(job);
-  if (!key) throw new GenerationError(`Missing the ${PROVIDERS[job.provider].label} API key`, 401);
+  if (!key) throw new GenerationError(`Missing the ${(specFor(job.input.generator) ?? PROVIDERS[job.provider]).label} API key`, 401);
   job.lastPolledAt = now;
   job.polling = advance(job, key, deps)
     .catch((e: any) => {

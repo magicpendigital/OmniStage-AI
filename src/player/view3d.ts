@@ -211,14 +211,17 @@ export class View3D {
   }
 
   /** HDRI image lighting (studio uses drei <Environment>); embedded as a data URI when it fits the budget. */
-  private loadHdri(hdri: { url: string; intensity?: number; showBackground?: boolean } | undefined) {
+  private loadHdri(hdri: { url: string; intensity?: number; showBackground?: boolean; format?: 'hdr' | 'image' } | undefined) {
     this.hdriTexture?.dispose();
     this.hdriTexture = undefined;
     if (!hdri) return;
     const sceneId = this.sceneId;
-    trackLoad(new RGBELoader().loadAsync(this.resolveUrl(hdri.url))).then((tex) => {
+    // format 'image' = an 8-bit equirectangular picture (generated skybox); otherwise Radiance .hdr.
+    const loading: Promise<THREE.Texture> = hdri.format === 'image' ? new THREE.TextureLoader().loadAsync(this.resolveUrl(hdri.url)) : new RGBELoader().loadAsync(this.resolveUrl(hdri.url));
+    trackLoad(loading).then((tex) => {
       if (this.sceneId !== sceneId) return tex.dispose();
       tex.mapping = THREE.EquirectangularReflectionMapping;
+      if (hdri.format === 'image') tex.colorSpace = THREE.SRGBColorSpace;
       this.hdriTexture = tex;
       this.scene.environment = tex;
       this.scene.environmentIntensity = hdri.intensity ?? 1;

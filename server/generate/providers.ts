@@ -21,8 +21,25 @@
  *   OpenRouter POST https://openrouter.ai/api/v1/images {model, prompt, n, aspect_ratio, output_format} → {data:[{b64_json}]}
  *   ElevenLabs POST https://api.elevenlabs.io/v1/sound-generation | /v1/music (?output_format) → audio bytes (xi-api-key)
  *   (checked against the official docs 2026-11-14)
+ *
+ * Rig generators (input 'model': a GLB from My Library → rigged GLB with named clips), checked 2026-11-16:
+ *   Meshy rig  POST https://api.meshy.ai/openapi/v1/rigging {model_url: data URI (≤ 100 MB), height_meters} → {result}
+ *              GET  …/openapi/v1/rigging/:id → {status, progress, task_error, result:{rigged_character_glb_url, basic_animations}}
+ *              (docs.meshy.ai/en/api/rigging-and-animation; humanoid, textured, ≤ 380k triangles, facing +Z)
+ *   Meshy anim POST https://api.meshy.ai/openapi/v1/animations {rig_task_id, action_ids: [1–10]} → {result}; one merged GLB,
+ *              one clip per action. GET …/openapi/v1/animations/:id → {status, progress, result:{animation_glb_url}}
+ *              (docs.meshy.ai/en/api/animation; ids from docs.meshy.ai/en/api/animation-library)
+ *   Tripo v3   POST https://openapi.tripo3d.com/v3/files (multipart `file`) → {code:0, data:{file_token}}
+ *              POST …/v3/animations/rig {input: file_token, model, rig_type, spec, out_format} → {code:0, data:{task_id}}
+ *              POST …/v3/animations/retarget {input: rig task id, animations: ≤ 5 presets, out_format, animate_in_place}
+ *              GET  …/v3/tasks/:id → {code:0, data:{status: queued|running|success|failed|cancelled…, progress, output:{model_url}, error_message}}
+ *              (developers.tripo3d.com/en/docs/animations-rig, /animations-retarget, /files, /task-query)
+ *   Blockade   POST https://backend.blockadelabs.com/api/v1/skybox {prompt, skybox_style_id} (x-api-key) → {id, status}
+ *              GET  …/api/v1/imagine/requests/:id → {request:{status: pending|dispatched|processing|complete|abort|error,
+ *              file_url (equirectangular JPG), thumb_url, error_message}}  (docs.blockadelabs.com/api/skybox.html; CDN undocumented)
  */
-import type { ExtensionGenerator, GenerationOutput, GenerationProviderId } from '../../src/extensions/types';
+import type { ExtensionGenerator, GenerationOutput, GenerationProviderId, RigClipName } from '../../src/extensions/types';
+import { rigClips } from './glb';
 import { SPRITE_SHEET_FRAMES } from '../../src/extensions/types';
 import { GENERATION_MODEL_RE } from '../../src/extensions/validate';
 import { buildMusicRequest, buildSfxRequest, ELEVENLABS_API, elevenLabsLicense } from '../../src/audio/elevenLabs';
@@ -70,6 +87,10 @@ export interface GenerateInput {
   generator: ExtensionGenerator;
   /** Image-to-3D: the picture the user picked from the library (already sniffed as PNG / JPEG / WebP). */
   image?: { data: Buffer; mime: string };
+  /** Rig generators: the GLB the user picked from the library (already sniffed); dropped after the create call. */
+  model?: { data: Buffer; name: string };
+  /** Tripo: the file token its upload endpoint returned for `model` (not a secret; only valid with the key). */
+  uploadToken?: string;
 }
 
 /** What a one-shot (synchronous) provider answered: the file itself, or a URL to download it from. */
@@ -106,6 +127,13 @@ export interface ProviderSpec {
   parseResult?(json: any): PollResult;
   /** A follow-up stage (Meshy refine / fal background removal) or null when the asset is final. */
   next?(ref: TaskRef, done: PollResult, input: GenerateInput, key: string): { stage: string; request: UpstreamRequest } | null;
+  /** Tripo rig: the model file is uploaded first; the token it returns goes into the create request. */
+  upload?(input: GenerateInput, key: string): UpstreamRequest;
+  parseUpload?(json: any): string;
+  /** Rig generators: the clip names the result carries, in request order (the saved GLB's clips are renamed to them). */
+  clipNames?(input: GenerateInput): string[];
+  /** The result is an equirectangular sky picture (saved with meta.skybox, placed as the world sky). */
+  skybox?: boolean;
 }
 
 export class GenerationError extends Error {
@@ -492,10 +520,144 @@ const elevenlabs: ProviderSpec = {
   parseSync: ({ bytes }) => (bytes?.length ? { data: bytes } : { error: 'ElevenLabs returned an empty file' }),
 };
 
-export const PROVIDERS: Record<GenerationProviderId, ProviderSpec> = { meshy, tripo, rodin, fal, replicate, openrouter, elevenlabs };
+// ---------------------------------------------------------------------------------------------- Blockade Labs (Skybox AI)
+const BLOCKADE_API = 'https://backend.blockadelabs.com/api/v1';
+/** "Open World" (Model 4, 4096×2048) — the style the Blockade docs use in their examples. */
+export const BLOCKADE_DEFAULT_STYLE = 155;
+const BLOCKADE_PROGRESS: Record<string, number> = { pending: 5, dispatched: 20, processing: 60 };
+const blockade: ProviderSpec = {
+  id: 'blockade',
+  label: 'Blockade Labs',
+  output: 'image',
+  envKey: 'BLOCKADE_API_KEY',
+  license: 'AI-generated with Blockade Labs Skybox AI; rights per your Blockade plan',
+  // file_url comes from a CDN the docs do not name; the key is never sent there.
+  resultHosts: [ANY_PUBLIC_HOST],
+  apiHosts: ['backend.blockadelabs.com'],
+  skybox: true,
+  create: (input, key) => {
+    const style = Number.isInteger(input.generator.styleId) && input.generator.styleId! > 0 ? input.generator.styleId! : BLOCKADE_DEFAULT_STYLE;
+    return { url: `${BLOCKADE_API}/skybox`, method: 'POST', headers: { 'x-api-key': key }, body: { prompt: input.prompt.slice(0, 600), skybox_style_id: style, enhance_prompt: false } };
+  },
+  parseCreate: (json, stage) => {
+    if (json?.error || json?.status === 'error') throw new GenerationError(`Blockade Labs: ${String(json?.error_message || json?.error).slice(0, 160)}`, 502);
+    return { stage, id: taskId(json?.id ?? json?.request?.id, 'Blockade Labs') };
+  },
+  poll: (ref, key) => ({ url: `${BLOCKADE_API}/imagine/requests/${encodeURIComponent(ref.id)}`, method: 'GET', headers: { 'x-api-key': key } }),
+  parsePoll: (json) => {
+    const r = json?.request ?? json ?? {};
+    const s = String(r.status || '').toLowerCase();
+    if (s === 'complete') return r.file_url ? { status: 'succeeded', progress: 100, resultUrl: r.file_url, thumbnailUrl: r.thumb_url } : { status: 'failed', error: 'Blockade Labs finished but returned no image' };
+    if (s === 'abort' || s === 'error') return { status: 'failed', error: String(r.error_message || `Blockade Labs request ${s}`).slice(0, 200) };
+    return { status: 'running', progress: BLOCKADE_PROGRESS[s] ?? 10 };
+  },
+};
 
-/** First stage name per provider (Meshy starts with a mesh preview, fal with the raw image). */
+export const PROVIDERS: Record<GenerationProviderId, ProviderSpec> = { meshy, tripo, rodin, fal, replicate, openrouter, elevenlabs, blockade };
+
+// ---------------------------------------------------------------------------------------------- Rig + animate (input 'model')
+/** Meshy Animation Library action ids (docs.meshy.ai/en/api/animation-library) for the OmniRig clip names. */
+export const MESHY_ACTIONS: Record<RigClipName, number> = { Idle: 0, Walking: 30, Running: 14, Jump: 86, Wave: 28, Dance: 22 };
+/** Tripo v3 biped presets (developers.tripo3d.com/en/docs/animations-retarget); Wave / Dance have no v3 preset. */
+const TRIPO_BIPED_PRESETS: Partial<Record<RigClipName, string>> = { Idle: 'preset:idle', Walking: 'preset:walk', Running: 'preset:run', Jump: 'preset:jump' };
+const MESHY_RIG_API = 'https://api.meshy.ai/openapi/v1';
+const TRIPO_V3 = 'https://openapi.tripo3d.com/v3';
+const FILE_TOKEN_RE = /^[A-Za-z0-9_-]{4,256}$/;
+
+const meshyClips = (input: GenerateInput): RigClipName[] => rigClips(input.generator.clips);
+const meshyRig: ProviderSpec = {
+  ...meshy,
+  license: 'Rigged + animated with Meshy; rights per your Meshy plan',
+  stageCount: () => 2,
+  clipNames: meshyClips,
+  create: (input, key) => {
+    if (!input.model) throw new GenerationError('Pick a 3D model (GLB) from your library to rig.');
+    return {
+      url: `${MESHY_RIG_API}/rigging`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: { model_url: `data:model/gltf-binary;base64,${input.model.data.toString('base64')}`, height_meters: 1.7 },
+      timeoutMs: 120_000,
+    };
+  },
+  poll: (ref, key) => ({ url: `${MESHY_RIG_API}/${ref.stage === 'animate' ? 'animations' : 'rigging'}/${encodeURIComponent(ref.id)}`, method: 'GET', headers: { Authorization: `Bearer ${key}` } }),
+  parsePoll: (json, ref) => {
+    const s = String(json?.status || '').toUpperCase();
+    if (s === 'SUCCEEDED') {
+      const url = ref.stage === 'animate' ? json?.result?.animation_glb_url : json?.result?.rigged_character_glb_url;
+      return { status: 'succeeded', progress: 100, resultUrl: url || undefined };
+    }
+    if (s === 'FAILED' || s === 'CANCELED' || s === 'EXPIRED') return { status: 'failed', error: json?.task_error?.message || `Meshy ${ref.stage === 'animate' ? 'animation' : 'rigging'} ${s.toLowerCase()}` };
+    return { status: 'running', progress: pct(json?.progress) };
+  },
+  next: (ref, _done, input, key) =>
+    ref.stage === 'rig'
+      ? {
+          stage: 'animate',
+          request: { url: `${MESHY_RIG_API}/animations`, method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: { rig_task_id: ref.id, action_ids: meshyClips(input).map((c) => MESHY_ACTIONS[c]) } },
+        }
+      : null,
+};
+
+const tripoClips = (input: GenerateInput): RigClipName[] => {
+  if (input.generator.rigType === 'quadruped') return ['Walking'];
+  const list = rigClips(input.generator.clips).filter((c) => TRIPO_BIPED_PRESETS[c]);
+  return list.length ? list : ['Idle'];
+};
+const tripoPresets = (input: GenerateInput): string[] =>
+  input.generator.rigType === 'quadruped' ? ['preset:quadruped:walk'] : tripoClips(input).map((c) => TRIPO_BIPED_PRESETS[c]!);
+const tripoRig: ProviderSpec = {
+  ...tripo,
+  license: 'Rigged + animated with Tripo; rights per your Tripo plan',
+  apiHosts: ['openapi.tripo3d.com'],
+  stageCount: () => 2,
+  clipNames: tripoClips,
+  upload: (input, key) => {
+    if (!input.model) throw new GenerationError('Pick a 3D model (GLB) from your library to rig.');
+    return { url: `${TRIPO_V3}/files`, method: 'POST', headers: { Authorization: `Bearer ${key}` }, form: { file: { filename: 'model.glb', type: 'model/gltf-binary', data: input.model.data } }, timeoutMs: 180_000 };
+  },
+  parseUpload: (json) => {
+    const token = String(tripoData(json, 'upload').file_token ?? '');
+    if (!FILE_TOKEN_RE.test(token)) throw new GenerationError('Tripo returned no file token', 502);
+    return token;
+  },
+  create: (input, key) => {
+    const quadruped = input.generator.rigType === 'quadruped';
+    return {
+      url: `${TRIPO_V3}/animations/rig`,
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: { input: input.uploadToken || '', model: quadruped ? 'v2.5-20260210' : 'v3.0-20260909', rig_type: quadruped ? 'quadruped' : 'biped', ...(quadruped ? {} : { spec: 'mixamo' }), out_format: 'glb' },
+    };
+  },
+  poll: (ref, key) => ({ url: `${TRIPO_V3}/tasks/${encodeURIComponent(ref.id)}`, method: 'GET', headers: { Authorization: `Bearer ${key}` } }),
+  parsePoll: (json) => {
+    const d = tripoData(json, 'task');
+    const s = String(d.status || '').toLowerCase();
+    if (s === 'success') return { status: 'succeeded', progress: 100, resultUrl: d.output?.model_url, thumbnailUrl: d.output?.rendered_image_url };
+    if (['failed', 'cancelled', 'banned', 'expired'].includes(s)) return { status: 'failed', error: String(d.error_message || `Tripo task ${s}`).slice(0, 200) };
+    return { status: 'running', progress: pct(d.progress) };
+  },
+  next: (ref, _done, input, key) =>
+    ref.stage === 'rig'
+      ? {
+          stage: 'animate',
+          request: { url: `${TRIPO_V3}/animations/retarget`, method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: { input: ref.id, animations: tripoPresets(input), out_format: 'glb', animate_in_place: true } },
+        }
+      : null,
+};
+
+/** Providers that rig + animate a library model (generator input 'model'). */
+export const RIG_PROVIDERS: Partial<Record<GenerationProviderId, ProviderSpec>> = { meshy: meshyRig, tripo: tripoRig };
+
+/** The adapter a generator runs on: the rig adapter for input 'model', else the provider's generator. */
+export function specFor(generator: Pick<ExtensionGenerator, 'provider' | 'input'>): ProviderSpec | undefined {
+  return generator.input === 'model' ? RIG_PROVIDERS[generator.provider] : PROVIDERS[generator.provider];
+}
+
+/** First stage name per provider (Meshy starts with a mesh preview, fal with the raw image, rig jobs with the rig). */
 export function firstStage(provider: GenerationProviderId, generator?: ExtensionGenerator): string {
+  if (generator?.input === 'model') return 'rig';
   if (provider === 'meshy') return generator?.input === 'image' ? 'image' : 'preview';
   return provider === 'fal' ? 'image' : 'generate';
 }

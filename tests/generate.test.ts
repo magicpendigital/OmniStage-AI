@@ -6,12 +6,14 @@ import { join } from 'node:path';
 
 // Throwaway workspace for this file.
 process.env.OMNISTAGE_HOME = mkdtempSync(join(tmpdir(), 'omnistage-gen-'));
-for (const k of ['MESHY_API_KEY', 'TRIPO_API_KEY', 'FAL_KEY', 'REPLICATE_API_TOKEN', 'RODIN_API_KEY', 'OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY']) delete process.env[k];
+for (const k of ['MESHY_API_KEY', 'TRIPO_API_KEY', 'FAL_KEY', 'REPLICATE_API_TOKEN', 'RODIN_API_KEY', 'OPENROUTER_API_KEY', 'ELEVENLABS_API_KEY', 'BLOCKADE_API_KEY']) delete process.env[k];
 
 const { PROVIDERS, ANY_PUBLIC_HOST, cleanPrompt, safeUrl, spritePrompt, upstreamErrorMessage } = await import('../server/generate/providers');
 const { startGeneration, pollGeneration, sniffResult, sheetMeta, _resetGenerationJobs, MIN_POLL_MS } = await import('../server/generate/jobs');
-const { availableGenerators, resolveGenerator, readSourceImage } = await import('../server/generate/routes');
-const { generationKeyFor, spriteSheetFromMeta } = await import('../src/extensions/generationHelpers');
+const { availableGenerators, resolveGenerator, readSourceImage, readSourceModel } = await import('../server/generate/routes');
+const { readGlb, writeGlb, renameGlbClips, canonicalClipName, rigClips } = await import('../server/generate/glb');
+const { RIG_PROVIDERS, specFor, MESHY_ACTIONS } = await import('../server/generate/providers');
+const { generationKeyFor, spriteSheetFromMeta, riggedEntryFromMeta, isSkyboxAsset, skyboxHdri } = await import('../src/extensions/generationHelpers');
 const { AssetStore } = await import('../server/workspace/assets');
 const { EXTENSION_CATALOG } = await import('../src/extensions/catalog');
 const { validateManifest, reviewExtension } = await import('../src/extensions/validate');
@@ -210,6 +212,13 @@ test('provider adapters never target hosts outside their own API', () => {
     const req = spec.create({ prompt: 'a test prompt', generator: g }, KEY);
     assert.ok(spec.apiHosts.includes(new URL(req.url).hostname), spec.id);
   }
+  for (const spec of Object.values(RIG_PROVIDERS)) {
+    const g = { id: 'g1', title: 'g', provider: spec!.id, output: 'model', input: 'model' } as any;
+    const input = { prompt: '', generator: g, model: { data: GLB, name: 'm' }, uploadToken: 'tok1' };
+    for (const req of [spec!.create(input, KEY), spec!.poll({ stage: 'animate', id: 't1' }, KEY), spec!.next!({ stage: 'rig', id: 't1' }, { status: 'succeeded' }, input, KEY)!.request, ...(spec!.upload ? [spec!.upload(input, KEY)] : [])]) {
+      assert.ok(spec!.apiHosts.includes(new URL(req.url).hostname), `${spec!.id} rig → ${req.url}`);
+    }
+  }
 });
 
 /** PNG header with a real IHDR (width × height) so sprite-sheet cells can be measured. */
@@ -394,4 +403,192 @@ test('sprite-sheet meta and studio helpers', () => {
   assert.equal(generationKeyFor({ aiApiKeys: { openrouter: 'ai' } } as any, 'openrouter'), 'ai');
   assert.equal(generationKeyFor({ elevenLabsApiKey: 'el' } as any, 'elevenlabs'), 'el');
   assert.equal(generationKeyFor({ aiApiKeys: { openrouter: 'ai' } } as any, 'meshy'), '');
+});
+
+// ---------------------------------------------------------------------------------------------- rig + skybox providers
+
+/** A GLB whose JSON chunk carries the given animation names (and a 4-byte BIN chunk that must survive renaming). */
+function animatedGlb(names: string[]): Buffer {
+  return writeGlb({ json: { asset: { version: '2.0' }, animations: names.map((name) => ({ name, channels: [], samplers: [] })) }, bin: Buffer.from([1, 2, 3, 4]) });
+}
+const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60, 4)]);
+
+test('glb: clips are renamed to OmniRig names by meaning or by request order; BIN is kept', () => {
+  assert.equal(canonicalClipName('Casual_Walk'), 'Walking');
+  assert.equal(canonicalClipName('preset:run'), 'Running');
+  assert.equal(canonicalClipName('Big_Wave_Hello'), 'Wave');
+  assert.equal(canonicalClipName('Armature|mixamo.com|Layer0'), null);
+  const byMeaning = renameGlbClips(animatedGlb(['Idle_03', 'Casual_Walk', 'Run_02']), ['Idle', 'Walking', 'Running']);
+  assert.deepEqual(byMeaning.clips, ['Idle', 'Walking', 'Running']);
+  const byOrder = renameGlbClips(animatedGlb(['Armature|mixamo.com|Layer0', 'Armature|mixamo.com|Layer0.001']), ['Idle', 'Jump']);
+  assert.deepEqual(byOrder.clips, ['Idle', 'Jump']);
+  const read = readGlb(byOrder.data);
+  assert.deepEqual(read.json.animations.map((a: any) => a.name), ['Idle', 'Jump']);
+  assert.deepEqual([...read.bin!], [1, 2, 3, 4]);
+  assert.equal(byOrder.data.readUInt32LE(8), byOrder.data.length, 'GLB header length matches');
+  assert.deepEqual(renameGlbClips(animatedGlb(['A', 'A']), ['Idle']).clips, ['A', 'A 2']);
+  assert.throws(() => readGlb(Buffer.from('nope')));
+  assert.deepEqual(rigClips(['Wave', 'bogus', 'Wave']), ['Wave']);
+  assert.deepEqual(rigClips(undefined), ['Idle', 'Walking', 'Running']);
+});
+
+test('Meshy rig: data-URI rig → animation with action ids → rigged GLB with OmniRig clip names', async () => {
+  _resetGenerationJobs();
+  const store = new AssetStore(join(process.env.OMNISTAGE_HOME!, 'rig-meshy'));
+  const c = clock();
+  const source = animatedGlb([]);
+  const { fetch, calls } = fakeFetch([
+    ['POST', 'https://api.meshy.ai/openapi/v1/rigging', () => ({ json: { result: 'rig-task-1' } })],
+    ['GET', 'https://api.meshy.ai/openapi/v1/rigging/rig-task-1', () => ({ json: { status: 'SUCCEEDED', result: { rigged_character_glb_url: 'https://assets.meshy.ai/rigged.glb' } } })],
+    ['POST', 'https://api.meshy.ai/openapi/v1/animations', () => ({ json: { result: 'anim-task-1' } })],
+    ['GET', 'https://api.meshy.ai/openapi/v1/animations/anim-task-1', () => ({ json: { status: 'SUCCEEDED', result: { animation_glb_url: 'https://assets.meshy.ai/anim.glb' } } })],
+    ['GET', 'https://assets.meshy.ai/anim.glb', () => ({ bytes: animatedGlb(['Idle', 'Casual_Walk', 'Run_02']) })],
+  ]);
+  const deps = { fetch, store, now: c.now };
+  const gen = generator('meshy-rig-animator', 'meshy-rig-basic');
+  assert.equal(specFor(gen), RIG_PROVIDERS.meshy);
+  const job = await startGeneration({ extensionId: 'meshy-rig-animator', generator: gen, prompt: '', scope: 'personal', model: { data: source, name: 'Knight' } }, KEY, deps);
+  assert.equal(job.stage, 'rig');
+  assert.equal(job.prompt, 'Rig Knight');
+  assert.equal(calls[0].url, 'https://api.meshy.ai/openapi/v1/rigging');
+  assert.equal(calls[0].body.model_url, `data:model/gltf-binary;base64,${source.toString('base64')}`);
+  assert.equal(calls[0].body.height_meters, 1.7);
+  c.tick();
+  let v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.stage, 'animate');
+  assert.deepEqual(calls.at(-1)!.body, { rig_task_id: 'rig-task-1', action_ids: [MESHY_ACTIONS.Idle, MESHY_ACTIONS.Walking, MESHY_ACTIONS.Running] });
+  c.tick();
+  v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.status, 'succeeded', v.error);
+  assert.equal(v.asset!.name, 'Knight (rigged)');
+  assert.ok(v.asset!.tags.includes('rigged') && v.asset!.tags.includes('animated'));
+  assert.deepEqual(v.asset!.meta!.clips, ['Idle', 'Walking', 'Running']);
+  const { path } = await store.filePath(v.asset!.id);
+  assert.deepEqual(readGlb(readFileSync(path)).json.animations.map((a: any) => a.name), ['Idle', 'Walking', 'Running']);
+  assert.ok(!calls.some((x) => x.url.startsWith('https://assets.meshy.ai') && x.headers.Authorization), 'the key is not sent to the file host');
+  // Placing it gives the registry entry the clip names.
+  const entry = riggedEntryFromMeta(v.asset!.meta, v.asset!.name)!;
+  assert.equal(entry.category, 'gltf-rigged');
+  assert.deepEqual(entry.embeddedClips, ['Idle', 'Walking', 'Running']);
+  assert.equal(entry.defaultClip, 'Idle');
+});
+
+test('Tripo rig: multipart upload → rig (mixamo spec) → retarget presets → rigged GLB', async () => {
+  _resetGenerationJobs();
+  const store = new AssetStore(join(process.env.OMNISTAGE_HOME!, 'rig-tripo'));
+  const c = clock();
+  const { fetch, calls } = fakeFetch([
+    ['POST', 'https://openapi.tripo3d.com/v3/files', () => ({ json: { code: 0, data: { file_token: 'ftok_abc123' } } })],
+    ['POST', 'https://openapi.tripo3d.com/v3/animations/rig', () => ({ json: { code: 0, data: { task_id: 'rig-1234' } } })],
+    ['POST', 'https://openapi.tripo3d.com/v3/animations/retarget', () => ({ json: { code: 0, data: { task_id: 'ret-5678' } } })],
+    ['GET', 'https://openapi.tripo3d.com/v3/tasks/rig-1234', () => ({ json: { code: 0, data: { status: 'success', output: { model_url: 'https://cdn.tripo3d.ai/rig.glb' } } } })],
+    ['GET', 'https://openapi.tripo3d.com/v3/tasks/ret-5678', () => ({ json: { code: 0, data: { status: 'success', output: { model_url: 'https://cdn.tripo3d.ai/anim.glb' } } } })],
+    ['GET', 'https://cdn.tripo3d.ai/anim.glb', () => ({ bytes: animatedGlb(['preset:idle', 'preset:walk', 'preset:run', 'preset:jump']) })],
+  ]);
+  const deps = { fetch, store, now: c.now };
+  const gen = generator('tripo-rig-animator', 'tripo-rig-biped');
+  const job = await startGeneration({ extensionId: 'tripo-rig-animator', generator: gen, prompt: '', scope: 'personal', model: { data: GLB, name: 'Robot' } }, KEY, deps);
+  assert.ok(calls[0].form instanceof FormData && calls[0].form.get('file'), 'GLB uploaded as multipart "file"');
+  assert.equal(calls[0].headers.Authorization, `Bearer ${KEY}`);
+  assert.deepEqual(calls[1].body, { input: 'ftok_abc123', model: 'v3.0-20260909', rig_type: 'biped', spec: 'mixamo', out_format: 'glb' });
+  c.tick();
+  let v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.stage, 'animate');
+  assert.deepEqual(calls.at(-1)!.body, { input: 'rig-1234', animations: ['preset:idle', 'preset:walk', 'preset:run', 'preset:jump'], out_format: 'glb', animate_in_place: true });
+  c.tick();
+  v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.status, 'succeeded', v.error);
+  assert.deepEqual(v.asset!.meta!.clips, ['Idle', 'Walking', 'Running', 'Jump']);
+  assert.equal(v.asset!.meta!.rigType, 'biped');
+
+  // Quadruped: no spec, v2.5 rig model, one walk preset.
+  const quad = RIG_PROVIDERS.tripo!;
+  const qg = generator('tripo-rig-animator', 'tripo-rig-quadruped');
+  const create = quad.create({ prompt: '', generator: qg, uploadToken: 'tok1' }, KEY);
+  assert.deepEqual(create.body, { input: 'tok1', model: 'v2.5-20260210', rig_type: 'quadruped', out_format: 'glb' });
+  assert.deepEqual((quad.next!({ stage: 'rig', id: 'r1' }, { status: 'succeeded' }, { prompt: '', generator: qg }, KEY)!.request.body as any).animations, ['preset:quadruped:walk']);
+  assert.throws(() => quad.parseUpload!({ code: 0, data: { file_token: '../../x' } }), /file token/);
+  assert.throws(() => quad.parseUpload!({ code: 1004, message: 'bad' }), /Tripo upload failed/);
+});
+
+test('rig jobs need a model, and only rig providers take one', async () => {
+  _resetGenerationJobs();
+  const store = new AssetStore(join(process.env.OMNISTAGE_HOME!, 'rig-none'));
+  const { fetch, calls } = fakeFetch([]);
+  await assert.rejects(() => startGeneration({ extensionId: 'meshy-rig-animator', generator: generator('meshy-rig-animator', 'meshy-rig-basic'), prompt: '', scope: 'personal' }, KEY, { fetch, store }), /Pick a 3D model/);
+  await assert.rejects(() => startGeneration({ extensionId: 'x', generator: { id: 'r', title: 'r', provider: 'rodin', output: 'model', input: 'model' }, prompt: '', scope: 'personal', model: { data: GLB, name: 'm' } }, KEY, { fetch, store }), /Unknown generation provider|cannot rig/);
+  assert.equal(calls.length, 0);
+  const lib = new AssetStore(join(process.env.OMNISTAGE_HOME!, 'src-models'));
+  const m = await lib.add({ filename: 'hero.glb', data: GLB, kind: 'model', name: 'Hero' });
+  assert.deepEqual(await readSourceModel(lib, m.id), { data: GLB, name: 'Hero' });
+  const pic = await lib.add({ filename: 'p.png', data: PNG, kind: 'image' });
+  await assert.rejects(() => readSourceModel(lib, pic.id), /not a 3D model/);
+  await assert.rejects(() => readSourceModel(lib, undefined), /Pick a 3D model/);
+});
+
+test('Blockade skybox: x-api-key create → imagine request poll → equirect JPG saved as a skybox', async () => {
+  _resetGenerationJobs();
+  const store = new AssetStore(join(process.env.OMNISTAGE_HOME!, 'skybox'));
+  const c = clock();
+  let polls = 0;
+  const { fetch, calls } = fakeFetch([
+    ['POST', 'https://backend.blockadelabs.com/api/v1/skybox', () => ({ json: { id: 123456, status: 'pending' } })],
+    ['GET', 'https://backend.blockadelabs.com/api/v1/imagine/requests/123456', () => (++polls < 2 ? { json: { request: { id: 123456, status: 'processing' } } } : { json: { request: { id: 123456, status: 'complete', file_url: 'https://images.blockadelabs.com/images/imagine/sky.jpg', thumb_url: 'https://images.blockadelabs.com/t.jpg' } } })],
+    ['GET', 'https://images.blockadelabs.com/images/imagine/sky.jpg', () => ({ bytes: JPG })],
+  ]);
+  const deps = { fetch, store, now: c.now };
+  const job = await startGeneration({ extensionId: 'blockade-skybox-generator', generator: generator('blockade-skybox-generator', 'blockade-skybox'), prompt: 'Sunset over a fantasy harbour', scope: 'personal' }, KEY, deps);
+  assert.equal(calls[0].headers['x-api-key'], KEY);
+  assert.equal(calls[0].headers.Authorization, undefined);
+  assert.deepEqual(calls[0].body, { prompt: 'Sunset over a fantasy harbour', skybox_style_id: 155, enhance_prompt: false });
+  c.tick();
+  let v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.status, 'running');
+  c.tick();
+  v = await pollGeneration(job.id, KEY, deps);
+  assert.equal(v.status, 'succeeded', v.error);
+  assert.equal(v.asset!.kind, 'image');
+  assert.ok(v.asset!.file.endsWith('.jpg'));
+  assert.ok(v.asset!.tags.includes('skybox'));
+  assert.deepEqual(v.asset!.meta!.skybox, { projection: 'equirectangular' });
+  assert.ok(isSkyboxAsset(v.asset!));
+  assert.ok(!calls.some((x) => x.url.startsWith('https://images.') && (x.headers['x-api-key'] || x.headers.Authorization)), 'key never sent to the CDN');
+  const sky = skyboxHdri('/api/library/file/personal/x', v.asset!.name);
+  assert.equal(sky.format, 'image');
+  assert.equal(sky.showBackground, true);
+  assert.equal(isSkyboxAsset({ kind: 'image', tags: [] }), false);
+
+  // Failed request → readable job error.
+  _resetGenerationJobs();
+  const bad = fakeFetch([
+    ['POST', 'https://backend.blockadelabs.com/api/v1/skybox', () => ({ json: { id: 99999 } })],
+    ['GET', 'https://backend.blockadelabs.com/api/v1/imagine/requests/99999', () => ({ json: { request: { status: 'error', error_message: 'NSFW prompt' } } })],
+  ]);
+  const d2 = { fetch: bad.fetch, store, now: c.now };
+  const j2 = await startGeneration({ extensionId: 'blockade-skybox-generator', generator: generator('blockade-skybox-generator', 'blockade-skybox'), prompt: 'anything at all', scope: 'personal' }, KEY, d2);
+  c.tick();
+  const v2 = await pollGeneration(j2.id, KEY, d2);
+  assert.equal(v2.status, 'failed');
+  assert.match(v2.error!, /NSFW/);
+});
+
+test('rig / skybox manifests: catalog entries are valid and bad combinations are rejected', () => {
+  for (const id of ['meshy-rig-animator', 'tripo-rig-animator', 'blockade-skybox-generator']) {
+    assert.deepEqual(validateManifest(catalog(id)), [], id);
+    assert.deepEqual(catalog(id).permissions, ['generate']);
+  }
+  const base = catalog('meshy-rig-animator');
+  const withGen = (g: any) => validateManifest({ ...base, contributes: { generators: [{ id: 'g1', title: 'G', ...g }] } });
+  assert.ok(withGen({ provider: 'rodin', output: 'model', input: 'model' }).length, 'Rodin cannot rig');
+  assert.ok(withGen({ provider: 'meshy', output: 'model', input: 'model', rigType: 'quadruped' }).length, 'Meshy rigs bipeds only');
+  assert.ok(withGen({ provider: 'meshy', output: 'model', input: 'model', clips: ['Moonwalk'] }).length);
+  assert.ok(withGen({ provider: 'meshy', output: 'model', clips: ['Idle'] }).length, 'clips only for rig generators');
+  assert.ok(withGen({ provider: 'fal', output: 'image', styleId: 3 }).length, 'styleId is Blockade only');
+  assert.ok(withGen({ provider: 'blockade', output: 'image', styleId: -1 }).length);
+  assert.deepEqual(withGen({ provider: 'tripo', output: 'model', input: 'model', rigType: 'quadruped', clips: ['Walking'] }), []);
+  // Rig generators are offered next to the others.
+  const offered = availableGenerators([installed('meshy-rig-animator'), installed('blockade-skybox-generator')], {});
+  assert.deepEqual(offered.map((g) => g.id), ['meshy-rig-basic', 'meshy-rig-emotes', 'blockade-skybox']);
+  assert.equal(riggedEntryFromMeta({ rigged: false }, 'x'), undefined);
+  assert.deepEqual(riggedEntryFromMeta({ rigged: true, clips: ['Walking', '<script>', 5] }, 'x')!.embeddedClips, ['Walking']);
 });
