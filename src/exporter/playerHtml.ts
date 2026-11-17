@@ -7,6 +7,7 @@ import type { SceneSpec } from '../types/scene.schema';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { formatBytes, PLAYABLE_SIZE_LIMITS } from './playableBundle';
 import type { StandaloneAdNetwork } from './mediaExporter';
+import type { DeviceTier } from '../runtime/deviceProfiles';
 
 export interface PlayerHtmlOptions {
   playerRuntimeSource: string;
@@ -18,7 +19,19 @@ export interface PlayerHtmlOptions {
   quality?: 'auto' | 'low' | 'high' | 'ultra';
   /** Phase 7: 'webgpu' / 'auto' need the WebGPU build of the runtime (PLAYER_RUNTIME_WEBGPU); WebGL is the fallback. */
   renderer?: 'webgl' | 'webgpu' | 'auto';
+  /**
+   * Phase 8: app build (PWA / Android / iOS): haptics, saved progress, pause in the background, device tier detection
+   * and the adaptive quality governor (`tier` 'auto' by default; `governor: false` keeps the start settings).
+   */
+  app?: { saveKey: string; haptics?: boolean; saves?: boolean; tier?: 'auto' | DeviceTier; governor?: boolean };
+  /** Phase 8: installable PWA: links the web manifest and registers the service worker (both relative files). */
+  pwa?: { manifestHref: string; serviceWorkerHref: string };
+  /** Phase 8: browser / status bar colour (default #05070d). */
+  themeColor?: string;
 }
+
+const SAFE_COLOR = /^#[0-9a-fA-F]{3,8}$/;
+const SAFE_HREF = /^[a-zA-Z0-9._/-]+$/;
 
 /** JSON safe inside an inline <script> (no `</script>` / `<!--` breakouts). */
 export function inlineJSON(value: unknown): string {
@@ -50,7 +63,17 @@ export function generatePlayerHTML(
     sound: opts.sound !== false,
     quality: opts.quality || 'auto',
     renderer: opts.renderer || 'webgl',
+    ...(opts.app ? { app: opts.app } : {}),
   };
+  const themeColor = opts.themeColor && SAFE_COLOR.test(opts.themeColor) ? opts.themeColor : '#05070d';
+  const pwa = opts.pwa && SAFE_HREF.test(opts.pwa.manifestHref) && SAFE_HREF.test(opts.pwa.serviceWorkerHref) ? opts.pwa : undefined;
+  const pwaHead = pwa ? `<link rel="manifest" href="${pwa.manifestHref}" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+` : '';
+  const pwaScript = pwa
+    ? `<script>if ('serviceWorker' in navigator && location.protocol !== 'file:') { window.addEventListener('load', function () { navigator.serviceWorker.register(${inlineJSON(pwa.serviceWorkerHref)}).catch(function () {}); }); }</script>
+`
+    : '';
   const title = `${activeScene.title} — OmniStage`;
   const networkScripts =
     network === 'telegram' ? '<script src="https://telegram.org/js/telegram-web-app.js"></script>' : network === 'tiktok' ? '<script src="mraid.js"></script>' : '';
@@ -61,10 +84,10 @@ export function generatePlayerHTML(
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
-<meta name="theme-color" content="#05070d" />
+<meta name="theme-color" content="${themeColor}" />
 <meta name="generator" content="OmniStage Player" />
 <title>${escapeHtml(title)}</title>
-${networkScripts}
+${pwaHead}${networkScripts}
 <style>html,body{margin:0;height:100%;background:#05070d;overscroll-behavior:none}</style>
 </head>
 <body>
@@ -79,7 +102,7 @@ ${opts.showFps ? FPS_METER : ''}
   catch (e) { document.body.textContent = 'This game could not start: ' + (e && e.message || e); }
 })();
 </script>
-</body>
+${pwaScript}</body>
 </html>`;
 }
 

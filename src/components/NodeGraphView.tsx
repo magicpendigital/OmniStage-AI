@@ -364,13 +364,20 @@ export const NodeGraphView: React.FC = () => {
     };
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    if ((e.target as HTMLElement).closest('select, input')) return;
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.08 : 0.92;
-    const nextZoom = Math.min(1.6, Math.max(0.42, Number((zoom * factor).toFixed(2))));
-    setZoom(nextZoom);
-  };
+  // React attaches wheel listeners as passive, so preventDefault() there is ignored (and warns). Use a native,
+  // non-passive listener so zooming the graph does not also scroll the page.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('select, input, textarea')) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.08 : 0.92;
+      setZoom((z) => Math.min(1.6, Math.max(0.42, Number((z * factor).toFixed(2)))));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   const handleCanvasPointerDown = (e: React.PointerEvent) => {
     const target = e.target as HTMLElement;
@@ -489,7 +496,6 @@ export const NodeGraphView: React.FC = () => {
   return (
     <div
       ref={containerRef}
-      onWheel={handleWheel}
       onPointerDown={handleCanvasPointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

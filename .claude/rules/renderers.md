@@ -19,14 +19,20 @@ paths:
 - WebGPU (Phase 7): a builder that uses GLSL (ShaderMaterial, onBeforeCompile, Reflector, EffectComposer) must check `nodeBackend()`
   and hand that part to `src/render3d/webgpu` (TSL port with the same maths). Add the port in the same change and run
   `npm run test:e2e:gpu`. Never import `three/webgpu` outside `src/render3d/webgpu`.
+- Shader effects (`actor.shaderEffect`) are only the fixed presets in `src/runtime/shaderEffects.ts`, applied by `ActorShaderEffect`
+  (studio + Player) to the actor's animated group; change GLSL (`src/render3d/shaderEffects.ts`) and TSL (`webgpu/shaderEffects.ts`) maths together.
 - 3D host: React Three Fiber (editor tools: gizmos, selection, orbit). Badges stay WebGL sprites (`THREE.CanvasTexture`), never DOM `<Html>` portals (React 19 unmount races).
 - Multi-instance rigs use `SkeletonUtils.clone`; dispose bone textures/mixers when an actor is removed.
+- Phase 9 pose layer: head look-at and foot IK run in `RigPoseLayer` (`src/render3d/rigPose.ts`) AFTER the mixer update, in both the
+  studio (`RiggedGltfModel`) and the Player; where to look comes only from `gazeAt` (cinematics). Spring bones (tail / hair / ear chains, `SPRING_NAME`) also live there: films only, a pure function of
+  time via `springDisplacement` over `resolvePerformance` history (never integrate frame to frame). Keep `tests/rigPose.test.ts` green.
 - 2D: `StageCanvas2D.tsx` works in a 1000×600 design space. Platformer physics constants (jump vy −520, gravity 9.8×90, run 320)
   are mirrored in `src/verification/sceneVerifier.ts` (`PLATFORMER_PHYSICS`). Change both together and re-run `npm test`.
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
 - Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`. The film soundtrack is rendered by
   `src/audio/soundtrack.ts` (pure, deterministic) and played by `soundtrackPlayback.ts` from the store — renderers never touch it.
+  Footsteps are generated from walks by `src/audio/footsteps.ts`; never add footstep cues by hand or in a renderer.
 - Phase 10C talk motion: `performedActor` sets `actor.talkLevel` and turns speakers to their listener; `actorMotion` turns it into the
   nod / lean. Renderers pass `dialogue` to `performedActor` and draw captions from `sceneCaptions(spec)` (authored + dialogue).
 - Phase 10B world: biome presets are data (`src/runtime/biomes.ts`); water landmarks are built in `src/render3d/waterFeatures.ts`
@@ -34,3 +40,5 @@ paths:
 - Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or
   anything DOM-only beyond canvas; they read/write state via `runtimeStore` (`src/runtime/host.ts`). Renderers stay thin wrappers so the
   OmniStage Player runs the same code. Rebuild the Player (`npm run build:player`) after runtime changes.
+- Behaviour state machines (`src/runtime/stateMachine.ts`) run from `RuntimeLogicGraph.advance`, game mode only, seeded, no `Date` /
+  `Math.random`. 3D clip names go through `resolveClipName` (cinematics). Restarts restore start poses (`restoreStartPoses`).

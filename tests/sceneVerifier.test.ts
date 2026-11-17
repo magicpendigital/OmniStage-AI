@@ -6,6 +6,7 @@ import {
   canReachSurface,
   MAX_GAP,
   MAX_STEP_UP,
+  mobileRigBudget,
   verifySceneSpec,
 } from '../src/verification/sceneVerifier';
 import type { Node2D, SceneSpec } from '../src/types/scene.schema';
@@ -136,4 +137,72 @@ test('unknown easing and audio cues are cleaned up', () => {
   assert.equal(fixed.spec.nodes2D[2].keyframeTrack![0].ease, undefined);
   assert.equal(fixed.spec.audio!.cues.collect, undefined);
   assert.equal(fixed.spec.audio!.cues.win, 'win');
+});
+
+test('custom particle / SFX recipes: valid ones pass, bad ones are clamped, renamed built-ins and junk are removed', () => {
+  const ok = { rate: 40, life: 1.2, speed: [20, 60], angle: [250, 290], gravity: -30, size: [6, 14], shape: 'circle', colors: ['#7CFC00', '#2E8B57'], fade: true, grow: true, alpha: 0.8 };
+  const clean = game2D();
+  clean.particleLibrary = { 'poison-puff': ok } as any;
+  clean.sfxLibrary = { 'arp-up': { wave: 'square', dur: 0.4, vol: 0.5, notes: [523, 659, 784, 1047], step: 0.08 } } as any;
+  assert.equal(verifySceneSpec(clean).issues.filter((i) => i.code === 'recipe.invalid').length, 0);
+
+  const spec = game2D();
+  spec.particleLibrary = { 'hot-sparks': { ...ok, rate: 9999 }, fire: ok, 'Bad Id': ok } as any;
+  spec.sfxLibrary = { 'no-wave': { dur: 0.3, vol: 0.5 }, 'loud-zap': { wave: 'sawtooth', dur: 0.2, vol: 7, f0: 800, f1: 200 } } as any;
+  const found = verifySceneSpec(spec).issues.filter((i) => i.code === 'recipe.invalid');
+  assert.deepEqual(found.map((i) => i.targetId).sort(), ['particleLibrary:Bad Id', 'particleLibrary:fire', 'particleLibrary:hot-sparks', 'sfxLibrary:loud-zap', 'sfxLibrary:no-wave']);
+  assert.ok(found.every((i) => i.severity === 'warning' && i.fixable));
+
+  const { spec: fixed } = autoFixSceneSpec(spec);
+  assert.deepEqual(Object.keys(fixed.particleLibrary!), ['hot-sparks']);
+  assert.ok((fixed.particleLibrary!['hot-sparks'] as any).rate <= 400);
+  assert.deepEqual(Object.keys(fixed.sfxLibrary!), ['loud-zap']);
+  assert.ok((fixed.sfxLibrary!['loud-zap'] as any).vol <= 1);
+  assert.equal(verifySceneSpec(fixed).issues.filter((i) => i.code === 'recipe.invalid').length, 0);
+
+  const many = game2D();
+  many.particleLibrary = Object.fromEntries(Array.from({ length: 30 }, (_, n) => [`fx-${n}`, ok])) as any;
+  const trimmed = autoFixSceneSpec(many).spec;
+  assert.equal(Object.keys(trimmed.particleLibrary!).length, 24);
+
+  const junk = game2D();
+  (junk as any).sfxLibrary = ['not', 'a', 'map'];
+  assert.equal(autoFixSceneSpec(junk).spec.sfxLibrary, undefined);
+});
+
+test('mobile target: rules are opt-in and auto-fix raises small text', () => {
+  const spec = game2D();
+  spec.aspectRatio = '9:16';
+  spec.nodes2D.push({ id: 'hud', name: 'HUD', type: 'text-kinetic', text: 'Score', x: 500, y: 300, width: 200, height: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, fill: '#fff', stroke: '#000', physics2D: 'none', fontSize: 14 } as Node2D);
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code.startsWith('mobile.')));
+  assert.ok(verifySceneSpec(spec, { target: 'mobile' }).issues.some((i) => i.code === 'mobile.text-small' && i.targetId === 'hud'));
+  const fixed = autoFixSceneSpec(spec, { target: 'mobile' });
+  assert.ok(!fixed.report.issues.some((i) => i.code === 'mobile.text-small'));
+});
+
+test('mobile target: rig cost budget (vertices, bones, textures, rigged actor count)', () => {
+  const spec = createBlankSceneSpec('3d', 'Rig budget');
+  const base = spec.actors[0];
+  const light = { ...base, id: 'light', name: 'Light', rigCost: { bones: 65, vertices: 20_000, textureSize: 1024 } };
+  spec.actors = [light];
+  assert.equal(mobileRigBudget(spec).issues.length, 0);
+  assert.ok(!verifySceneSpec(spec, { target: 'mobile' }).issues.some((i) => i.code === 'mobile.rig-cost'));
+
+  const heavy = { ...base, id: 'heavy', name: 'Heavy', rigCost: { bones: 160, vertices: 140_000, textureSize: 4096 } };
+  spec.actors = [light, heavy];
+  const budget = mobileRigBudget(spec);
+  assert.equal(budget.vertices, 160_000);
+  assert.equal(budget.heaviest?.id, 'heavy');
+  assert.deepEqual(budget.issues.map((i) => i.id).sort(), ['bones', 'texture', 'vertices']);
+  const rig = verifySceneSpec(spec, { target: 'mobile' }).issues.filter((i) => i.code === 'mobile.rig-cost');
+  assert.equal(rig.length, 3);
+  assert.ok(rig.every((i) => i.severity === 'warning'));
+  assert.ok(rig.some((i) => i.targetId === 'heavy'));
+  // Opt-in: no mobile rules without the mobile target.
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code === 'mobile.rig-cost'));
+
+  spec.actors = Array.from({ length: 13 }, (_, n) => ({ ...light, id: `r${n}`, rigCost: { bones: 30, vertices: 2_000 } }));
+  assert.deepEqual(mobileRigBudget(spec).issues.map((i) => i.id), ['actors']);
+  spec.actors = spec.actors.map((a, n) => (n ? a : { ...a, visible: false }));
+  assert.equal(mobileRigBudget(spec).issues.length, 0, 'hidden actors do not count');
 });

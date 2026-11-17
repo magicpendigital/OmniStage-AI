@@ -2,7 +2,7 @@ import { SceneSpec } from '../types/scene.schema';
 import { renderFilmSoundtrack } from '../audio/soundtrack';
 import { voiceClipAssets } from '../audio/voices';
 import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
-import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML } from './playerHtml';
+import { assetBudgetFor, collectAssetUrls, defaultFetcher, embedAssets, EmbedResult, generatePlayerHTML, PlayerHtmlOptions } from './playerHtml';
 
 /**
  * Utility: Trigger browser file download via temporary anchor element.
@@ -570,6 +570,10 @@ export interface StandalonePlayerOptions {
   quality?: 'auto' | 'low' | 'high';
   /** Phase 7: renderer of the exported Player ('webgl' = smallest file; 'auto' / 'webgpu' embed the WebGPU build). */
   renderer?: 'webgl' | 'webgpu' | 'auto';
+  /** Phase 8: app build options (see PlayerHtmlOptions.app / pwa / themeColor). */
+  app?: PlayerHtmlOptions['app'];
+  pwa?: PlayerHtmlOptions['pwa'];
+  themeColor?: string;
 }
 
 export interface PlayableBuildResult {
@@ -704,6 +708,9 @@ export function generateStandaloneHTMLContent(
     showFps: options.showFps,
     quality: options.quality,
     renderer: options.renderer,
+    app: options.app,
+    pwa: options.pwa,
+    themeColor: options.themeColor,
   });
 }
 

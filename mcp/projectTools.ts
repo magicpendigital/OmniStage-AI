@@ -15,6 +15,7 @@ import { BUILTIN_DIRECTOR_SKILLS, buildSkillContext, inferSkillContext, selectDi
 import { EASE_IDS } from '../src/animation/easing';
 import { SFX_PRESET_IDS, GAME_AUDIO_EVENTS } from '../src/audio/audioBus';
 import { PARTICLE_2D_PRESETS } from '../src/vfx/particles2D';
+import { STATE_MACHINE_ACTIONS, STATE_MACHINE_CONDITIONS, STATE_MACHINE_MOVES } from '../src/runtime/stateMachine';
 import { captionsToSRT, captionsToWebVTT } from '../src/media/captions';
 import { buildStandalonePlayable, StandaloneAdNetwork } from '../src/exporter/mediaExporter';
 import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
@@ -146,6 +147,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
         'Everything is declarative SceneSpec JSON (src/types/scene.schema.ts); never write renderer code.',
         "2D stage is 1000x600 (y down). 3D player arena is x/z within ±5.5, actors grounded at y=0.",
         'Every patch is verified; fixable problems are auto-repaired and remaining errors are returned to you.',
+        'Game behaviour (enemies, NPCs, doors): actors[].stateMachine / nodes2D[].stateMachine = { initial, states: { name: { move?, points?, speed?, clip?, animation?, onEnter?: Action[], transitions?: [{ to, when: Condition }] } } } using only the stateMachine vocabulary below (skill behaviour-state-machines).',
       ],
       assets3D: Object.values(ASSET_REGISTRY).map((a) => ({ assetId: a.assetId, name: a.name, category: a.category, clips: a.embeddedClips || [] })),
       presets2D: PRESET_2D_ASSETS.map((p) => ({ id: p.id, name: p.name, type: p.nodeTemplate.type, role: p.nodeTemplate.physics2D })),
@@ -153,6 +155,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
       sfxPresets: SFX_PRESET_IDS,
       audioEvents: GAME_AUDIO_EVENTS,
       easings: EASE_IDS,
+      stateMachine: { moves: STATE_MACHINE_MOVES, conditions: STATE_MACHINE_CONDITIONS, actions: STATE_MACHINE_ACTIONS },
       skills: BUILTIN_DIRECTOR_SKILLS.map((s) => ({ id: s.id, title: s.title, engine: s.engine, mode: s.mode })),
     }),
   },

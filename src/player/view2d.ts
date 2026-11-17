@@ -4,7 +4,7 @@
  */
 import { trackImage } from './loading';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, RuntimeLogicGraph } from '../runtime/logicGraph';
-import { hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
+import { displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
 import { runtimeStore } from '../runtime/host';
 import type { InputManager } from './input';
 
@@ -30,6 +30,14 @@ export class View2D {
     parent.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     this.canvas.addEventListener('pointerdown', this.onPointer);
+    // Same live positions as the studio (useRuntimeLogicGraph): distance checks and state machines see the moving player.
+    runtime.runtimePosition = (id) => {
+      const state = runtimeStore.getState();
+      const node = state.sceneSpec.nodes2D.find((n) => n.id === id);
+      if (!node) return undefined;
+      const p = displayedPosition2D(node, state.isPlaying, state.currentTime, state.sceneSpec.mode, this.bodies);
+      return [p.x, p.y, 0];
+    };
   }
 
   private onPointer = (e: PointerEvent) => {
@@ -62,6 +70,7 @@ export class View2D {
 
   dispose() {
     this.canvas.removeEventListener('pointerdown', this.onPointer);
+    this.runtime.runtimePosition = undefined;
     this.canvas.remove();
   }
 }

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import {
   AlertCircle,
   Archive,
+  Box,
   Camera,
   Check,
   ChevronRight,
@@ -35,8 +36,10 @@ import {
   StandaloneAdNetwork,
 } from '../exporter/mediaExporter';
 import { canExportFilmFrames, exportFilmMP4 } from '../exporter/filmExport';
+import { MobileExportPanel } from './MobileExportPanel';
+import { GodotExportPanel } from './GodotExportPanel';
 
-type PublishTab = 'sequencer' | 'bundler' | 'snapshot';
+type PublishTab = 'sequencer' | 'bundler' | 'mobile' | 'godot' | 'snapshot';
 
 export const PublishModal: React.FC = () => {
   const isOpen = useStudioStore((s) => s.isPublishModalOpen);
@@ -309,6 +312,16 @@ export const PublishModal: React.FC = () => {
               id: 'bundler' as const,
               label: 'Standalone Game Bundler (HTML5 / ZIP)',
               icon: <Gamepad2 className="w-3.5 h-3.5 text-cyan-400" />,
+            },
+            {
+              id: 'mobile' as const,
+              label: 'Mobile App (PWA / Android / iOS)',
+              icon: <Smartphone className="w-3.5 h-3.5 text-emerald-400" />,
+            },
+            {
+              id: 'godot' as const,
+              label: 'Godot 4 project',
+              icon: <Box className="w-3.5 h-3.5 text-sky-400" />,
             },
             {
               id: 'snapshot' as const,
@@ -809,6 +822,9 @@ export const PublishModal: React.FC = () => {
           )}
 
           {/* TAB 3: SNAPSHOTS & MCA CONTRACT */}
+          {activeTab === 'mobile' && <MobileExportPanel onNotice={triggerToast} />}
+          {activeTab === 'godot' && <GodotExportPanel onNotice={triggerToast} />}
+
           {activeTab === 'snapshot' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

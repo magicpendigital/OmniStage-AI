@@ -60,7 +60,7 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
       await page.waitForFunction(() => (window as any).__omniPlayer.pendingLoads() === 0, undefined, { timeout: 20000 });
     },
     view3d: () => page.evaluate(() => (window as any).__omniPlayer.inspect().view3d) as Promise<{
-      actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }>;
+      actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number; fx: number }>;
       camera: { position: number[]; fov: number };
       world: string[];
       backend: 'webgl' | 'webgpu';
@@ -87,5 +87,43 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
         const mean = sum / n;
         return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), width: src.width, height: src.height };
       }),
+    /** Like pixelStats, but returns the 64 x 36 luminance grid (to compare two frames pixel by pixel). */
+    pixelGrid: () =>
+      page.evaluate(() => {
+        (window as any).__omniPlayer.step(1 / 60);
+        const src = document.querySelector('canvas.omni-stage') as HTMLCanvasElement;
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 36;
+        const g = c.getContext('2d')!;
+        g.drawImage(src, 0, 0, 64, 36);
+        const d = g.getImageData(0, 0, 64, 36).data;
+        const out: number[] = [];
+        for (let i = 0; i < d.length; i += 4) out.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]);
+        return out;
+      }),
   };
+}
+
+/** Phase 6 Batch 3 — every shader effect preset on a rigged GLTF robot and procedural composites, one scene. */
+export function shaderFxScene(): SceneSpec {
+  const spec = template('blank-3d-authoring');
+  spec.mode = 'media';
+  spec.durationSeconds = 6;
+  const base = spec.actors[0];
+  const prop = (id: string, assetId: string, x: number, shaderEffect: SceneSpec['actors'][number]['shaderEffect']) => ({
+    ...base, id, name: id, assetId, modelUrl: undefined, customGlbUrl: undefined, availableClips: undefined, activeClip: undefined,
+    position: [x, 0, 1.5] as [number, number, number], scale: [1, 1, 1] as [number, number, number], performance: undefined,
+    activeAnimation: 'idle' as const, primaryColor: '#8b5cf6', secondaryColor: '#f59e0b', shaderEffect,
+  });
+  spec.actors = [
+    { ...base, id: 'robot', position: [0, 0, -1], performance: undefined, shaderEffect: { preset: 'hologram' } },
+    prop('gem', 'plasma-gem', -3, { preset: 'forcefield', intensity: 1.5 }),
+    prop('box', 'mystery-gift-box', -1.5, { preset: 'toon' }),
+    prop('car', 'gt-sports-car', 0, { preset: 'lava', speed: 2 }),
+    prop('bottle', 'luxury-perfume-bottle', 1.5, { preset: 'rainbow', intensity: 2 }),
+    prop('mine', 'hazard-laser-mine', 3, { preset: 'dissolve', progressTween: { from: 0, to: 1, start: 0, duration: 4 } }),
+  ];
+  spec.camera.shots = [{ start: 0, type: 'wide', subject: 'car', angle: 'front' }];
+  return spec;
 }

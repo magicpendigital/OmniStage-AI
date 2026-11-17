@@ -16,11 +16,17 @@ import type {
 } from '../types/scene.schema';
 import { isEaseId } from '../animation/easing';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
-import { PARTICLE_2D_PRESETS } from '../vfx/particles2D';
+import { PARTICLE_2D_PRESETS, particleRuntimeFor } from '../vfx/particles2D';
+import { MAX_SCENE_RECIPES, RECIPE_ID_RE, sameRecipe, sanitizeParticleRecipe, sanitizeSfxRecipe } from '../extensions/validate';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
 import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
+import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
+import { DEVICE_PROFILES, DeviceTier } from '../runtime/deviceProfiles';
+import { ASSET_REGISTRY } from '../registry/assetRegistry';
+import { repairStateMachine, stateMachineIssues } from '../runtime/stateMachine';
+import { sanitizeShaderEffect, shaderEffectProblem } from '../runtime/shaderEffects';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -55,6 +61,10 @@ const DEFAULT_SCORE = 25;
 export interface VerifyOptions {
   /** Whole storyboard, used to validate `sequence.nextSceneId`. */
   scenes?: SceneSpec[];
+  /** Phase 8: 'mobile' adds phone checks (text size, touch targets, safe area, keyboard-only input, scene weight). */
+  target?: 'mobile';
+  /** Phase 8: device tier the mobile budgets are checked against (default 'mid' = MOBILE_REFERENCE). */
+  deviceTier?: DeviceTier;
 }
 
 interface Surface {
@@ -336,6 +346,10 @@ function verifyWorldFeatures(spec: SceneSpec, issues: VerificationIssue[]) {
   if (spec.world.biome !== undefined && !BIOME_IDS.includes(spec.world.biome)) {
     issues.push(issue('world.biome-invalid', 'warning', `Unknown biome "${spec.world.biome}" (biomes: ${BIOME_IDS.join(', ')}).`, true));
   }
+  const hdri = spec.world.hdri;
+  if (hdri && (typeof hdri.url !== 'string' || !hdri.url.trim() || (hdri.format !== undefined && hdri.format !== 'hdr' && hdri.format !== 'image'))) {
+    issues.push(issue('world.hdri-invalid', 'warning', `world.hdri needs a url and format 'hdr' (Radiance .hdr) or 'image' (equirectangular JPEG/PNG skybox).`, true));
+  }
   for (const f of spec.world.features || []) {
     if (!f || !WORLD_FEATURE_TYPES.includes(f.type) || !Array.isArray(f.position) || f.position.length !== 3 || f.position.some((v) => !Number.isFinite(v))) {
       issues.push(issue('world.feature-invalid', 'warning', `World feature "${f?.id ?? '?'}" is invalid (types: ${WORLD_FEATURE_TYPES.join(', ')}; position [x, y, z]).`, true, f?.id));
@@ -408,15 +422,338 @@ function verifyCommon(spec: SceneSpec, issues: VerificationIssue[], opts: Verify
   }
 }
 
+type RecipeLibrary = 'particleLibrary' | 'sfxLibrary';
+const RECIPE_LIBS: Array<{ lib: RecipeLibrary; label: string; clean: (r: unknown) => object | null; builtIn: readonly string[] }> = [
+  { lib: 'particleLibrary', label: 'particle', clean: sanitizeParticleRecipe, builtIn: PARTICLE_2D_PRESETS },
+  { lib: 'sfxLibrary', label: 'sound', clean: sanitizeSfxRecipe, builtIn: SFX_PRESET_IDS },
+];
+
+/** Problems with one custom recipe (AI-authored or copied from an extension), or null when it is clean. */
+function recipeProblem(id: string, recipe: unknown, def: (typeof RECIPE_LIBS)[number]): string | null {
+  if (!RECIPE_ID_RE.test(id)) return `id "${id}" must be a lower-case slug`;
+  if (def.builtIn.includes(id)) return `id "${id}" hides the built-in preset of the same name`;
+  const clean = def.clean(recipe);
+  if (!clean) return `"${id}" is missing required fields`;
+  if (!sameRecipe(clean, recipe)) return `"${id}" has unknown fields or values out of range`;
+  return null;
+}
+
+/** Phase 6 Batch 3 — AI-authored particle / SFX recipes are data only: known fields, clamped numbers, slug ids. */
+function verifyRecipes(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const def of RECIPE_LIBS) {
+    const lib = spec[def.lib] as Record<string, unknown> | undefined;
+    if (!lib) continue;
+    if (typeof lib !== 'object' || Array.isArray(lib)) {
+      issues.push(issue('recipe.invalid', 'warning', `${def.lib} must be an object of id → recipe.`, true, `${def.lib}:*`));
+      continue;
+    }
+    const ids = Object.keys(lib);
+    if (ids.length > MAX_SCENE_RECIPES) {
+      issues.push(issue('recipe.invalid', 'warning', `${def.lib} has ${ids.length} recipes (max ${MAX_SCENE_RECIPES}).`, true, `${def.lib}:*`));
+    }
+    for (const id of ids) {
+      const problem = recipeProblem(id, lib[id], def);
+      if (problem) issues.push(issue('recipe.invalid', 'warning', `Custom ${def.label} recipe ${problem}.`, true, `${def.lib}:${id}`));
+    }
+  }
+}
+
+/** Phase 6 Batch 3 — actor shader effects are one of the fixed presets with clamped params (never shader code). */
+function verifyShaderEffects(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const a of spec.actors || []) {
+    const problem = a.shaderEffect === undefined ? null : shaderEffectProblem(a.shaderEffect);
+    if (problem) issues.push(issue('actor.shader-effect-invalid', 'warning', `Actor "${a.name}" shaderEffect ${problem}.`, true, a.id));
+  }
+}
+
+function fixShaderEffect(spec: SceneSpec, targetId: string | undefined): string | null {
+  const a = spec.actors.find((x) => x.id === targetId);
+  if (!a || a.shaderEffect === undefined) return null;
+  const clean = sanitizeShaderEffect(a.shaderEffect);
+  if (clean) a.shaderEffect = clean;
+  else delete a.shaderEffect;
+  return clean ? `Cleaned "${a.name}" shader effect` : `Removed "${a.name}" unknown shader effect`;
+}
+
+function fixRecipe(spec: SceneSpec, targetId: string | undefined): string | null {
+  const [libName, id] = String(targetId || '').split(/:(.*)/s);
+  const def = RECIPE_LIBS.find((d) => d.lib === libName);
+  if (!def) return null;
+  const lib = spec[def.lib] as Record<string, unknown> | undefined;
+  if (id === '*') {
+    if (!lib || typeof lib !== 'object' || Array.isArray(lib)) {
+      delete spec[def.lib];
+      return `Removed the malformed ${def.lib}`;
+    }
+    const keep = Object.keys(lib).slice(0, MAX_SCENE_RECIPES);
+    (spec as any)[def.lib] = Object.fromEntries(keep.map((k) => [k, lib[k]]));
+    return `Kept the first ${MAX_SCENE_RECIPES} ${def.label} recipes`;
+  }
+  if (!lib || !(id in lib)) return null;
+  const clean = RECIPE_ID_RE.test(id) && !def.builtIn.includes(id) ? def.clean(lib[id]) : null;
+  if (clean) {
+    lib[id] = clean;
+    return `Clamped the custom ${def.label} recipe "${id}" to safe values`;
+  }
+  delete lib[id];
+  return `Removed the unusable custom ${def.label} recipe "${id}"`;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: mobile checks (only with opts.target === 'mobile')
+// ---------------------------------------------------------------------------
+
+/**
+ * A small reference phone (360×780 CSS px; portrait for 9:16 / 1:1, landscape for 16:9) with notch / home-indicator
+ * insets. The Player fits the stage aspect into the screen and letterboxes the 1000×600 2D design space inside it.
+ */
+export const MOBILE_REFERENCE = {
+  shortSide: 360,
+  longSide: 780,
+  minFontPx: 12,
+  minTouchPx: 44,
+  comfortPx: 8,
+  insets: {
+    portrait: { top: 47, bottom: 34, left: 0, right: 0 },
+    landscape: { top: 0, bottom: 21, left: 47, right: 47 },
+  },
+  /** Content budgets of the 'mid' device tier (src/runtime/deviceProfiles.ts): actors, 2D nodes, rig cost, particles. */
+  ...DEVICE_PROFILES.mid.budget,
+};
+
+const tierNote = (tier: DeviceTier) => (tier === 'mid' ? '' : ` [${tier} tier]`);
+
+/** Live particles at once: 3D GPU points (sparkles 96, confetti 160 × intensity, ambient dust 24) + 2D emitters at steady state. */
+export function mobileParticleCount(spec: Pick<SceneSpec, 'engineType' | 'vfx' | 'nodes2D' | 'particleLibrary'>): number {
+  if (spec.engineType === '3d') {
+    let n = 24;
+    for (const v of spec.vfx || []) {
+      if (v.visible === false) continue;
+      if (v.type === 'sparkles') n += 96;
+      else if (v.type === 'confetti') n += Math.floor(160 * Math.max(0, v.intensity ?? 1));
+    }
+    return n;
+  }
+  const rt = particleRuntimeFor(spec.particleLibrary);
+  let n = 0;
+  for (const node of spec.nodes2D || []) {
+    if (node.visible === false || node.type !== 'particle-emitter' || !node.emitter) continue;
+    n += rt.particlesAt(node.emitter.preset, node.emitter.seed ?? 7, 6, STAGE_W, STAGE_H, node.emitter.rate).length;
+  }
+  return n;
+}
+
+/** Skinning budget of a 3D scene for phones: totals from measured `rigCost`, rigged library models counted without one. */
+export function mobileRigBudget(spec: Pick<SceneSpec, 'actors'>, tier: DeviceTier = 'mid'): {
+  skinnedActors: number;
+  vertices: number;
+  heaviest?: { id: string; name: string; bones: number; vertices: number; textureSize?: number };
+  issues: Array<{ id: string; message: string; actorId?: string }>;
+} {
+  const R = DEVICE_PROFILES[tier].budget;
+  const t = tierNote(tier);
+  const shown = (spec.actors || []).filter((a) => a.visible !== false);
+  const rigged = shown.filter((a) => a.rigCost || (ASSET_REGISTRY[a.assetId]?.category === 'gltf-rigged' && (ASSET_REGISTRY[a.assetId]?.embeddedClips?.length ?? 0) > 0));
+  const measured = shown.filter((a) => a.rigCost);
+  const vertices = measured.reduce((s, a) => s + Math.max(0, a.rigCost!.vertices), 0);
+  const heaviest = measured.slice().sort((a, b) => b.rigCost!.vertices - a.rigCost!.vertices)[0];
+  const issues: Array<{ id: string; message: string; actorId?: string }> = [];
+  if (vertices > R.maxSkinnedVertices) {
+    issues.push({ id: 'vertices', message: `Rigged characters skin ${Math.round(vertices / 1000)}k vertices every frame; phones stay smooth under ${R.maxSkinnedVertices / 1000}k. Use fewer or lighter characters (heaviest: "${heaviest!.name}", ${Math.round(heaviest!.rigCost!.vertices / 1000)}k).${t}` });
+  }
+  if (rigged.length > R.maxSkinnedActors) {
+    issues.push({ id: 'actors', message: `${rigged.length} animated rigged characters may drop frames on low-end phones (keep under ${R.maxSkinnedActors}).${t}` });
+  }
+  for (const a of measured) {
+    if (a.rigCost!.bones > R.maxBones) issues.push({ id: 'bones', actorId: a.id, message: `"${a.name}" has ${a.rigCost!.bones} bones; keep skeletons under ${R.maxBones} for phones.${t}` });
+    if ((a.rigCost!.textureSize ?? 0) > R.maxTextureSize) issues.push({ id: 'texture', actorId: a.id, message: `"${a.name}" uses ${a.rigCost!.textureSize} px textures; phones need ${R.maxTextureSize} px or less.${t}` });
+  }
+  return {
+    skinnedActors: rigged.length,
+    vertices,
+    heaviest: heaviest ? { id: heaviest.id, name: heaviest.name, ...heaviest.rigCost! } : undefined,
+    issues,
+  };
+}
+
+export interface MobileStageGeometry {
+  /** CSS px per 2D design unit. */
+  scale: number;
+  /** Minimum gap (design units) a UI element should keep from each design-space edge. */
+  margin: { top: number; bottom: number; left: number; right: number };
+  minFont: number;
+  minTouch: number;
+}
+
+export function mobileStageGeometry(aspect: SceneSpec['aspectRatio']): MobileStageGeometry {
+  const R = MOBILE_REFERENCE;
+  const landscape = aspect === '16:9';
+  const [sw, sh] = landscape ? [R.longSide, R.shortSide] : [R.shortSide, R.longSide];
+  const ratio = aspect === '9:16' ? 9 / 16 : aspect === '1:1' ? 1 : 16 / 9;
+  const fw = Math.min(sw, sh * ratio);
+  const fh = fw / ratio;
+  const scale = Math.min(fw / STAGE_W, fh / STAGE_H);
+  const offX = (sw - STAGE_W * scale) / 2;
+  const offY = (sh - STAGE_H * scale) / 2;
+  const inset = landscape ? R.insets.landscape : R.insets.portrait;
+  const need = (insetPx: number, off: number) => Math.ceil(Math.max(0, insetPx + R.comfortPx - off) / scale);
+  return {
+    scale,
+    margin: { top: need(inset.top, offY), bottom: need(inset.bottom, offY), left: need(inset.left, offX), right: need(inset.right, offX) },
+    minFont: Math.ceil(R.minFontPx / scale),
+    minTouch: Math.ceil(R.minTouchPx / scale),
+  };
+}
+
+/** 2D nodes a logic-graph trigger listens to with "actor clicked". */
+function tapTargetIds(spec: SceneSpec): Set<string> {
+  const ids = new Set<string>();
+  for (const n of spec.logicGraph?.nodes || []) {
+    const ev = String(n.params?.eventType || '');
+    if (n.type === 'trigger' && (ev === 'on-click-actor' || ev === 'on-actor-click' || ev === 'actor-click') && n.params?.actorId) ids.add(String(n.params.actorId));
+  }
+  return ids;
+}
+
+function isUiNode2D(n: Node2D, taps: Set<string>) {
+  return n.visible !== false && ((n.type === 'text-kinetic' && !!String(n.text || '').trim()) || taps.has(n.id));
+}
+
+function nodeBox(n: Node2D) {
+  const w = Math.abs(n.width * (n.scaleX ?? 1));
+  const h = Math.abs(n.height * (n.scaleY ?? 1));
+  return { w, h, left: n.x - w / 2, right: n.x + w / 2, top: n.y - h / 2, bottom: n.y + h / 2 };
+}
+
+/** Keys a phone player can press: the on-screen pad + action button of this scene. */
+function touchKeys(spec: SceneSpec): Set<string> {
+  const b = touchButtons(touchLayoutFor(spec, false));
+  const keys = new Set<string>(b.pad.map((p) => p[1]));
+  if (b.action) keys.add(b.action[1]).add('space');
+  return keys;
+}
+
+function verifyMobile(spec: SceneSpec, issues: VerificationIssue[], tier: DeviceTier = 'mid') {
+  const B = DEVICE_PROFILES[tier].budget;
+  const t = tierNote(tier);
+  const geo = mobileStageGeometry(spec.aspectRatio);
+  if (spec.engineType === '2d') {
+    const taps = tapTargetIds(spec);
+    for (const n of spec.nodes2D || []) {
+      if (n.visible === false) continue;
+      const shownFont = typeof n.fontSize === 'number' ? n.fontSize * Math.abs(n.scaleY ?? 1) : Infinity;
+      if (n.type === 'text-kinetic' && String(n.text || '').trim() && shownFont < geo.minFont) {
+        issues.push(issue('mobile.text-small', 'warning', `Text "${n.name}" is about ${Math.round(shownFont * geo.scale)} px on a phone; use fontSize ≥ ${geo.minFont} for ${spec.aspectRatio}.`, true, n.id));
+      }
+      if (taps.has(n.id)) {
+        const b = nodeBox(n);
+        if (Math.min(b.w, b.h) < geo.minTouch) {
+          issues.push(issue('mobile.touch-target', 'warning', `Tap target "${n.name}" is about ${Math.round(Math.min(b.w, b.h) * geo.scale)} px on a phone; make it at least ${geo.minTouch} design units (44 px).`, true, n.id));
+        }
+      }
+      if (isUiNode2D(n, taps)) {
+        const b = nodeBox(n);
+        const m = geo.margin;
+        const outside = b.left < m.left || b.right > STAGE_W - m.right || b.top < m.top || b.bottom > STAGE_H - m.bottom;
+        if (outside && b.w <= STAGE_W - m.left - m.right && b.h <= STAGE_H - m.top - m.bottom) {
+          issues.push(issue('mobile.edge-ui', 'warning', `"${n.name}" sits under the notch, rounded corners or home bar on phones; keep it inside x ${m.left}–${STAGE_W - m.right}, y ${m.top}–${STAGE_H - m.bottom}.`, true, n.id));
+        }
+      }
+    }
+    if ((spec.nodes2D || []).length > B.maxNodes2D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.nodes2D.length} 2D nodes may drop frames on low-end phones (keep under ${B.maxNodes2D}).${t}`, false));
+    }
+  } else {
+    if ((spec.actors || []).length > B.maxActors3D) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${spec.actors.length} 3D actors may drop frames on low-end phones (keep under ${B.maxActors3D}).${t}`, false));
+    }
+    const shaded = (spec.actors || []).filter((a) => a.shaderEffect && a.visible !== false).length;
+    if (shaded > B.maxShaderEffects) {
+      issues.push(issue('mobile.heavy-scene', 'warning', `${shaded} actors with shader effects may drop frames on phones (keep under ${B.maxShaderEffects}); use effects on the hero only.${t}`, false));
+    }
+    for (const r of mobileRigBudget(spec, tier).issues) issues.push(issue('mobile.rig-cost', 'warning', r.message, false, r.actorId));
+  }
+
+  const particles = mobileParticleCount(spec);
+  if (particles > B.maxParticles) {
+    issues.push(issue('mobile.heavy-scene', 'warning', `About ${particles} particles at once may drop frames on phones (keep under ${B.maxParticles}).${t}`, false));
+  }
+
+  if (spec.mode === 'game') {
+    const keys = touchKeys(spec);
+    const missing = new Set<string>();
+    for (const n of spec.logicGraph?.nodes || []) {
+      const ev = String(n.params?.eventType || '');
+      if (n.type !== 'trigger' || (ev !== 'on-key-press' && ev !== 'key-press')) continue;
+      const key = String(n.params?.key ?? n.params?.keyCombo ?? n.params?.inputKey ?? '').toLowerCase();
+      if (!key) continue;
+      const ok = key === 'wasd / arrows' ? keys.has('arrowleft') : keys.has(key === ' ' ? 'space' : key);
+      if (!ok) missing.add(key);
+    }
+    if (missing.size) {
+      issues.push(issue('mobile.keyboard-only', 'warning', `Key trigger(s) ${[...missing].map((k) => `"${k}"`).join(', ')} have no on-screen button on phones; use arrows / space, or an "actor clicked" trigger.`, false));
+    }
+  }
+}
+
+function fixMobile(spec: SceneSpec, i: VerificationIssue): string | null {
+  const n = (spec.nodes2D || []).find((x) => x.id === i.targetId);
+  if (!n) return null;
+  const geo = mobileStageGeometry(spec.aspectRatio);
+  if (i.code === 'mobile.text-small') {
+    n.fontSize = Math.ceil(geo.minFont / Math.abs(n.scaleY || 1));
+    return `Raised "${n.name}" to fontSize ${n.fontSize} for phones`;
+  }
+  if (i.code === 'mobile.touch-target') {
+    const b = nodeBox(n);
+    const k = geo.minTouch / Math.max(1e-6, Math.min(b.w, b.h));
+    n.width = Math.ceil(n.width * k);
+    n.height = Math.ceil(n.height * k);
+    return `Enlarged tap target "${n.name}" to ${geo.minTouch}+ design units`;
+  }
+  if (i.code === 'mobile.edge-ui') {
+    const b = nodeBox(n);
+    const m = geo.margin;
+    n.x = Math.round(clamp(n.x, m.left + b.w / 2, STAGE_W - m.right - b.w / 2));
+    n.y = Math.round(clamp(n.y, m.top + b.h / 2, STAGE_H - m.bottom - b.h / 2));
+    return `Moved "${n.name}" inside the phone safe area`;
+  }
+  return null;
+}
+
+// Phase 9: behaviour state machines (rules + repairs live in src/runtime/stateMachine.ts, shared with the AI normaliser).
+function machineHosts(spec: SceneSpec): Array<ActorNode | Node2D> {
+  return [...(spec.actors || []), ...(spec.nodes2D || [])].filter((h) => h.stateMachine !== undefined);
+}
+
+function verifyStateMachines(spec: SceneSpec, issues: VerificationIssue[]) {
+  for (const host of machineHosts(spec)) {
+    for (const m of stateMachineIssues(host, spec)) issues.push(issue(m.code, m.severity, `"${host.name}" ${m.message}`, m.fixable, host.id));
+  }
+}
+
+function fixStateMachine(spec: SceneSpec, i: VerificationIssue): string | null {
+  const host = machineHosts(spec).find((h) => h.id === i.targetId);
+  if (!host) return null;
+  const next = repairStateMachine(host, i.code);
+  if (next) host.stateMachine = next;
+  else delete host.stateMachine;
+  return next ? `Repaired "${host.name}" state machine (${i.code})` : `Removed "${host.name}" empty state machine`;
+}
+
 export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): VerificationReport {
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
+  verifyRecipes(spec, issues);
+  verifyShaderEffects(spec, issues);
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
   verifySoundtrack(spec, issues);
   verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
+  verifyStateMachines(spec, issues);
+  if (opts.target === 'mobile') verifyMobile(spec, issues, opts.deviceTier);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
 }
@@ -470,6 +807,16 @@ function makePlayer2D(): Node2D {
 
 function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): string | null {
   switch (i.code) {
+    case 'machine.invalid': case 'machine.no-initial': case 'machine.transition-missing': case 'machine.unreachable': case 'machine.clip-missing':
+      return fixStateMachine(spec, i);
+    case 'mobile.text-small':
+    case 'mobile.touch-target':
+    case 'mobile.edge-ui':
+      return fixMobile(spec, i);
+    case 'recipe.invalid':
+      return fixRecipe(spec, i.targetId);
+    case 'actor.shader-effect-invalid':
+      return fixShaderEffect(spec, i.targetId);
     case 'media.performance-invalid': {
       const a = spec.actors.find((x) => x.id === i.targetId);
       if (!a?.performance) return null;
@@ -555,6 +902,16 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
       if (st.cues) st.cues = st.cues.filter((c) => c && Number.isFinite(c.time) && c.time >= 0 && c.time < duration &&
         ((SFX_PRESET_IDS as string[]).includes(c.sfx) || !!spec.sfxLibrary?.[c.sfx]));
       return 'Repaired the soundtrack (mood / ambience / cues)';
+    }
+    case 'world.hdri-invalid': {
+      const h = spec.world?.hdri;
+      if (!h) return null;
+      if (typeof h.url !== 'string' || !h.url.trim()) {
+        delete spec.world.hdri;
+        return 'Removed a world sky without a url';
+      }
+      delete h.format;
+      return 'Reset the world sky format to .hdr';
     }
     case 'world.biome-invalid':
       delete spec.world.biome;

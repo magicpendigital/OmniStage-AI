@@ -4,20 +4,20 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeMesh, canonicalPositions, MeshData, toCanonical, Vec3 } from '../src/rig/analyze';
-import { fitSkeleton, MIXAMO } from '../src/rig/skeleton';
-import { computeSkinWeights, posePositions, quatAxisAngle, validateRig } from '../src/rig/skin';
+import { analyzeMesh, canonicalPositions, CharacterCategory, MeshData, toCanonical, Vec3 } from '../src/rig/analyze';
+import { fingerChainOf, fitSkeleton, MIXAMO, SERPENT_BODY } from '../src/rig/skeleton';
+import { computeSkinWeights, fingerCurlPose, posePositions, quatAxisAngle, validateRig } from '../src/rig/skin';
 import { proceduralClips, quatFromTo, retargetClip } from '../src/rig/animate';
 import { decimateMesh, transferSkin } from '../src/rig/decimate';
 import { rigMeshData, skinStage } from '../src/rig/pipeline';
 import { handleRigJob, lastRigJobThread, runRigJob } from '../src/rig/rigJobs';
 import { boneKey, boneMapper, importedClipName, mergeClips, retargetLibrary, retargetRootMotion, SourceClipLibrary } from '../src/rig/clipLibrary';
-import { SAMPLE_HUMANOID_JOINTS, sampleHumanoid, sampleQuadruped, transformMesh } from '../src/rig/fixtures';
+import { SAMPLE_BIRD_JOINTS, SAMPLE_FINGER_KNUCKLES, SAMPLE_HUMANOID_JOINTS, sampleBird, sampleHumanoid, sampleHumanoidWithFingers, sampleQuadruped, sampleSerpent, transformMesh } from '../src/rig/fixtures';
 
-function rig(m0: MeshData, forceCategory?: 'humanoid' | 'quadruped' | 'prop') {
+function rig(m0: MeshData, forceCategory?: CharacterCategory) {
   const { report, points } = analyzeMesh(m0, { forceCategory });
   const mesh = { positions: canonicalPositions(m0, report.frame), indices: m0.indices };
-  const skeleton = fitSkeleton(report.category, points);
+  const skeleton = fitSkeleton(report.category, points, mesh);
   const skin = computeSkinWeights(mesh, skeleton);
   return { report, mesh, skeleton, skin };
 }
@@ -358,4 +358,148 @@ test('clip import: rest directions are matched, so an A-pose source still points
   assert.ok(Math.abs(Math.abs(fore.rotations![3]) - 1) < 1e-3);
   const ft = quatFromTo([1, 0, 0], [0, 1, 0]);
   assert.ok(Math.abs(ft[2] - Math.SQRT1_2) < 1e-6 && Math.abs(ft[3] - Math.SQRT1_2) < 1e-6);
+});
+
+// ================================================================================================ bird / serpent / fingers
+
+const canonOf = (frame: Parameters<typeof toCanonical>[1]) => (p: Vec3): Vec3 => Array.from(toCanonical(new Float32Array(p), frame)) as Vec3;
+const boneHead = (skeleton: ReturnType<typeof rig>['skeleton'], name: string) => {
+  const b = skeleton.bones.find((x) => x.name === name);
+  assert.ok(b, `missing bone ${name}`);
+  return b!.head;
+};
+
+test('bird template: classified from the wings, joints on the wings / legs / head / tail, graded, flying clips', () => {
+  for (const m of [sampleBird(), transformMesh(sampleBird(), 37, 3)]) assert.equal(analyzeMesh(m).report.category, 'bird');
+  assert.equal(analyzeMesh(sampleHumanoid(), { forceCategory: 'bird' }).report.category, 'bird');
+  const { report, mesh, skeleton, skin } = rig(sampleBird());
+  const c = canonOf(report.frame);
+  const pairs: Array<[string, string, number]> = [
+    ['leftShoulder', 'LeftWing1', 0.04], ['leftWingTip', 'LeftWingEnd', 0.04], ['head', 'Head', 0.06], ['tailTip', 'TailEnd', 0.05],
+  ];
+  for (const [k, bone, tol] of pairs) {
+    const err = dist(boneHead(skeleton, bone), c(SAMPLE_BIRD_JOINTS[k]));
+    assert.ok(err < tol, `${k}: ${err.toFixed(3)} m off`);
+  }
+  const ankle = c(SAMPLE_BIRD_JOINTS.leftAnkle), foot = boneHead(skeleton, 'LeftFoot');
+  assert.ok(Math.abs(foot[0] - ankle[0]) < 0.03 && foot[1] < 0.06, `foot at ${foot.map((v) => v.toFixed(3))}`);
+  // the right wing mirrors the left
+  const l = boneHead(skeleton, 'LeftWingEnd'), r = boneHead(skeleton, 'RightWingEnd');
+  assert.ok(Math.abs(l[0] + r[0]) < 1e-6 && Math.abs(l[1] - r[1]) < 1e-6);
+  const v = validateRig(mesh, skeleton, skin);
+  assert.ok(['A', 'B'].includes(v.grade), `grade ${v.grade} (${v.score})`);
+  assert.deepEqual(v.poses.map((p) => p.name), ['Wings up', 'Wings down', 'Peck']);
+  const clips = proceduralClips(skeleton);
+  assert.deepEqual(clips.map((x) => x.name), ['Idle', 'Walking', 'Running', 'Flying', 'Gliding', 'Peck']);
+  for (const x of clips) for (const t of x.tracks) {
+    assert.ok([...(t.rotations || []), ...(t.positions || [])].every(Number.isFinite), `${x.name}/${t.bone}`);
+    assert.ok(skeleton.bones.some((b) => b.name === t.bone), `${x.name} animates unknown bone ${t.bone}`);
+  }
+  // wing-tip vertices follow the wing, never a leg
+  const n = mesh.positions.length / 3;
+  for (let i = 0; i < n; i++) {
+    if (mesh.positions[i * 3] < 0.45) continue;
+    assert.match(skeleton.bones[skin.indices[i * 4]].name, /LeftWing/);
+  }
+});
+
+test('serpent template: a 10–16 bone spine chain + head + jaw, travelling-wave slither clips', () => {
+  for (const m of [sampleSerpent(), transformMesh(sampleSerpent(), -60, 0.5)]) assert.equal(analyzeMesh(m).report.category, 'serpent');
+  const { mesh, skeleton, skin } = rig(sampleSerpent());
+  const body = skeleton.bones.filter((b) => SERPENT_BODY.test(b.name));
+  assert.ok(body.length >= 10 && body.length <= 16, `${body.length} body bones`);
+  for (const n of ['Head', 'Jaw']) boneHead(skeleton, n);
+  assert.equal(skeleton.bones[skeleton.bones.find((b) => b.name === 'Jaw')!.parent].name, 'Head');
+  // joints run tail to nose along +z, the head in front
+  const zs = skeleton.bones.filter((b) => /^(Spine\d+|Neck|Head)$/.test(b.name)).map((b) => b.head[2]);
+  assert.ok(zs.every((z, i) => i === 0 || z > zs[i - 1]), `spine not ordered: ${zs.map((z) => z.toFixed(2))}`);
+  const v = validateRig(mesh, skeleton, skin);
+  assert.ok(['A', 'B'].includes(v.grade), `grade ${v.grade} (${v.score})`);
+  assert.deepEqual(v.poses.map((p) => p.name), ['Coil', 'S-curve', 'Rear up']);
+  const clips = proceduralClips(skeleton);
+  assert.deepEqual(clips.map((x) => x.name), ['Idle', 'Walking', 'Running', 'Attack']);
+  assert.equal(clips.find((x) => x.name === 'Attack')!.loop, false);
+  for (const x of clips) for (const t of x.tracks) assert.ok([...(t.rotations || []), ...(t.positions || [])].every(Number.isFinite), `${x.name}/${t.bone}`);
+  // the slither is a travelling wave: at the same key, spine bones yaw both ways
+  const walk = clips.find((x) => x.name === 'Walking')!;
+  const yawAt = (bone: string) => walk.tracks.find((x) => x.bone === bone)?.rotations?.[1] ?? 0;
+  const signs = new Set(body.filter((b) => /^Spine\d+$/.test(b.name)).map((b) => Math.sign(yawAt(b.name))));
+  assert.ok(signs.has(1) && signs.has(-1), 'every spine bone turns the same way — no wave');
+});
+
+test('fingers: open hands get Mixamo finger chains whose weights stay on their own finger; mitten hands keep one hand bone', () => {
+  const { report, mesh, skeleton, skin } = rig(sampleHumanoidWithFingers());
+  assert.equal(report.category, 'humanoid');
+  const c = canonOf(report.frame);
+  for (const side of ['Left', 'Right']) {
+    const names = skeleton.bones.map((b) => b.name).filter((n) => n.startsWith(`mixamorig${side}Hand`) && n !== `mixamorig${side}Hand`);
+    assert.equal(names.length, 20, `${side}: ${names.join(',')}`);
+    for (const f of ['Thumb', 'Index', 'Middle', 'Ring', 'Pinky']) for (const k of [1, 2, 3, 4]) {
+      const name = MIXAMO(`${side}Hand${f}${k}`);
+      const b = skeleton.bones.find((x) => x.name === name)!;
+      assert.ok(b, `missing ${name}`);
+      assert.equal(skeleton.bones[b.parent].name, MIXAMO(k === 1 ? `${side}Hand` : `${side}Hand${f}${k - 1}`));
+      assert.equal(fingerChainOf(name), `${side}Hand${f}`);
+    }
+  }
+  for (const [f, p] of Object.entries(SAMPLE_FINGER_KNUCKLES)) {
+    const err = dist(boneHead(skeleton, MIXAMO(`LeftHand${f}1`)), c(p));
+    assert.ok(err < 0.02, `${f} knuckle ${err.toFixed(3)} m off`);
+  }
+  assert.ok(skeleton.confidence.fingers >= 0.8);
+  // no vertex is shared between two finger chains
+  const n = mesh.positions.length / 3;
+  for (let i = 0; i < n; i++) {
+    const chains = new Set<string>();
+    for (let k = 0; k < 4; k++) {
+      if (skin.weights[i * 4 + k] <= 0.01) continue;
+      const ch = fingerChainOf(skeleton.bones[skin.indices[i * 4 + k]].name);
+      if (ch) chains.add(ch);
+    }
+    assert.ok(chains.size <= 1, `vertex ${i} follows ${[...chains].join(' + ')}`);
+  }
+  const v = validateRig(mesh, skeleton, skin);
+  assert.ok(['A', 'B'].includes(v.grade), `grade ${v.grade} (${v.score})`);
+  assert.deepEqual(v.poses.map((p) => p.name), ['Arms raised', 'Squat', 'Stride', 'Grip']);
+  // fingertips follow their finger; a grip closes them towards the palm (down: the palms face the floor in a T-pose)
+  const grip = posePositions(mesh.positions, skeleton.bones, skin, fingerCurlPose(skeleton.bones, 50, 30));
+  let before = 0, after = 0, cnt = 0;
+  for (let i = 0; i < n; i++) {
+    if (mesh.positions[i * 3] < 0.86) continue;
+    assert.match(skeleton.bones[skin.indices[i * 4]].name, /LeftHand(Index|Middle|Ring|Pinky)/);
+    before += mesh.positions[i * 3 + 1]; after += grip[i * 3 + 1]; cnt++;
+  }
+  assert.ok(cnt > 0 && (before - after) / cnt > 0.02, `tips dropped ${((before - after) / cnt).toFixed(3)} m`);
+  // clips curl the fingers; the clip list is unchanged
+  const clips = proceduralClips(skeleton);
+  assert.deepEqual(clips.map((x) => x.name), ['Idle', 'Walking', 'Running', 'Wave', 'Jump', 'Yes', 'No', 'Sitting', 'Dance']);
+  assert.ok(clips.find((x) => x.name === 'Idle')!.tracks.some((t) => t.bone === MIXAMO('LeftHandIndex2')));
+  // the blocky sample has no separated fingers: one hand bone + a warning, and no finger tracks
+  const plain = rig(sampleHumanoid()).skeleton;
+  assert.ok(!plain.bones.some((b) => fingerChainOf(b.name)));
+  assert.match(plain.warnings.join(' '), /Fingers are not separated/);
+  assert.ok(!proceduralClips(plain).some((x) => x.tracks.some((t) => fingerChainOf(t.bone))));
+});
+
+test('clip import: Mixamo finger tracks retarget onto finger bones; body-only files still fit a fingered rig', () => {
+  const { skeleton } = rig(sampleHumanoidWithFingers());
+  const times = [0, 1];
+  const lib: SourceClipLibrary = {
+    skeleton: mixamoSource(skeleton), rootBone: 'mixamorig1:Hips',
+    clips: [{ name: 'mixamo.com', duration: 1, times, local: { 'mixamorig1:LeftHandIndex2': [0, 0, 0, 1, ...quatAxisAngle([0, 0, 1], -50)] } }],
+  };
+  const out = retargetLibrary(lib, skeleton, 'Grab.glb');
+  assert.equal(out.matched, out.total);
+  const idx = out.clips[0].tracks.find((t) => t.bone === MIXAMO('LeftHandIndex2'));
+  assert.ok(idx, 'finger track dropped');
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(idx!.rotations![7]))) * (180 / Math.PI);
+  assert.ok(Math.abs(angle - 50) < 1, `finger curled ${angle.toFixed(1)}°`);
+  // a body-only source (no finger bones) is accepted, and the missing fingers are not reported as unmatched
+  const body = mixamoSource(rig(sampleHumanoid()).skeleton);
+  const out2 = retargetLibrary({ skeleton: body, rootBone: 'mixamorig1:Hips', clips: [{ name: 'Idle', duration: 1, times, local: {} }] }, skeleton, 'Idle.glb');
+  assert.equal(out2.clips[0].name, 'Idle');
+  assert.ok(!out2.unmatchedTarget.some((b) => fingerChainOf(b)));
+  assert.equal(importedClipName('Flapping', 'x.glb'), 'Flying');
+  assert.equal(importedClipName('mixamo.com', 'Snake Slither.glb'), 'Walking');
+  assert.equal(importedClipName('Soaring Glide', 'x.glb'), 'Gliding');
 });

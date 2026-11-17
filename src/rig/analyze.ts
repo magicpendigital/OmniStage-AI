@@ -13,7 +13,7 @@ export interface MeshData {
   indices: Uint32Array; // 3 per triangle
 }
 
-export type CharacterCategory = 'humanoid' | 'quadruped' | 'prop';
+export type CharacterCategory = 'humanoid' | 'quadruped' | 'bird' | 'serpent' | 'prop';
 
 export interface CanonicalFrame {
   /** Row-major 3×3 rotation from model space to canonical space (columns = where model x / y / z go). */
@@ -36,6 +36,8 @@ export interface AnalysisReport {
   frame: CanonicalFrame;
   /** Canonical height after normalisation (m). */
   height: number;
+  /** Canonical length front to back after normalisation (m); serpents are normalised by length, not height. */
+  length: number;
   /** Left / right mirror symmetry 0..1 (1 = perfectly symmetric). */
   symmetry: number;
   category: CharacterCategory;
@@ -46,7 +48,9 @@ export interface AnalysisReport {
 }
 
 export const MAX_TRIANGLES = 300_000;
-const TARGET_HEIGHT: Record<CharacterCategory, number> = { humanoid: 1.8, quadruped: 1.0, prop: 1.0 };
+const TARGET_HEIGHT: Record<CharacterCategory, number> = { humanoid: 1.8, quadruped: 1.0, bird: 0.5, serpent: 0.15, prop: 1.0 };
+/** Serpents lie along the ground: their size is set by body length, not height. */
+const SERPENT_LENGTH = 2.0;
 
 // ------------------------------------------------------------------------------------------------ sampling
 
@@ -286,6 +290,49 @@ function bounds(pts: Float32Array) {
   return { min, max };
 }
 
+/** Extent (max − min) of the cloud along a unit direction. */
+function extentAlong(pts: Float32Array, d: Vec3): number {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < pts.length; i += 3) {
+    const s = pts[i] * d[0] + pts[i + 1] * d[1] + pts[i + 2] * d[2];
+    if (s < lo) lo = s;
+    if (s > hi) hi = s;
+  }
+  return hi - lo;
+}
+
+/** −1..1: how much more surface the +axis end (front 12 %) has than the −axis end (canonical points, axis index). */
+function endThickness(pts: Float32Array, axis: number): number {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = axis; i < pts.length; i += 3) { lo = Math.min(lo, pts[i]); hi = Math.max(hi, pts[i]); }
+  const band = 0.12 * (hi - lo);
+  let front = 0, back = 0;
+  for (let i = axis; i < pts.length; i += 3) {
+    if (pts[i] > hi - band) front++;
+    else if (pts[i] < lo + band) back++;
+  }
+  return front + back ? (front - back) / (front + back) : 0;
+}
+
+/**
+ * Bird wings: the cloud is much wider than tall / long, and the outer part (beyond 60 % of the half span) is a thin sheet
+ * at mid height (not arms hanging down, not a flat board on the ground).
+ */
+function wingSpread(pts: Float32Array, span: Vec3, y0: number, h: number, width: number, length: number): boolean {
+  if (width < 1.3 * Math.max(h, length)) return false;
+  const along = (i: number) => pts[i] * span[0] + pts[i + 1] * span[1] + pts[i + 2] * span[2];
+  let minX = Infinity, maxX = -Infinity;
+  for (let i = 0; i < pts.length; i += 3) { const x = along(i); minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+  const cx = (minX + maxX) / 2, half = (maxX - minX) / 2;
+  const ys: number[] = [];
+  for (let i = 0; i < pts.length; i += 3) if (Math.abs(along(i) - cx) > 0.6 * half) ys.push((pts[i + 1] - y0) / h);
+  if (ys.length < 50) return false;
+  ys.sort((a, b) => a - b);
+  const mid = ys[Math.floor(ys.length / 2)];
+  const spread = ys[Math.floor(ys.length * 0.9)] - ys[Math.floor(ys.length * 0.1)];
+  return mid > 0.3 && mid < 0.95 && spread < 0.3;
+}
+
 // ------------------------------------------------------------------------------------------------ analysis
 
 /**
@@ -307,7 +354,13 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
   const axes = principalAxes(cov);
   let up: Vec3 = [0, 1, 0];
   let upName = '+Y';
-  if (size[1] < 0.45 * Math.max(size[0], size[2])) {
+  // Serpent-like: long and thin along one horizontal direction and low — lying along the ground, not lying down.
+  const flat = horizontalCandidates(raw, up).map((c) => ({ v: c.v, extent: extentAlong(raw, c.v) })).sort((a, b) => b.extent - a.extent);
+  const longest = flat[0].extent, shortest = flat[1].extent;
+  const serpentLike = opts.forceCategory === 'serpent' || (size[1] < 0.12 * longest && shortest < 0.25 * longest);
+  // Spread wings make a standing bird much wider than tall: that is not a model lying on its back.
+  const winged = opts.forceCategory === 'bird' || wingSpread(raw, flat[0].v, b0.min[1], size[1], longest, shortest);
+  if (!serpentLike && !winged && size[1] < 0.45 * Math.max(size[0], size[2])) {
     // Lying: the up direction is the smallest principal axis, snapped to a model axis; ground side = flatter side.
     const smallest = axes[2].vector;
     const best = AXES.filter((a) => a.name !== '+Y' && a.name !== '-Y').reduce((p, c) => (Math.abs(dot(c.v, smallest)) > Math.abs(dot(p.v, smallest)) ? c : p));
@@ -359,13 +412,16 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
   })();
   let facing = best.facing;
   let facingName = best.facingName;
-  if (frontScore < 0) {
+  // Serpents have no feet: the head end is the thicker one (bodies taper to the tail tip).
+  const taper = serpentLike ? endThickness(pts, 2) : 0;
+  const sideScore = serpentLike ? taper : frontScore;
+  if (sideScore < 0) {
     facing = [-facing[0], -facing[1], -facing[2]] as Vec3;
     facingName = facingName[0] === '+' || facingName[0] === '-'
       ? (facingName[0] === '+' ? '-' : '+') + facingName[1]
       : `yaw ${Math.round((Math.atan2(facing[0], facing[2]) * 180) / Math.PI)}°`;
   }
-  const facingConfidence = Math.min(1, Math.abs(frontScore) * 2);
+  const facingConfidence = Math.min(1, Math.abs(sideScore) * 2);
   if (facingConfidence < 0.3) warnings.push('Could not tell front from back reliably; check the facing arrow.');
 
   const rotation = frameRotation(up, facing);
@@ -393,7 +449,16 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
   let confidence = 0.4;
   const tall = rawHeight > 1.15 * Math.max(length, 0.01);
   const long = length > 1.1 * rawHeight;
-  if (tall && legBlobs.length >= 2 && legBlobs.length <= 3) {
+  const wings = wingSpread(pts, [1, 0, 0], bb.min[1], rawHeight, width, length);
+  if (serpentLike && rawHeight < 0.15 * length && width < 0.3 * length) {
+    category = 'serpent';
+    confidence = 0.6 + (Math.abs(taper) > 0.2 ? 0.25 : 0);
+    reasons.push(`Long and low (${(length / Math.max(1e-6, rawHeight)).toFixed(0)}× longer than tall)${Math.abs(taper) > 0.2 ? ', thicker at one end (head)' : ''} — a serpent body along the ground.`);
+  } else if (wings && legBlobs.length >= 1 && legBlobs.length <= 3) {
+    category = 'bird';
+    confidence = 0.7 + (legBlobs.length === 2 ? 0.15 : 0);
+    reasons.push(`Thin wings spread ${(width / Math.max(rawHeight, length)).toFixed(1)}× wider than the body at mid height, ${legBlobs.length} leg(s) at the bottom.`);
+  } else if (tall && legBlobs.length >= 2 && legBlobs.length <= 3) {
     category = 'humanoid';
     confidence = 0.75 + (legBlobs.length === 2 ? 0.1 : 0) + (chestWidth > 0.35 * rawHeight ? 0.1 : 0);
     reasons.push(`Taller than long, ${legBlobs.length} legs at the bottom${chestWidth > 0.35 * rawHeight ? ', arms out at chest height' : ''}.`);
@@ -413,11 +478,11 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
   void width;
 
   // ---------------------------------------------------------------- normalise: feet on the ground, centred, target height
-  const scale = TARGET_HEIGHT[category] / rawHeight;
+  const scale = category === 'serpent' ? SERPENT_LENGTH / Math.max(1e-6, length) : TARGET_HEIGHT[category] / rawHeight;
   const offset: Vec3 = [-((bb.min[0] + bb.max[0]) / 2) * scale, -bb.min[1] * scale, -((bb.min[2] + bb.max[2]) / 2) * scale];
   const frame: CanonicalFrame = { rotation, scale, offset, upAxis: upName, facingAxis: facingName, facingConfidence };
   const canonical = toCanonical(raw, frame);
-  const symmetry = mirrorSymmetry(canonical, TARGET_HEIGHT[category]);
+  const symmetry = mirrorSymmetry(canonical, Math.max(rawHeight, length) * scale);
   if (symmetry < 0.6) warnings.push(`Left / right symmetry is low (${Math.round(symmetry * 100)} %); the rig assumes a symmetric body.`);
   return {
     report: {
@@ -425,7 +490,8 @@ export function analyzeMesh(mesh: MeshData, opts: { samples?: number; forceCateg
       triangles,
       size,
       frame,
-      height: TARGET_HEIGHT[category],
+      height: category === 'serpent' ? rawHeight * scale : TARGET_HEIGHT[category],
+      length: length * scale,
       symmetry,
       category,
       categoryConfidence: Math.min(1, confidence),

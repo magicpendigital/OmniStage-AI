@@ -31,29 +31,58 @@ export const PERMISSION_INFO: Record<ExtensionPermission, { label: string; risk:
  * Phase 6 Batch 3 — asset-generation providers. The provider's API hosts, auth scheme and result hosts live in
  * the server (server/generate/providers.ts), never in the manifest, so an extension cannot point a key elsewhere.
  */
-export type GenerationProviderId = 'meshy' | 'tripo' | 'fal' | 'replicate';
+export type GenerationProviderId = 'meshy' | 'tripo' | 'rodin' | 'fal' | 'replicate' | 'openrouter' | 'elevenlabs' | 'blockade';
+export type GenerationOutput = 'model' | 'image' | 'audio';
 
-export const GENERATION_PROVIDERS: Record<GenerationProviderId, { label: string; output: 'model' | 'image'; keyUrl: string; keyLabel: string }> = {
-  meshy: { label: 'Meshy', output: 'model', keyUrl: 'https://www.meshy.ai/settings/api', keyLabel: 'Meshy API key (msy_…)' },
-  tripo: { label: 'Tripo', output: 'model', keyUrl: 'https://platform.tripo3d.ai/api-keys', keyLabel: 'Tripo API key (tsk_…)' },
+export const GENERATION_PROVIDERS: Record<GenerationProviderId, { label: string; output: GenerationOutput; keyUrl: string; keyLabel: string; imageInput?: boolean; modelInput?: boolean }> = {
+  meshy: { label: 'Meshy', output: 'model', keyUrl: 'https://www.meshy.ai/settings/api', keyLabel: 'Meshy API key (msy_…)', imageInput: true, modelInput: true },
+  tripo: { label: 'Tripo', output: 'model', keyUrl: 'https://platform.tripo3d.ai/api-keys', keyLabel: 'Tripo API key (tsk_…)', modelInput: true },
+  rodin: { label: 'Rodin (Hyper3D)', output: 'model', keyUrl: 'https://hyper3d.ai/api-dashboard', keyLabel: 'Rodin API key', imageInput: true },
   fal: { label: 'fal.ai', output: 'image', keyUrl: 'https://fal.ai/dashboard/keys', keyLabel: 'fal.ai key (id:secret)' },
   replicate: { label: 'Replicate', output: 'image', keyUrl: 'https://replicate.com/account/api-tokens', keyLabel: 'Replicate API token (r8_…)' },
+  openrouter: { label: 'OpenRouter', output: 'image', keyUrl: 'https://openrouter.ai/settings/keys', keyLabel: 'OpenRouter key (sk-or-…)' },
+  elevenlabs: { label: 'ElevenLabs', output: 'audio', keyUrl: 'https://elevenlabs.io/app/settings/api-keys', keyLabel: 'ElevenLabs API key' },
+  blockade: { label: 'Blockade Labs', output: 'image', keyUrl: 'https://skybox.blockadelabs.com/api-membership', keyLabel: 'Blockade Labs Skybox API key' },
 };
 
-/** A text-to-asset generator contributed by an extension (needs the `generate` permission). */
+/** Clip names a rig generator can add (the names OmniRig, the AI and `matchClipName` already use). */
+export const RIG_CLIP_NAMES = ['Idle', 'Walking', 'Running', 'Jump', 'Wave', 'Dance'] as const;
+export type RigClipName = (typeof RIG_CLIP_NAMES)[number];
+
+/** Frames allowed in a generated sprite sheet (one horizontal strip). */
+export const SPRITE_SHEET_FRAMES = { min: 2, max: 8 } as const;
+
+/** A text/image-to-asset generator contributed by an extension (needs the `generate` permission). */
 export interface ExtensionGenerator {
   id: string;
   title: string;
   description?: string;
   provider: GenerationProviderId;
-  output: 'model' | 'image';
-  /** Image models only (fal / Replicate), e.g. "fal-ai/flux/schnell" or "black-forest-labs/flux-schnell". */
+  output: GenerationOutput;
+  /** Image models only (fal / Replicate / OpenRouter), e.g. "fal-ai/flux/schnell" or "google/gemini-2.5-flash-image". */
   model?: string;
-  /** Meshy: run the texture (refine) stage after the mesh; fal: cut the background out for sprites. */
+  /** Meshy / Tripo / Rodin: textured (PBR) model; fal: cut the background out for sprites. */
   texture?: boolean;
   removeBackground?: boolean;
   /** Add sprite framing words to the prompt (single centred subject, plain background). */
   sprite?: boolean;
+  /**
+   * 'image' = image-to-3D: the user picks a picture from the library (Meshy, Rodin). 'model' = rig + animate a GLB the
+   * user picks from the library (Meshy, Tripo); the result is a rigged GLB with named clips. Default 'text'.
+   */
+  input?: 'text' | 'image' | 'model';
+  /** Rig generators: skeleton type (Tripo also rigs quadrupeds; Meshy rigs bipeds only). Default 'biped'. */
+  rigType?: 'biped' | 'quadruped';
+  /** Rig generators: clips to add, from RIG_CLIP_NAMES (default Idle, Walking, Running). */
+  clips?: string[];
+  /** Blockade Labs: Skybox AI style id (their /api/v1/skybox/styles list). */
+  styleId?: number;
+  /** Sprite sheet: N animation frames in one horizontal strip (2–8); saved with SpriteSheetSpec metadata. */
+  frames?: number;
+  /** ElevenLabs: what to make (sound effect or music). */
+  audio?: 'sfx' | 'music';
+  /** ElevenLabs: target length in seconds (SFX 0.5–22, music 10–300). */
+  durationSeconds?: number;
 }
 
 /** Particle recipe — same fields the built-in presets use (see src/vfx/particles2D.ts). */

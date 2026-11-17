@@ -29,6 +29,11 @@ paths:
   manifest; extensions only pick a provider + a `GENERATION_MODEL_RE` model id and need the approved `generate` permission. Keys
   come per request (`x-generate-key`) or env, are never stored in jobs, logged or echoed (`upstreamErrorMessage` scrubs them), and
   never go to result hosts. Downloads: `safeUrl` (https, provider hosts, no IPs/ports) + `sniffResult` before `AssetStore.add`.
+  `ANY_PUBLIC_HOST` ('*') is only for a provider whose download CDN is undocumented (Rodin): still https, no IPs / ports /
+  private names, and no key. Image-to-3D pictures come only from the user's library (`readSourceImage`, sniffed, ≤ 15 MB) and are
+  dropped from the job after the create call; never accept a picture URL from the client. Rig generators (input 'model',
+  `RIG_PROVIDERS` via `specFor`) take a library GLB the same way (`readSourceModel`, ≤ 60 MB) and rename the result's clips with
+  `renameGlbClips` so `matchClipName` maps them; skybox results (Blockade) are tagged `skybox` and placed as `world.hdri` (`format: 'image'`).
   Keep `tests/generate.test.ts` green; re-check the upstream API comments in `providers.ts` when a provider changes its API.
 - Meshy session connector (`server/generate/meshy*.ts`, `glbMerge.ts`, `/api/meshy/*`, `npm run meshy:smoke`): uses the user's own Meshy
   login by DRIVING the official `meshy-cli`, pinned to 0.4.0 (`meshy` on PATH if it prints 0.4.0, else `npm exec --yes --package=meshy-cli@0.4.0 -- meshy`).

@@ -76,6 +76,27 @@ MECHANIC RECIPES (build the matching chain whenever the user asks for the mechan
 - World / atmosphere:     "On Scene Start" -> "World Stage & Skybox" (params mirror sceneSpec.world).
 Keep the graph, actors, gameRules, camera and world consistent with each other: if you change targetScore, update the gate node; if you change an actor's clip, update its Play Animation node.`;
 
+/** Phase 9: behaviour state machines (actors[].stateMachine / nodes2D[].stateMachine), run by src/runtime/stateMachine.ts. */
+export const STATE_MACHINE_PROMPT_SECTION = `BEHAVIOUR STATE MACHINES (game mode only; put "stateMachine" on an actor (3D) or a Node2D (2D) that should act on its own: enemies, NPCs, doors, guards):
+stateMachine = { initial: "<state name>", health?: 100, seed?: 1, states: { "<name>": State } }   (state names: letters, digits, - or _; max 16 states)
+State = { move?: 'stay'|'patrol'|'move-to'|'chase-player'|'flee-player'|'return-home', points?: [[x,z] or [x,y,z]] (3D metres, arena ±5.5) | [[x,y]] (2D px, 1000x600),
+          speed?: number (default 1.5 m/s 3D, 120 px/s 2D), clip?: one of the actor's availableClips / the sprite's spriteSheet clips, animation?: AnimationType,
+          onEnter?: Action[], transitions?: [{ to: "<state name>", when: Condition }] }   (transitions are checked in order; the first true one wins)
+Condition (closed list, nothing else): { type:'player-near', distance } | { type:'player-far', distance } | { type:'timer', seconds } (time in this state) | { type:'arrived' } (reached
+  move-to / return-home target or finished a patrol loop) | { type:'health-below', value } | { type:'score-at-least', value } | { type:'signal', name } | { type:'collided' } (touching the player)
+  | { type:'clicked' } (tapped) | { type:'random', chance: 0..1, every?: seconds } (seeded, deterministic)
+Action (onEnter): { type:'add-score', amount } | { type:'add-health', amount } (negative = damage) | { type:'spawn-vfx', vfx: VFXType, color? } | { type:'play-sfx', sound: GameAudioEvent }
+  | { type:'send-signal', name } (wakes machines waiting on { type:'signal', name }; a logic-graph action { actionType:'send-signal', signal } does the same) | { type:'set-visible', visible } | { type:'end-game', won }
+Rules: initial MUST name a state; every transition "to" MUST name a state; every state must be reachable from initial; never write code or expressions. Moving states play Walk/Run, 'stay' plays Idle
+when no clip is set. Distances use x/z in 3D and x/y in 2D. Examples:
+- Enemy guard: { initial:"patrol", states:{ patrol:{ move:"patrol", points:[[-3,-2],[3,-2]], transitions:[{to:"chase",when:{type:"player-near",distance:3}}] },
+    chase:{ move:"chase-player", speed:2.4, transitions:[{to:"attack",when:{type:"collided"}},{to:"return",when:{type:"player-far",distance:6}}] },
+    attack:{ clip:"Attack", onEnter:[{type:"add-score",amount:-10},{type:"play-sfx",sound:"hit"}], transitions:[{to:"chase",when:{type:"timer",seconds:1}}] },
+    return:{ move:"return-home", transitions:[{to:"patrol",when:{type:"arrived"}},{to:"chase",when:{type:"player-near",distance:3}}] } } }
+- Friendly NPC: { initial:"idle", states:{ idle:{ move:"stay", transitions:[{to:"wave",when:{type:"player-near",distance:2.5}}] }, wave:{ clip:"Wave", transitions:[{to:"idle",when:{type:"player-far",distance:4}}] } } }
+- Door: { initial:"closed", states:{ closed:{ transitions:[{to:"opening",when:{type:"score-at-least",value:50}}] }, opening:{ animation:"spin", onEnter:[{type:"play-sfx",sound:"click"}],
+    transitions:[{to:"open",when:{type:"timer",seconds:1}}] }, open:{ onEnter:[{type:"set-visible",visible:false},{type:"spawn-vfx",vfx:"sparkles"}] } } }`;
+
 /**
  * Repair-mode guidance, embedded in the agent system prompt. Triggered by user prompts that start with
  * "EXECUTION REPAIR REQUEST" (see buildExecutionRepairPrompt).
@@ -168,6 +189,8 @@ AVAILABLE 3D WORLD & ENVIRONMENT OPTIONS (sceneSpec.world):
   world: { biome: 'forest' } alone is enough — OmniStage fills sky, terrain, props, water and outdoor lighting; add fields only to change them.
 - features (real animated water, never fake it with VFX beams): [{ id, type: 'waterfall' | 'river' | 'pond', position: [x, 0, z], rotationDeg?, size? }].
   Keep them 6+ m from the stage centre, e.g. a waterfall behind the actors at [0, 0, -15] (its cliff faces +z), a river at [-9, 0, 4].
+- hdri: { url, name, source, showBackground, intensity, format? } image sky + lighting; format 'image' for a generated 360° skybox
+  picture (JPEG/PNG equirect, e.g. Blockade Labs in My Library), default 'hdr'. Only reuse urls the user or library gave you.
 
 AVAILABLE LIGHTING STUDIO PRESETS:
 ${lightingSummary}
@@ -190,6 +213,12 @@ AUTHORING & SPATIAL DESIGN RULES:
 8. 2D Spritesheets & Particles: a Node2D with imageUrl may add spriteSheet { frameWidth, frameHeight, columns, frameCount, fps, clips?: { idle|run|jump: { start, end } } }.
    Node2D type 'particle-emitter' needs emitter { preset: 'sparkle' | 'confetti' | 'fire' | 'smoke' | 'rain' | 'snow' | 'pixel-burst' | 'magic-trail', seed?, rate?, color? };
    width/height is the emission area (use 1000x600 centred at 500,300 for rain/snow).
+   Custom recipes (data only, optional): when no built-in fits, add sceneSpec.particleLibrary = { "slug-id": { rate 0.1-400, life 0.1-10,
+   speed [min,max], angle [deg,deg], gravity, size [min,max], shape 'circle'|'rect'|'line'|'pixel'|'star', colors ['#hex', ≤8],
+   alpha?, fade?, shrink?, grow?, additive?, spread? 0-1, area?, drift?, spin?, burst? seconds } } and/or sceneSpec.sfxLibrary =
+   { "slug-id": { wave 'square'|'sine'|'triangle'|'sawtooth'|'noise', dur 0.05-4, vol 0-1, f0?, f1? Hz, notes? [≤16 Hz], step?, lp0?, lp1?, attack? 0-4 } }.
+   Ids are lower-case slugs that differ from every built-in preset name; at most 24 per library. Reference them by id
+   (emitter.preset: "slug-id", sound cues sfx: "slug-id"). Out-of-range values are clamped by the verifier.
 9. Captions: sceneSpec.captions = [{ start, end, text, position: 'bottom'|'top'|'center', style: 'subtitle'|'title' }] inside 0..durationSeconds, ≤ 12 words each.
 10. Playability: OmniStage runs a deterministic verifier on your output. 2D platformer step-up between platform tops must stay <= 125px and gaps <= 300px,
    every collectible must be reachable, gameRules.targetScore must be <= the points available, and 3D collectibles must stay within x/z ±5.5.
@@ -197,7 +226,8 @@ AUTHORING & SPATIAL DESIGN RULES:
    - actors[].performance = timed steps applied from the actor's position: { time, clip?, moveTo?: [x,0,z], duration?, arriveClip?,
      lookAt?: actorId | [x,y,z], faceDeg?, animation?, speed?, label? }. While moving without a clip the actor walks (or runs when fast)
      and faces where it walks; afterwards it plays arriveClip (default Idle). Use only clips listed in the asset's embeddedClips
-     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump). The hero needs >= 3 different actions per scene.
+     (e.g. robot: Sitting, Standing, Walking, Wave, Dance, ThumbsUp, Yes, No, Jump; OmniRig-rigged characters: humanoid / quadruped Idle, Walking,
+     Running; bird Idle, Walking, Flying, Gliding, Peck; serpent Idle, Walking (slither), Running, Attack). The hero needs >= 3 different actions per scene.
    - camera.shots = [{ start, end?, type: 'establishing'|'wide'|'medium'|'close-up'|'over-shoulder'|'low-angle'|'high-angle'|'tracking',
      subject?: actorId (whose face we see), partner?: actorId (over-shoulder only: the camera looks over THIS actor's shoulder at the
      subject — "over the robot's shoulder at the fox" = { subject: fox, partner: robot }), angle?: 'front'|'three-quarter-left'|'three-quarter-right'|'left'|'right'|'back',
@@ -207,7 +237,8 @@ AUTHORING & SPATIAL DESIGN RULES:
 12. SOUND (media mode — a silent film feels unfinished): sceneSpec.soundtrack = {
      music: { mood: 'calm'|'happy'|'playful'|'adventure'|'epic'|'tense'|'sad'|'mysterious'|'none', volume? },
      ambience: { type: 'auto' (follows the biome / water / weather) | 'forest'|'meadow'|'beach'|'river'|'waterfall'|'rain'|'wind'|'night'|'city'|'cave'|'space'|'none' },
-     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }] }.
+     cues: [{ time, sfx: 'whoosh'|'chime'|'splash'|'footstep'|'pop'|'coin'|'jump'|'hit'|'powerup'|'explosion'|'laser'|'win'|'lose'|'click', volume? }],
+     footsteps?: false }. Footsteps are generated from every moveTo walk (synced to the stride) — do not add footstep cues for walks.
    Everything is synthesised (no audio URLs). Pick the mood from the beat, keep the same mood across consecutive shots of one sequence
    (the music then continues across the cut), and put cues on the script's actions (a splash when someone reaches the water, a whoosh on a fast move).
 13. DIALOGUE (media mode — characters speak; voice, captions and talk motion are generated from it):
@@ -216,8 +247,13 @@ AUTHORING & SPATIAL DESIGN RULES:
    leave ~0.4 s between lines and never two lines at once; the last line must end before durationSeconds. The listener is who the speaker
    turns to. Do not also put dialogue text in captions (dialogue shows as captions automatically). Optional actors[].voice =
    { engine?: 'piper'|'babble', pitch?: -8..8 (small creatures +3..+5, big ones -3) } — each character a different pitch.
+14. SHADER EFFECTS (3D actors; data only — never write shader code): actors[].shaderEffect = { preset: 'hologram'|'dissolve'|'toon'|
+   'forcefield'|'lava'|'rainbow', color?: '#rrggbb', intensity?: 0..3 (1), speed?: 0..5 (1), progress?: 0..1 (dissolve only),
+   progressTween?: { from, to, start, duration } (seconds; dissolve-in = from 1 to 0, dissolve-out = from 0 to 1) }.
+   Use sparingly (a ghost / AI projection = hologram, a shield = forcefield, a magic vanish = dissolve, a stylised hero = toon).
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
+${STATE_MACHINE_PROMPT_SECTION}
 
 ${EXECUTION_REPAIR_PROMPT_SECTION}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}

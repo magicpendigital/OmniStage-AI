@@ -23,6 +23,8 @@ paths:
   `tests/storyBible.test.ts` when you add a story rule. After changing storyboard prompts or the pipeline run `npm run eval:film`
   (offline baseline; live with `--server`) and compare with the previous run; keep `tests/filmEval.test.ts` green.
 - Skills are prompt text only (`DirectorSkill.guidance`). Never let a skill carry executable code or URLs to fetch.
+- AI-authored `particleLibrary` / `sfxLibrary` recipes are data checked by `recipe.invalid` with the same sanitizers extensions use
+  (`sanitizeParticleRecipe` / `sanitizeSfxRecipe` in `src/extensions/validate.ts`); add new recipe fields there, not in the verifier.
 - Built-in skills live in `BUILTIN_DIRECTOR_SKILLS`; learned skills are user data in localStorage (`omnistage-learned-director-skills`).
 - Verifier rules must be deterministic, pure and covered in `tests/sceneVerifier.test.ts`. Mark an issue `fixable` only when
   `applyFix` really repairs it, and check for false positives against `SCENE_TEMPLATES` and the offline storyboard generator.

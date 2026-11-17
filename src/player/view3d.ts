@@ -5,6 +5,8 @@
  * water, clouds, GPU weather / VFX / bursts, scatter props, procedural composite actors and their motion. This file only
  * adds what the studio gets from R3F/drei: GLB loading + skeletal clips, HDRI, camera modes and the frame loop.
  */
+import { RigPoseInput, RigPoseLayer, rigPoseInputFor } from '../render3d/rigPose';
+import { ActorShaderEffect } from '../render3d/shaderEffects';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
@@ -28,6 +30,7 @@ import { createActorBadge, createBurst, createVfx } from '../render3d/vfx3d';
 import type { Built3D, FrameContext } from '../render3d/types';
 import type { ActorNode, SceneSpec, VFXNode } from '../types/scene.schema';
 import type { InputManager } from './input';
+import { effectivePixelRatio, QualitySettings } from '../runtime/deviceProfiles';
 
 /** low = phones (DPR 1, no shadows, cheap water); high = default; ultra = high + bloom (studio "Ultra"). */
 export type QualityLevel = 'low' | 'high' | 'ultra';
@@ -46,8 +49,13 @@ interface ActorView {
   badge?: Built3D<THREE.Sprite>;
   badgeText?: string;
   clickPulse: number;
+  /** Phase 9: head look-at + foot IK on the loaded skeleton (after the mixer). */
+  pose?: RigPoseLayer;
+  poseInput?: RigPoseInput;
   /** Phase 10C: current talk level (inspect / tests). */
   talk?: number;
+  /** Phase 6 Batch 3: actor.shaderEffect (shared builder, same as the studio). */
+  fx?: ActorShaderEffect;
 }
 
 const compositeKeyFor = (a: ActorNode, taps: number) => [a.assetId, a.primaryColor, a.secondaryColor, a.metalness, a.roughness, taps].join('|');
@@ -92,12 +100,15 @@ export class View3D {
   private clock = 0;
   private ro: ResizeObserver;
   private bloom?: PostFx;
+  /** Phase 8 app builds: live quality (pixel ratio, shadows, particles, post FX) from the adaptive governor. */
+  private settings: QualitySettings | null = null;
+  private contactPart?: Built3D;
 
   /** Phase 7: 'webgpu' when a shared WebGPURenderer was handed in (its custom parts come from the node backend). */
   readonly backend: 'webgl' | 'webgpu';
   private ownsRenderer: boolean;
 
-  constructor(private parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string, quality: QualityLevel, sharedRenderer?: THREE.WebGLRenderer) {
+  constructor(private parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string, quality: QualityLevel, sharedRenderer?: THREE.WebGLRenderer, settings?: QualitySettings) {
     this.backend = sharedRenderer ? 'webgpu' : 'webgl';
     this.ownsRenderer = !sharedRenderer;
     this.renderer = sharedRenderer || new THREE.WebGLRenderer({ antialias: quality !== 'low', alpha: false, powerPreference: 'high-performance' });
@@ -117,19 +128,55 @@ export class View3D {
     this.canvas.addEventListener('pointerdown', this.onPointer);
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(parent);
+    if (settings) this.applySettings(settings);
     this.resize();
+  }
+
+  /** Phase 8: change quality while running (app builds only; ad exports and frame-stepped capture never call it). */
+  applySettings(settings: QualitySettings) {
+    this.settings = { ...settings };
+    this.renderer.setPixelRatio(effectivePixelRatio(window.devicePixelRatio || 1, settings));
+    this.resize();
+    this.applyShadows();
+  }
+
+  /** Shadow maps are toggled per light (castShadow), so lights built with shadows can switch them back on. */
+  private applyShadows() {
+    const s = this.settings;
+    if (!s) return;
+    if (this.contactPart) this.contactPart.object.visible = s.shadows === 'full';
+    if (!this.renderer.shadowMap.enabled) return;
+    this.world.traverse((o: any) => {
+      if (!o.isLight || !o.shadow) return;
+      if (o.userData.omniCastShadow === undefined) o.userData.omniCastShadow = o.castShadow;
+      o.castShadow = s.shadows !== 'off' && o.userData.omniCastShadow;
+    });
+  }
+
+  /** Draw only a share of every particle system (GPU points) when the governor asks for fewer particles. */
+  private applyParticles() {
+    const scale = this.settings?.particleScale ?? 1;
+    const visit = (o: any) => {
+      if (!o.isPoints || !o.geometry?.attributes?.position) return;
+      const count = scale >= 1 ? Infinity : Math.ceil(o.geometry.attributes.position.count * scale);
+      if (o.geometry.drawRange.count !== count) o.geometry.setDrawRange(0, count);
+    };
+    this.fxGroup.traverse(visit);
+    this.world.traverse(visit);
   }
 
   /** Phase 10A: live actor poses + camera (E2E tests / debugging). */
   inspect() {
-    const actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number }> = {};
-    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip, talk: v.talk || 0 };
+    const actors: Record<string, { position: number[]; yaw: number; clip?: string; talk: number; fx: number }> = {};
+    for (const [id, v] of this.actors) actors[id] = { position: v.root.position.toArray(), yaw: v.root.rotation.y, clip: v.activeClip, talk: v.talk || 0, fx: v.fx?.meshCount ?? 0 };
     // Phase 10B: named world parts (water landmarks, scatter layers) for E2E checks.
     const world: string[] = [];
     this.world.traverse((o) => {
       if (/^(WaterFeature|ScatterLayer|GPU)-/.test(o.name)) world.push(o.name + (o.type === 'Sprite' ? ':sprite' : ''));
     });
-    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world, backend: this.backend };
+    const q = this.settings;
+    const quality = { pixelRatio: this.renderer.getPixelRatio(), shadows: q ? q.shadows : this.renderer.shadowMap.enabled ? 'full' : 'off', particleScale: q?.particleScale ?? 1, postFx: !!this.bloom && (q?.postFx ?? true) };
+    return { actors, camera: { position: this.camera.position.toArray(), fov: this.camera.fov }, world, backend: this.backend, quality };
   }
 
   /** Re-reads the frame size (ResizeObserver does it automatically; headless capture calls it directly). */
@@ -155,24 +202,29 @@ export class View3D {
     if (env.reflectivePedestal) parts.push(createPedestal(env));
     if (env.groundGrid) parts.push(createGroundGrid(env));
     parts.push(createAmbientDust(env));
-    if (this.quality !== 'low') parts.push(createContactShadows({ scale: 16, far: 5, opacity: 0.55, blur: 2 }));
+    this.contactPart = this.quality !== 'low' ? createContactShadows({ scale: 16, far: 5, opacity: 0.55, blur: 2 }) : undefined;
+    if (this.contactPart) parts.push(this.contactPart);
     const w = spec.world;
     const hdri = w?.hdri?.url ? w.hdri : undefined;
     if (w) parts.push(createWorld(w, { quality: this.quality === 'low' ? 'low' : 'high', reflectionSize: this.quality !== 'low' ? 512 : 256, hdriBackground: Boolean(hdri?.showBackground) }));
     for (const part of parts) this.world.add(part.object);
     this.worldParts = parts;
+    this.applyShadows();
     this.loadHdri(hdri);
   }
 
   /** HDRI image lighting (studio uses drei <Environment>); embedded as a data URI when it fits the budget. */
-  private loadHdri(hdri: { url: string; intensity?: number; showBackground?: boolean } | undefined) {
+  private loadHdri(hdri: { url: string; intensity?: number; showBackground?: boolean; format?: 'hdr' | 'image' } | undefined) {
     this.hdriTexture?.dispose();
     this.hdriTexture = undefined;
     if (!hdri) return;
     const sceneId = this.sceneId;
-    trackLoad(new RGBELoader().loadAsync(this.resolveUrl(hdri.url))).then((tex) => {
+    // format 'image' = an 8-bit equirectangular picture (generated skybox); otherwise Radiance .hdr.
+    const loading: Promise<THREE.Texture> = hdri.format === 'image' ? new THREE.TextureLoader().loadAsync(this.resolveUrl(hdri.url)) : new RGBELoader().loadAsync(this.resolveUrl(hdri.url));
+    trackLoad(loading).then((tex) => {
       if (this.sceneId !== sceneId) return tex.dispose();
       tex.mapping = THREE.EquirectangularReflectionMapping;
+      if (hdri.format === 'image') tex.colorSpace = THREE.SRGBColorSpace;
       this.hdriTexture = tex;
       this.scene.environment = tex;
       this.scene.environmentIntensity = hdri.intensity ?? 1;
@@ -221,6 +273,8 @@ export class View3D {
               model.scale.setScalar(entry?.defaultScale ?? 1);
               anim.add(model);
               target.hasRig = true;
+              const layer = new RigPoseLayer(model);
+              if (layer.hasHead || layer.hasLegs) target.pose = layer;
               const clips: THREE.AnimationClip[] = (source as any).animations || [];
               if (clips.length) {
                 target.mixer = new THREE.AnimationMixer(model);
@@ -265,6 +319,7 @@ export class View3D {
         }
         view.mixer.timeScale = actor.animationSpeed ?? 1;
       }
+      if (view.pose) view.poseInput = rigPoseInputFor(baseActor, actor, spec, time);
       // Procedural motion + click pulse: the studio ActorRenderer's exact maths (src/render3d/actorMotion).
       const motion = actorMotion(actor, spec.mode, time, view.hasRig, view.clickPulse, this.clock);
       view.talk = actor.talkLevel || 0;
@@ -273,12 +328,14 @@ export class View3D {
       a.position.set(damp(a.position.x, motion.offset[0], 10, dt), damp(a.position.y, motion.offset[1], 10, dt), damp(a.position.z, motion.offset[2], 10, dt));
       a.rotation.set(damp(a.rotation.x, motion.rotation[0], 10, dt), damp(a.rotation.y, motion.rotation[1], 10, dt), damp(a.rotation.z, motion.rotation[2], 10, dt));
       a.scale.setScalar(damp(a.scale.x, motion.scale, 10, dt));
+      if (actor.shaderEffect || view.fx) (view.fx ??= new ActorShaderEffect(view.anim)).update(actor.shaderEffect, { time });
     }
     for (const id of [...this.actors.keys()]) if (!live.has(id)) this.removeActor(id);
   }
 
   private setComposite(view: ActorView, next: THREE.Object3D | undefined) {
     if (view.composite) {
+      view.fx?.release(view.composite);
       view.anim.remove(view.composite);
       disposeObject(view.composite);
     }
@@ -295,6 +352,7 @@ export class View3D {
     const view = this.actors.get(id);
     if (!view) return;
     this.actorsGroup.remove(view.root);
+    view.fx?.dispose();
     this.setComposite(view, undefined);
     view.badge?.dispose();
     view.mixer?.stopAllAction();
@@ -496,11 +554,15 @@ export class View3D {
     this.syncActors(state.sceneSpec, state.currentTime, dt);
     this.syncVfx(state.sceneSpec.vfx || [], state.sceneSpec, ctx, state.isPlaying);
     this.syncBursts(state.burstEffects as any, ctx);
-    for (const view of this.actors.values()) view.mixer?.update(dt);
+    for (const view of this.actors.values()) {
+      view.mixer?.update(dt);
+      if (view.pose && view.poseInput) view.pose.apply(view.poseInput);
+    }
     for (const part of this.worldParts) part.update?.(ctx);
     this.updateCamera(state.sceneSpec, state.currentTime, sceneChanged);
+    if (this.settings) this.applyParticles();
     for (const part of this.worldParts) part.prerender?.(this.renderer, this.scene);
-    if (this.bloom) this.bloom.render(dt);
+    if (this.bloom && (this.settings?.postFx ?? true)) this.bloom.render(dt);
     else this.renderer.render(this.scene, this.camera);
   }
 

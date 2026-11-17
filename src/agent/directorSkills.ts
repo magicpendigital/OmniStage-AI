@@ -79,7 +79,8 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
   big reveal or victory 'epic'; loss 'sad'; magic or night secrets 'mysterious'. Keep one mood across consecutive shots of a sequence
   so the score flows over the cuts; change it only when the story turns.
 - ambience.type 'auto' matches the place (biome, waterfall, river, rain, night); name one only to override (e.g. 'cave', 'space').
-- cues land on the action, from the script: footstep when a walk starts, splash at the water, whoosh on fast moves / camera whips,
+- footsteps follow every walk automatically (soundtrack.footsteps: false only for silent feet) — never add footstep cues for walks.
+- cues land on the action, from the script: splash at the water, whoosh on fast moves / camera whips,
   pop or chime when something appears, powerup / win on a triumph, hit on a fall. 2-5 cues per 10 s; never stack two within 0.3 s.
 - Keep music.volume 0.4-0.6 under dialogue-heavy captions; 0.7 for montage.`,
   },
@@ -162,6 +163,42 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Pair every scoring action with a sound AND a visual (sparkles/confetti VFX or bouncing animation).
 - Use 'powerup' for rare high-value collectibles, 'whoosh' for scene-start in fast-paced games.
 - 2D: place a small 'particle-emitter' (preset 'sparkle') on high-value collectibles and 'confetti' near the goal; use 'fire'/'smoke' for hazards.`,
+  },
+  {
+    id: 'custom-vfx-recipes',
+    title: 'Custom VFX & SFX recipes',
+    description: 'Author bespoke particle and synth-sound recipes as data when the built-in presets do not fit.',
+    triggers: ['vfx', 'particle', 'particles', 'hạt', 'hiệu ứng', 'effect', 'sfx', 'âm thanh', 'tiếng', 'sound', 'juice', 'custom', 'magic', 'phép'],
+    engine: 'any',
+    mode: 'any',
+    source: 'builtin',
+    guidance: `CUSTOM VFX / SFX RECIPES (data only, never code):
+- Prefer built-in presets; add a recipe only for a look or sound they cannot give (e.g. a green poison puff, a rising arcade arpeggio).
+- Particles: sceneSpec.particleLibrary["poison-puff"] = { rate: 40, life: 1.2, speed: [20, 60], angle: [250, 290], gravity: -30,
+  size: [6, 14], shape: "circle", colors: ["#7CFC00", "#2E8B57"], fade: true, grow: true, alpha: 0.8 }; then emitter.preset = "poison-puff".
+  One-shot bursts: add burst (seconds) and a high rate; use additive: true for glows, shape "star"/"pixel" for arcade sparkle.
+- Sounds: sceneSpec.sfxLibrary["arp-up"] = { wave: "square", dur: 0.4, vol: 0.5, notes: [523, 659, 784, 1047], step: 0.08 };
+  sweeps use f0 → f1, noise + lp0 → lp1 for impacts and whooshes. Reference by id in audio.cues or soundtrack cues.
+- Slug ids (lower-case, dashes), never a built-in preset name, ≤ 24 recipes per library, ≤ 8 colours, ≤ 16 notes, dur ≤ 4 s.
+- Keep palettes consistent with the scene's art direction and keep loud sounds (vol > 0.7) for rare moments.`,
+  },
+  {
+    id: 'behaviour-state-machines',
+    title: 'Enemy & NPC behaviour',
+    description: 'Patrol / chase / attack enemies, reactive NPCs and doors as declarative state machines.',
+    triggers: ['enemy', 'enemies', 'patrol', 'chase', 'guard', 'npc', 'ai', 'behaviour', 'behavior', 'door', 'boss', 'quái', 'kẻ địch', 'tuần tra', 'đuổi', 'cửa', 'lính gác'],
+    engine: 'any',
+    mode: 'game',
+    source: 'builtin',
+    guidance: `BEHAVIOUR STATE MACHINES (actors[].stateMachine / nodes2D[].stateMachine, game mode):
+- One machine per character that acts on its own; 2-5 states with verbs as names (patrol, chase, attack, return, idle, wave, open).
+- Enemies: patrol (2-4 waypoints inside the arena) → chase-player when player-near 2.5-4 m (2D: 150-250 px) → attack on collided (Attack clip,
+  add-score negative or add-health, play-sfx 'hit') → back to chase after a 0.8-1.5 s timer → return-home when player-far, then patrol on arrived.
+- Make the chase slower than the player (3D ≤ 2.6 m/s, 2D ≤ 220 px/s) so it is escapable; always give a way out of every state.
+- NPCs: idle (move 'stay') ↔ wave/talk on player-near / player-far with a gap (near 2.5, far 4) so they do not flicker.
+- Doors / gates: closed → opening (timer 0.5-1 s, sfx 'click') → open (set-visible false or move-to) driven by score-at-least, signal or clicked.
+- Coordinate several machines with send-signal / signal (an alarm guard wakes the others). Use random { chance, every } for idle variety.
+- Use only clips the actor has (availableClips); leave clip unset to get Walk/Run/Idle automatically.`,
   },
 ];
 

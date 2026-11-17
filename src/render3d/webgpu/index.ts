@@ -22,6 +22,7 @@ import type { Built3D, FrameContext } from '../types';
 import type { GpuParticleOptions } from '../gpuParticles';
 import { PARTICLE_KINDS } from '../gpuParticles';
 import { DEFAULT_BLOOM } from '../postfx';
+import { shaderFx } from './shaderEffects';
 
 const TAU = 6.283185;
 
@@ -264,7 +265,7 @@ function bloom(renderer: unknown, scene: THREE.Scene, camera: THREE.Camera, opts
   };
 }
 
-export const webgpuBackend: NodeBackend = { name: 'webgpu', sky, water, grid, particles, studioEnvironment, bloom };
+export const webgpuBackend: NodeBackend = { name: 'webgpu', sky, water, grid, particles, studioEnvironment, bloom, shaderFx };
 
 /**
  * A WebGPU renderer, or null when this device has no WebGPU adapter (the caller keeps WebGL). The renderer is ready to

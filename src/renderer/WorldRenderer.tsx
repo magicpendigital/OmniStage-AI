@@ -4,6 +4,8 @@
  * Each part rebuilds only when its own slice of WorldSpec changes. HDRI lighting stays on drei's <Environment>.
  */
 import React, { Suspense } from 'react';
+import * as THREE from 'three';
+import { useLoader } from '@react-three/fiber';
 import { Environment } from '@react-three/drei';
 import { useStudioStore } from '../state/useStudioStore';
 import { DEFAULT_WORLD_SPEC } from '../registry/assetRegistry';
@@ -14,6 +16,14 @@ import { createWaterFeature } from '../render3d/waterFeatures';
 import { Built } from './Built';
 
 export { computeTerrainHeight } from '../runtime/world';
+
+/** An 8-bit equirectangular picture (generated skybox) as environment + background; .hdr files use drei's loader. */
+const ImageEnvironment: React.FC<{ url: string; background: boolean; intensity: number }> = ({ url, background, intensity }) => {
+  const tex = useLoader(THREE.TextureLoader, url);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return <Environment map={tex} background={background} environmentIntensity={intensity} backgroundIntensity={intensity} />;
+};
 
 export const WorldRenderer: React.FC = () => {
   const world = useStudioStore((s) => s.sceneSpec.world) ?? DEFAULT_WORLD_SPEC;
@@ -31,8 +41,12 @@ export const WorldRenderer: React.FC = () => {
       {/* External HDRI image-based lighting (Poly Haven via /api/assets proxy). */}
       {hdri && (
         <Suspense fallback={null}>
-          <Environment key={hdri.url} files={hdri.url} background={hdriBackground}
-            environmentIntensity={hdri.intensity ?? 1} backgroundIntensity={hdri.intensity ?? 1} />
+          {hdri.format === 'image' ? (
+            <ImageEnvironment key={hdri.url} url={hdri.url} background={hdriBackground} intensity={hdri.intensity ?? 1} />
+          ) : (
+            <Environment key={hdri.url} files={hdri.url} background={hdriBackground}
+              environmentIntensity={hdri.intensity ?? 1} backgroundIntensity={hdri.intensity ?? 1} />
+          )}
         </Suspense>
       )}
       {world.skybox !== 'studio-hdri' && !hdriBackground && (

@@ -199,14 +199,32 @@ so that moves to the front.
     (SwiftShader has no WebGPU adapter, so the default E2E run skips them).
   - Not yet: WebGPU in the studio viewport (R3F async renderer); contact shadows as a node pass.
 
-### Phase 8 — Mobile native (Android first, then iOS)
-- [ ] **PWA export** (manifest, service worker, offline cache, install prompt) for instant phone distribution.
-- [ ] **Android**: generate a Capacitor project (target API 36+), debug APK for sideload testing, signed AAB for Google Play; keystore wizard.
-- [ ] **iOS**: Capacitor Xcode project; build on a Mac or via a cloud build (Codemagic / Capawesome / Capgo, user's own account); TestFlight upload.
-- [ ] **Native capability plugins** (as Extensions): haptics, persistent saves, Game Center / Play Games leaderboards & achievements,
-  in-app purchases, ads SDK, push — also what keeps apps above Apple guideline 4.2 "minimum functionality".
-- [ ] **Store assistant**: icon/splash generation, screenshots from the Player, privacy/data-safety checklist, version & signing checks.
-- [ ] Mobile verifier rules: touch-reachable UI, text size, performance budget per profile, orientation lock.
+### Phase 8 — Mobile native (Android first, then iOS) — v1 done 2026-11-14
+Publish → "Mobile App" tab (`src/components/MobileExportPanel.tsx`, pure builders in `src/exporter/mobileExport.ts`, tests in
+`tests/mobileExport.test.ts`).
+- [x] **PWA export**: zip with `index.html` (Player), `manifest.webmanifest` (fullscreen, orientation, maskable icon), `sw.js`
+  (cache-first, versioned cache per appId/version/build), icons. Service worker registers only over http(s).
+- [x] **Android**: Capacitor 8 project zip (`www/`, `capacitor.config.json`, `resources/` for `@capacitor/assets`),
+  `scripts/configure-native.mjs` sets SDK 36, versionCode/versionName, orientation and a release signingConfig read from
+  `keystore.properties` (git-ignored; passwords never on the command line). `npm run android:debug` / `android:release` (AAB).
+- [x] **iOS**: same project, `npx cap add ios` on a Mac, or `codemagic.yaml` (user's own Codemagic account) for TestFlight.
+- [x] **Native capabilities v1**: haptics, persistent saves (best score, cleared levels, resume level — `src/runtime/progress.ts`),
+  pause/resume on app background (`src/player/native.ts`, Capacitor plugins with web fallbacks; only active in app builds).
+- [ ] Deferred: Game Center / Play Games leaderboards, in-app purchases, ads SDK, push — each needs store accounts, SDK keys and
+  policy review per app; listed as "later" in the panel.
+- [x] **Store assistant**: icons 192/512/maskable/1024 and 2732 splash from the stage, store screenshots (1290×2796),
+  data-safety report + privacy policy draft, checklist (identity, orientation, offline, SDK 36, signing, closed testing 12×14 days).
+- [x] Mobile verifier rules (`verifySceneSpec(spec, { target: 'mobile' })`): `mobile.text-small`, `mobile.touch-target`,
+  `mobile.edge-ui` (fixable), `mobile.heavy-scene`, `mobile.keyboard-only` (warnings). Orientation is a checklist item.
+- [x] Rig cost in the mobile budget (2026-11-16): OmniRig characters carry `actors[].rigCost` (bones, skinned vertices, texture size)
+  measured on placement; `mobile.rig-cost` warns above 150k skinned vertices, 12 rigged actors, 100 bones or 2048 px textures.
+- [x] Per-device performance profiles — machinery (2026-11-16): low / mid / high tiers as data (`src/runtime/deviceProfiles.ts`;
+  `mid` = `MOBILE_REFERENCE`), `verifySceneSpec(spec, { target: 'mobile', deviceTier })` (same rule ids; particle budget under
+  `mobile.heavy-scene`). App builds detect the tier (cores, memory, GPU string, screen) and run an adaptive governor
+  (`src/runtime/qualityGovernor.ts`: bloom → pixel ratio → shadows → particles, hysteresis + oscillation lock); never in ad
+  exports or frame-stepped capture. Hidden overlay (5 taps top-left / `?omniPerf=1`), `__omniPlayer.perf()`, report saved
+  under `omnistage.perf.<appId>`. Guide: `docs/mobile-performance.md`.
+- [ ] Measure the tier budgets on real phones and fill in the table in `docs/mobile-performance.md`; 2D quality steps.
 
 ### Phase 9 — Character pipeline "OmniRig" (auto-rig + animation) — v1 done 2026-11-13
 Order check (2026-11-13): Phase 9 before Phase 8 has no conflict — both only need the shared Player (Phase 7) and the library /
@@ -238,11 +256,36 @@ vertices, texture size of OmniRig characters).
   prefixes stripped), clips retargeted with `retargetClip` (+ rest-direction matching for A-pose vs T-pose), hips motion scaled and
   kept in place; Walking / Running … replace the generated clips. Checked: Soldier.glb → 22/22 bones, 4 clips.
 
+- [x] (2026-11-16) Pose layer after the clips (`src/render3d/rigPose.ts`, studio + Player): head look-at (neck 40 % / head 60 %,
+  yaw ±70°, pitch ±30°, eased weight) driven by `gazeAt` in `src/runtime/cinematics.ts` (speaker ↔ listener during a line, else the
+  latest `lookAt` step until the next walk); foot IK on terrain (two-bone legs, feet follow the ground under them, pelvis drops for
+  the lower foot, steps over 0.6 m ignored, only while the actor stands on the terrain). Bones the mixer does not drive are reset
+  first, so nothing accumulates. Tests: `tests/rigPose.test.ts`.
+
 **Not yet**
 - [ ] Vision-LLM classification / scoring of rendered views; MediaPipe landmarks for arms-down (I-pose) characters.
-- [ ] Foot IK on terrain, look-at, spring bones, LLM state machine JSON; FBX clip import (now GLB only).
-- [ ] Weight painting; bird / serpent templates; finger bones.
-- [ ] Provider / ML plugins: Meshy rig + animation, Tripo rig + retarget (BYO keys); UniRig / Puppeteer via an optional local GPU ML server.
+- [x] Spring bones (2026-11-16): tail / hair / ear / cape chains swing from the root's past acceleration (damped spring as a
+  convolution, so scrubbing and frame-stepped exports match); films only, in `RigPoseLayer`.
+- [x] FBX clip import (2026-11-16): OmniRig "Import clips" accepts Mixamo `.fbx` (FBXLoader) as well as `.glb`; not yet checked
+  against a real Mixamo download.
+- [x] LLM state machine JSON (2026-11-16): `actors[].stateMachine` / `nodes2D[].stateMachine` = states with moves (patrol, chase,
+  flee, move-to, return-home), closed-list conditions and actions; interpreted by `src/runtime/stateMachine.ts` (studio, Play Test,
+  Player; seeded, game mode only); verifier `machine.*` (auto-fixed), prompt + `behaviour-state-machines` skill, inspector badge.
+- [ ] Weight painting.
+- [x] Bird / serpent templates (2026-11-16): `bird` = thin wings spread wide at mid height + legs (spine, neck, head, 3-bone
+  wings, 2 legs, tail; clips Idle / Walking / Running / Flying / Gliding / Peck; stress poses wings up / down, peck); `serpent` =
+  long and low, normalised to 2 m long (10–16 spine bones + head + jaw; travelling-wave slither Idle / Walking / Running + Attack;
+  coil / S-curve / rear up). Both auto-detected or picked in OmniRig; samples grade A on the synthetic meshes.
+- [x] Finger bones (2026-11-16): open hands with separated fingers get Mixamo chains (`mixamorigLeftHandIndex1..4` …, thumb
+  included) from a 2D distance transform of the hand in the palm plane; weights stay on one finger per vertex; clips curl the
+  fingers; Mixamo finger tracks retarget. Mitten / touching / curled fingers keep one hand bone with a warning. Not yet checked
+  on real models.
+- [x] Provider plugins (2026-11-16): Meshy rig + animation (`meshy-rig-animator`: rigging → animations with Animation Library
+  action ids) and Tripo rig + retarget (`tripo-rig-animator`: v3 upload → rig → retarget presets, biped + quadruped), BYO keys.
+  The source is a GLB from My Library; the result's clips are renamed to Idle / Walking / Running… (`server/generate/glb.ts`)
+  so `matchClipName` and the AI drive them; placing it registers a `gltf-rigged` entry with those clips. Mocked HTTP only —
+  not yet run against the real APIs.
+- [ ] UniRig / Puppeteer via an optional local GPU ML server.
 
 ### Phase 10 — Media Production (analysis: `docs/research/media-production-upgrade.md`)
 Why AI films feel flat: SceneSpec cannot express acting over time, multiple shots, dialogue or a soundtrack; the video export has no audio;
@@ -292,7 +335,9 @@ the verifier only checks playability. Fix in layers: contract → production too
     `soundtrack.invalid`, `world.biome-invalid`, `world.feature-invalid`, `world.feature-on-stage` (all auto-fixed).
   - UI: World tab → Film Soundtrack panel, Biome & Water section; Publish → MP4 is frame-perfect with a Soundtrack switch.
   - Tests: `tests/soundtrack.test.ts`, `tests/biomes.test.ts`, E2E waterfall-valley film in the exported Player.
-  - Not yet: dialogue / TTS (10C); footsteps synced to walk cycles; lighting presets per biome are a patch, not a full outdoor rig.
+  - Not yet: dialogue / TTS (10C); lighting presets per biome are a patch, not a full outdoor rig.
+  - [x] Footsteps synced to walk cycles (2026-11-16): `src/audio/footsteps.ts` lands a step every half stride actually travelled
+    (runs faster and louder), mixed into the film soundtrack; `soundtrack.footsteps: false` turns them off.
 - [x] **10C (done 2026-11-13)** Dialogue:
   - `sceneSpec.dialogue[]` = { time, speaker, text, emotion?, listener? } + `actors[].voice` { engine piper | babble, voiceId, pitch, rate }.
     `src/audio/voices.ts` (pure) times lines, writes captions (speaker-prefixed when several talk), drives talk levels and mixes the voice
@@ -339,8 +384,12 @@ the verifier only checks playability. Fix in layers: contract → production too
     short licence line and `meta.licence` { provider, tool, model, voiceId, prompt, generatedAt, terms, note }. SFX / music
     generator in Settings saves to the library and adds an audio track.
   - Tests: `tests/directorQA.test.ts`.
-  - Not done: Blockade skybox, Meshy animation; a manual "Director QA" button for existing scenes (today it runs inside storyboard
-    generation); a real vision-model run on a generated film.
+  - (2026-11-16) Manual "Director QA" button (AI drawer header + command bar) for any 3D scene with keyframes; runs even when
+    automatic Director QA is off, asks for a vision connection otherwise; the result is undoable like an AI turn.
+  - (2026-11-16) Blockade Labs skybox generator (`blockade-skybox-generator`): prompt → equirect JPG in My Library → "Use as
+    sky" sets `world.hdri` with the new `format: 'image'` (studio TextureLoader + drei Environment map; Player TextureLoader);
+    verifier `world.hdri-invalid`. Meshy animation: see Phase 9 provider plugins. Mocked HTTP only.
+  - Not done: a real vision-model run on a generated film; real-key runs of Blockade / Meshy / Tripo rig.
 
 ### Phase 11 — Film quality & traction (analysis: `docs/research/film-quality-and-commercialization.md`)
 Why films feel boring and disjointed: every scene is authored alone, there is no story plan to measure against, and nothing tracks
@@ -397,12 +446,32 @@ quality between pipeline changes. Fix: write the story first, then a number that
   `x-generate-key`, or env `MESHY_API_KEY` / `TRIPO_API_KEY` / `FAL_KEY` / `REPLICATE_API_TOKEN`), never stored or logged.
   Results land in My Library (personal or project) with source, licence and prompt; "Generate with AI" in My Library → Place.
   Tests: `tests/generate.test.ts`.
-- [ ] Remaining generators: Rodin (3D), OpenRouter images, audio (ElevenLabs SFX / music / TTS); image-to-3D; sprite sheets
-  (multi-frame) and rigging generated characters with OmniRig.
-- [ ] VFX & animation by code as AI skills: AI-authored particle/SFX recipes (available now via extensions), GLSL shader effects in a
-  validated sandbox, procedural tween/sprite animation, all reviewable and installable.
+- [x] Remaining generators (2026-11-14): `rodin-3d-generator` (Hyper3D Rodin Gen-2.5, multipart create → status → download; its
+  CDN is undocumented so results may come from any public https host via `ANY_PUBLIC_HOST`, key never sent there),
+  `openrouter-image-generator` (sprite / sprite sheet / backdrop, one-shot base64) and `elevenlabs-audio-generator` (SFX + music,
+  binary MP3, licence record). One-shot providers run as background "sync" jobs. Image-to-3D (Meshy v1 image-to-3d, Rodin
+  images) reads the picture from My Library (`imageAssetId`, ≤ 15 MB, sniffed PNG/JPEG/WebP). Multi-frame sprite sheets
+  (`frames` 2–8: fal, OpenRouter) save `meta.spriteSheet` and play animated when placed. Generated models get a Rig button that
+  opens OmniRig with the model loaded. OpenRouter / ElevenLabs reuse the keys already saved in Settings. TTS stays in the existing
+  dialogue voice pipeline (not a library generator).
+- [x] AI-authored particle/SFX recipes (2026-11-14): the director may write `particleLibrary` / `sfxLibrary` recipes itself
+  (prompt section + `custom-vfx-recipes` skill); shared sanitizers in `src/extensions/validate.ts`; verifier rule `recipe.invalid`
+  (fixable: clamp, drop renamed built-ins / junk, max 24). Procedural tween + sprite-sheet animation already ship as data.
+- [x] Shader effects as a FIXED set of parameterised, reviewed presets (never generated shader code — invariant 1):
+  `actors[].shaderEffect = { preset: hologram|dissolve|toon|forcefield|lava|rainbow, color?, intensity? 0..3, speed? 0..5, progress? 0..1,
+  progressTween? }`. Pure params in `src/runtime/shaderEffects.ts`; shared builder `ActorShaderEffect` (`src/render3d/shaderEffects.ts`,
+  onBeforeCompile material twins, works on skinned GLTF + composites, clock = timeline time × speed) with its TSL twin in
+  `src/render3d/webgpu/shaderEffects.ts`; verifier rule `actor.shader-effect-invalid` (fixable), prompt rule 14, normaliser, inspector
+  control; WebGL e2e + WebGPU parity scene.
 
 ### Later
-- [ ] Desktop packaging for non-coders (Electron; bundles the local server + CLI support); Playwright E2E; Rapier3D + lightweight ECS.
-- [ ] Exporter plugins beyond the web runtime (e.g. SceneSpec → Godot project) for heavy 3D games, consoles and Steam.
-- [ ] Deterministic video (WebCodecs) with audio; NodeGraphView passive `onWheel` fix.
+- [x] Desktop packaging (2026-11-16): `desktop/` Electron app runs the bundled server (`npm run build:server`) on 127.0.0.1, adds
+  the AI CLI install dirs to PATH, Help → Diagnostics; NSIS + portable built on Windows (unsigned); dmg / AppImage configured,
+  not built. Docs: `docs/desktop.md`. Playwright E2E was done in Phase 7C.
+- [ ] Rapier3D + lightweight ECS.
+- [x] SceneSpec → Godot 4 project (2026-11-16): `src/exporter/godotExport.ts` (Publish → Godot 4 project): tscn scenes, fixed
+  GDScript templates for score / win-lose / movement / scene links, logic graph compiled to rule data; everything not converted
+  (VFX, audio, cinematics, state machines, shader effects…) is listed as warnings + `OMNISTAGE_EXPORT_NOTES.md`. Not yet opened
+  in a real Godot (the headless check runs when `godot` / `GODOT_BIN` is available).
+- [ ] Further exporter plugins (consoles, Steam).
+- [x] Deterministic video (WebCodecs) with audio — done in 10B; NodeGraphView wheel zoom uses a non-passive listener (2026-11-16).

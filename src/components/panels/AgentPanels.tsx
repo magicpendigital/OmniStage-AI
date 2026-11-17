@@ -1,6 +1,8 @@
 import React from 'react';
 import { CheckCircle2, Trash2, Wand2 } from 'lucide-react';
 import { useStudioStore } from '../../state/useStudioStore';
+import { StateMachineBadge } from '../StateMachineBadge';
+import { ShaderEffectControl } from './ShaderEffectControl';
 import {
   ActorClickAction,
   AnimationType,
@@ -215,6 +217,10 @@ export const ActorInspectorPanel: React.FC = () => {
             </div>
           </div>
 
+          {selectedActor.stateMachine && (
+            <StateMachineBadge id={selectedActor.id} machine={selectedActor.stateMachine} />
+          )}
+
           {selectedActor.availableClips && selectedActor.availableClips.length > 0 && (
             <div className="space-y-1">
               <span className="text-[11px] font-mono text-emerald-400">
@@ -258,6 +264,11 @@ export const ActorInspectorPanel: React.FC = () => {
               )}
             </select>
           </div>
+
+          <ShaderEffectControl
+            actor={selectedActor}
+            onChange={(shaderEffect) => updateActorProperty(selectedActor.id, { shaderEffect })}
+          />
 
           <div className="space-y-1">
             <span className="text-[11px] font-mono text-slate-400">
