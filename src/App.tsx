@@ -16,6 +16,7 @@ import { ExtensionReviewDialog } from './components/ExtensionReviewDialog';
 import { PlayTestModal } from './components/PlayTestModal';
 import { FullPreviewOverlay } from './components/FullPreviewOverlay';
 import { GuideModal } from './components/GuideModal';
+import { WritersRoomModal } from './components/WritersRoomModal';
 import { WelcomeTour } from './components/WelcomeTour';
 import { useStudioStore } from './state/useStudioStore';
 import { useProjectAutosave } from './workspace/useProjectAutosave';
@@ -68,6 +69,7 @@ export default function App() {
       <PlayTestModal />
       <FullPreviewOverlay />
       <GuideModal />
+      <WritersRoomModal />
       <WelcomeTour />
     </div>
   );

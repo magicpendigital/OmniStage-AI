@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   sketchfabApiToken: '',
   generationKeys: {},
   directorQA: true,
+  writersRoomReview: true,
   directorQAThreshold: 70,
   elevenLabsApiKey: '',
   elevenLabsModel: '',

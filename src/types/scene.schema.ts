@@ -707,6 +707,110 @@ export interface TimelineTrack {
 
 export type StoryboardKind = 'film' | 'game-levels' | 'ad-sequence';
 
+// ----------------------------------------------------------------------------
+// Phase 11A — Story Bible: the writers' room output every scene of a film is authored against
+// ----------------------------------------------------------------------------
+
+/** Short-story shapes the writer picks from (see STORY_TEMPLATES in src/agent/storyBible.ts). */
+export type StoryTemplateId = 'visual-gag' | 'mini-journey' | 'meet-cute' | 'reveal-twist' | 'story-ad';
+
+export interface StoryCharacter {
+  /** Stable actor id the scenes must use for this character (e.g. "hero"). */
+  actorId: string;
+  /** ASSET_REGISTRY id of the rig that plays this character. */
+  assetId: string;
+  name: string;
+  /** What the character is trying to get (drives every scene it is in). */
+  want: string;
+  /** What goes wrong for it: its flaw / what it fears. */
+  flaw: string;
+  /** How it talks and moves, in a few words ("shy, whispers, tiny steps"). */
+  manner: string;
+  /** The gesture the audience will remember, in plain words. */
+  signatureGesture: string;
+  /** Exact clip of the rig that performs the gesture (checked against the asset's clips). */
+  signatureClip?: string;
+  /** Voice pitch offset (-8..8) so characters sound different. */
+  pitch?: number;
+  /** Phase 11B: what the character looks like, written as a prompt for a 3D character generator (English, <= 300 chars). */
+  look?: string;
+  /**
+   * Phase 11B: set once a generated model (e.g. Meshy) replaced the stock rig. `clips` are the animation names that model can
+   * perform (the writer and the lint use them instead of ASSET_REGISTRY); `modelUrl` is where the studio loads it from.
+   */
+  generated?: { provider: string; clips: string[]; modelUrl?: string; libraryAssetId?: string };
+}
+
+/** Phase 11B: a spoken line sketched by the dialogue writer (the scene author turns it into timed dialogue). */
+export interface StoryLine {
+  /** actorId of a bible character. */
+  speaker: string;
+  text: string;
+  emotion?: string;
+}
+
+/** Phase 11B: a set piece worth a real model (not a primitive). */
+export interface StoryProp {
+  id: string;
+  name: string;
+  /** Prompt for a 3D generator, English, <= 300 chars. */
+  look: string;
+  /** Scenes (1-based) the prop appears in. */
+  scenes: number[];
+  /** Set once a generated model replaced the placeholder. */
+  generated?: { provider: string; modelUrl?: string; libraryAssetId?: string };
+}
+
+export interface StoryBibleBeat {
+  /** 1-based scene number this beat belongs to. */
+  scene: number;
+  /** What changes for the hero in this scene. */
+  purpose: string;
+  /** What stands in the way. */
+  conflict: string;
+  emotionStart: string;
+  emotionEnd: string;
+  /** The image / question / turn the scene ends on (pulls the viewer into the next scene). */
+  endsOn: string;
+  /** Phase 11B (world desk): where this scene happens, in a sentence. */
+  setting?: string;
+  /** Phase 11B: one of BIOME_IDS the set is dressed with. */
+  biome?: string;
+  /** Phase 11B: ids of `bible.props` that appear here. */
+  props?: string[];
+  /** Phase 11B (dialogue desk): the lines of this scene (0-4). */
+  lines?: StoryLine[];
+}
+
+/** A planted object / line that must come back (setup → payoff). */
+export interface StoryMotif {
+  what: string;
+  setupScene: number;
+  payoffScene: number;
+}
+
+export interface StoryBible {
+  template?: StoryTemplateId;
+  logline: string;
+  theme: string;
+  tone: string;
+  /** What the viewer sees in the first seconds that makes them stay. */
+  hook: string;
+  /** Second of the film the hook lands (must be <= 3). */
+  hookSeconds: number;
+  /** What is lost if the hero fails. */
+  stakes: string;
+  /** The reversal around the middle of the film. */
+  turn: string;
+  /** The final image that pays everything off. */
+  payoff: string;
+  characters: StoryCharacter[];
+  beats: StoryBibleBeat[];
+  motifs?: StoryMotif[];
+  /** Phase 11B (world desk): props that deserve their own model. */
+  props?: StoryProp[];
+}
+
 /** Links a scene into an ordered storyboard (film shots or game levels). */
 export interface SceneSequenceMeta {
   storyboardId: string;
@@ -722,6 +826,8 @@ export interface SceneSequenceMeta {
   transition?: SceneTransition;
   /** Phase 10A: short script of this shot (screenwriter step), kept for continuity and editing. */
   script?: string;
+  /** Phase 11A: the film's story bible (same object on every scene of the storyboard). */
+  bible?: StoryBible;
 }
 
 export interface StoryboardBeat {
@@ -742,6 +848,8 @@ export interface StoryboardPlan {
   kind: StoryboardKind;
   engineType: EngineType;
   beats: StoryboardBeat[];
+  /** Phase 11A: story bible the beats were written from (films and ads). */
+  bible?: StoryBible;
 }
 
 export interface SceneSpec {
@@ -945,6 +1053,8 @@ export interface SettingsConfig {
    * Shots scoring under `directorQAThreshold` (default 70) get one extra patch round driven by the director's notes.
    */
   directorQA?: boolean;
+  /** Phase 11B: open the Writers' Room (read, edit and approve the story) before a film or ad is produced. Default on. */
+  writersRoomReview?: boolean;
   directorQAThreshold?: number;
   /**
    * Phase 10D: paid production tools, bring your own key. Kept in this browser's localStorage, sent only to the local

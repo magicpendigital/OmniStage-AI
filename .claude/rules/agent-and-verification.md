@@ -18,6 +18,10 @@ paths:
 - Media craft (Phase 10A): film quality hints are verifier *warnings* listed in `MEDIA_CRAFT_CODES`; the patch loop treats them as work
   through `qualityPenalty` (storyboard polish rounds), never as errors. Generated actors keep their ids (shots / lookAt reference them).
   Keep `tests/cinematics.test.ts` green, including its composition checks.
+- Story Bible (Phase 11A, `src/agent/storyBible.ts`): films/ads are written bible-first (draft → lint → one revise round → offline fallback);
+  the server builds the prompts from structured input, never from client prompt strings. Add a lint code + test in
+  `tests/storyBible.test.ts` when you add a story rule. After changing storyboard prompts or the pipeline run `npm run eval:film`
+  (offline baseline; live with `--server`) and compare with the previous run; keep `tests/filmEval.test.ts` green.
 - Skills are prompt text only (`DirectorSkill.guidance`). Never let a skill carry executable code or URLs to fetch.
 - Built-in skills live in `BUILTIN_DIRECTOR_SKILLS`; learned skills are user data in localStorage (`omnistage-learned-director-skills`).
 - Verifier rules must be deterministic, pure and covered in `tests/sceneVerifier.test.ts`. Mark an issue `fixable` only when
@@ -28,3 +32,7 @@ paths:
   `x-ai-fallback` chain. Keep 503 only for "no connection configured" so the offline director still takes over; keep
   `/api/ai/test` on `{ fallback: false }`; keep `tests/aiProviders.test.ts` green.
 - API keys arrive via headers (`x-ai-key`, `x-polypizza-key`, ...) or env; never log them or put them in SceneSpec.
+- Writers' Room (Phase 11B, `src/agent/writersRoom.ts`): the showrunner and continuity desks are rules, never AI; a writer desk may only
+  write its own fields (`mergeDeskOutput`); `POST /api/agent/storyboard/room` builds prompts from `RoomAskRequest`, never from client
+  text; a failed desk falls back to the offline template and is marked `local`; abort must propagate. Keep `tests/writersRoom.test.ts`
+  green. Generated models reach scenes only through `applyBibleToScene` (stand-in rig stays the `assetId`).

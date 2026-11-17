@@ -108,6 +108,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   ],
   isAgentThinking: false,
   storyboardJob: null,
+  writersRoom: null,
   isVisionRunning: false,
   latestVisionReport: null,
 

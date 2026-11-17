@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { HardDrive, Loader2, Plus, Trash2, Upload } from 'lucide-react';
+import { HardDrive, Loader2, Minimize2, Plus, Trash2, Upload } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { LibraryAsset, workspaceApi } from '../workspace/workspaceClient';
 import { GeneratePanel } from './GeneratePanel';
+import { DEFAULT_TEXTURE_SIZE, formatBytes, optimizeLibraryModel } from '../workspace/optimizeLibraryGlb';
+
+/** Models bigger than this get a "shrink textures" action (generated characters ship 4K textures). */
+const HEAVY_MODEL_BYTES = 3 * 1024 * 1024;
 
 /**
  * Phase 6 — "My Library": personal assets on this computer (shared by every project) and the open project's
@@ -16,6 +20,8 @@ export const PersonalLibraryPanel: React.FC = () => {
   const [assets, setAssets] = useState<LibraryAsset[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [shrinking, setShrinking] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const scopeKey = scope === 'project' && activeProject ? `project:${activeProject.id}` : 'personal';
@@ -59,6 +65,24 @@ export const PersonalLibraryPanel: React.FC = () => {
     else setError(`${a.kind} assets can't be placed in a scene yet`);
   };
 
+  const shrink = async (a: LibraryAsset) => {
+    setShrinking(a.id);
+    setError(null);
+    setNote(null);
+    try {
+      const r = await optimizeLibraryModel(scopeKey, a, DEFAULT_TEXTURE_SIZE);
+      if (!r) setNote(`${a.name}: textures are already small, nothing to shrink.`);
+      else {
+        setNote(`${a.name}: ${formatBytes(r.bytesBefore)} → ${formatBytes(r.bytesAfter)}. Saved as a new asset; the original is kept.`);
+        await reload();
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Could not shrink the textures');
+    } finally {
+      setShrinking(null);
+    }
+  };
+
   const remove = async (a: LibraryAsset) => {
     if (!window.confirm(`Delete "${a.name}" from the library? Scenes that use it will lose the file.`)) return;
     await workspaceApi.deleteAsset(scopeKey, a.id);
@@ -82,6 +106,7 @@ export const PersonalLibraryPanel: React.FC = () => {
         {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />} Add files (.glb, .png, .svg, .mp3…)
       </button>
       {error && <p className="text-rose-300 text-[11px]">{error}</p>}
+      {note && <p className="text-emerald-300 text-[11px]" data-testid="library-note">{note}</p>}
       {assets.length === 0 ? (
         <p className="text-[11px] text-slate-500">Empty. Files you add here are reusable in every {scope === 'personal' ? 'project' : 'game of this project'}.</p>
       ) : (
@@ -97,6 +122,11 @@ export const PersonalLibraryPanel: React.FC = () => {
                 <div className="text-[11px] text-slate-200 truncate">{a.name}</div>
                 <div className="text-[9px] text-slate-500 font-mono">{a.source} · {(a.size / 1024).toFixed(0)} KB{a.license ? ` · ${a.license}` : ''}</div>
               </div>
+              {a.kind === 'model' && a.size > HEAVY_MODEL_BYTES && (
+                <button type="button" onClick={() => shrink(a)} disabled={shrinking !== null} aria-label={`Shrink textures of ${a.name}`} title={`Shrink textures to ${DEFAULT_TEXTURE_SIZE}px (keeps the original)`} className="p-1 text-amber-300 hover:text-amber-100 disabled:opacity-40">
+                  {shrinking === a.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Minimize2 className="w-3.5 h-3.5" />}
+                </button>
+              )}
               <button type="button" onClick={() => place(a)} aria-label={`Place ${a.name}`} className="p-1 text-cyan-300 hover:text-cyan-100"><Plus className="w-3.5 h-3.5" /></button>
               <button type="button" onClick={() => remove(a)} aria-label={`Delete ${a.name}`} className="p-1 text-slate-500 hover:text-rose-300"><Trash2 className="w-3 h-3" /></button>
             </div>

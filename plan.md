@@ -342,6 +342,52 @@ the verifier only checks playability. Fix in layers: contract → production too
   - Not done: Blockade skybox, Meshy animation; a manual "Director QA" button for existing scenes (today it runs inside storyboard
     generation); a real vision-model run on a generated film.
 
+### Phase 11 — Film quality & traction (analysis: `docs/research/film-quality-and-commercialization.md`)
+Why films feel boring and disjointed: every scene is authored alone, there is no story plan to measure against, and nothing tracks
+quality between pipeline changes. Fix: write the story first, then a number that proves the film got better.
+- [x] **11A (done 2026-11-16)** Story Bible + film eval:
+  - `StoryBible` (`scene.schema.ts`, optional on `sequence.bible` and `StoryboardPlan`): logline, theme, tone, 3 s hook, stakes, turn,
+    payoff, cast (want / flaw / manner / signature gesture + clip / voice pitch) and one beat per scene (purpose, conflict, emotion
+    start→end, ending pull), plus motifs (setup → payoff). Five templates: visual-gag, mini-journey, meet-cute, reveal-twist, story-ad.
+  - `src/agent/storyBible.ts` (pure): writers' room = draft → sanitize → autoFix (structure only) → lint rubric (score = 100 − 15·errors
+    − 6·warnings, pass 80) → ONE revise round with the findings → offline fallback when the score is under 40. Cast inventory comes from
+    `ASSET_REGISTRY` (real embedded clips) so the writer only plans gestures a rig can perform (`strictClipMatch`: no silent Idle).
+  - `POST /api/agent/storyboard/bible` (prompts built on the server from a structured `{draft, findings}`); the plan and every scene
+    request carry the bible; scenes inherit voice pitch; the continuity summary now includes earlier dialogue. Game levels skip it.
+    Offline mode attaches no bible (a placeholder story would not match the offline scenes).
+  - `src/agent/filmEval.ts`: deterministic 0-100 score from the SceneSpecs (story 20, hook 8, acting 18, camera 14, sound 8, dialogue 6,
+    continuity 16, technical 10; without a bible story is capped). `npm run eval:film` runs `eval/golden-prompts.json` (10 prompts),
+    offline or live (`--server http://localhost:3000 --provider cli-claude`), saves to `output/eval/` and shows the change vs the last run.
+  - Offline baseline (2026-11-16): mean 70, 0/10 prompts ≥ 80. Weakest: story 25 (no bible offline), continuity 54, dialogue 59.
+  - Tests: `tests/storyBible.test.ts`, `tests/filmEval.test.ts`.
+  - Not done: a live-AI eval run (needs a connection); showing the bible in the studio UI / letting the user edit it; Director QA and
+    contact sheets inside the eval; real transitions (today overlays only) and cross-scene character continuity (the next P0).
+- [x] **11B (done 2026-11-17, not yet run live)** Writers' Room + Meshy characters:
+  - `src/agent/writersRoom.ts` (pure) + `writersRoomPrompts.ts` + `POST /api/agent/storyboard/room`: the MCA model applied to the script.
+    Showrunner (rules, plans and asks at most 2 questions, never writes) → architect → character ∥ world → dialogue → continuity
+    (rules, no AI) → editor (AI critique + 11A rubric, on a different connection when a fallback exists) → one fix round routed to
+    the desk that owns each finding. Each desk may only write its own fields; locked desks are approved text; failed desks fall back to
+    the offline template (marked). Score = 0.6 rubric/continuity + 0.4 editor, pass mark 80. The server builds prompts from a structured
+    `RoomAskRequest`; the client never sends prompt text.
+  - UI: `WritersRoomModal` (teams, desk status, edit anything, lock, note + revise, "Ask the editor again", Produce / Skip). Film and ad
+    prompts open the room first; Settings → AI → "Writers' Room" turns it off. The approved bible skips `writeStoryBible`.
+  - Meshy: `server/generate/meshy*.ts` drives the user's own pinned `meshy-cli@0.4.0` session (device login, no credentials read,
+    estimate then `confirm:true`, preview → remesh to 30k triangles → retexture → rig → walking/running clips merged by `glbMerge.ts`; the first live run showed text-to-3d output is 1.2M triangles and Meshy rigs at most 380k, hence the remesh) into the asset library
+    (`/api/meshy/*`, loopback). `MeshyCastPanel` (character desk): connect, see cost, tick the agreement, generate. A generated model is
+    stored as `StoryCharacter.generated`; scenes are written on the stand-in rig and `applyBibleToScene` swaps the model and maps clips.
+  - Tests: `tests/writersRoom.test.ts`, `tests/meshyCli.test.ts` (fake CLI), model swap in `tests/storyBible.test.ts`.
+  - Not done / unverified: no live run of the AI desks or of Meshy (the CLI shapes are assumed from its docs; `npm run meshy:smoke`
+    validates them, `--yes` spends credits); the UI was type-checked, not exercised in a browser; props with generated models are not
+    placed in scenes yet (only characters are swapped); exported playables must embed the `/api/library/file/...` model (not checked).
+  - GLB size (2026-11-17): the first live Meshy character was 25 MB (3 JPEG textures = 22.5 MB, 4K). `src/utils/glbOptimize.ts` (pure,
+    codec injected, `tests/glbOptimize.test.ts`) re-packs the GLB with textures capped at 1024 px; geometry, skin and clips are copied
+    byte for byte. `glbTextureCodec.ts` uses the browser (createImageBitmap + OffscreenCanvas), so no image library is needed
+    (installing `jpeg-js`/`pngjs` for a server-side version was declined). My Library shows a "shrink textures" button on models over
+    3 MB; the Meshy panel shrinks right after a generation. The original is always kept. Measured: 23.9 MB -> 2.8 MB, same 30,704
+    triangles, 24 joints, 3 clips. The Meshy-panel auto-shrink path was not run live (it needs a paid generation); the same function
+    ran from the library button.
+  - Comics / interactive comics analysis: `docs/research/comic-interactive-comic-fit.md` (recommendation: storyboard grid view first).
+
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`
   (text → GLB; Meshy preview → PBR refine), `fal-sprite-generator` (FLUX schnell + background cut-out → transparent PNG) and

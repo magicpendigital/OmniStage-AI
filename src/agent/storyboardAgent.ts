@@ -33,6 +33,7 @@ import {
   SettingsConfig,
   SkyboxPreset,
   SoundtrackSpec,
+  StoryBible,
   StoryboardBeat,
   StoryboardKind,
   StoryboardPlan,
@@ -45,6 +46,7 @@ import { autoFixSceneSpec } from '../verification/sceneVerifier';
 import { aiHeaders } from './aiClient';
 import { describeDirectorReview } from './directorQA';
 import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
+import { applyBibleToScene, formatBibleSummary, lintStoryBible, writeStoryBible } from './storyBible';
 
 export const MIN_STORYBOARD_SCENES = 2;
 export const MAX_STORYBOARD_SCENES = 8;
@@ -64,6 +66,8 @@ export interface StoryboardProgress {
 
 export interface StoryboardGenerationCallbacks {
   onPlan?: (plan: StoryboardPlan, source: 'gemini' | 'local') => void;
+  /** Phase 11A: the story editor finished (AI bible only; the offline generator has no bible). */
+  onBible?: (bible: StoryBible, score: number) => void;
   onProgress?: (progress: StoryboardProgress) => void;
   /** Called as soon as each scene is ready, in order, so the UI can show scenes appearing live. */
   onScene?: (scene: SceneSpec, index: number, source: 'gemini' | 'local') => void;
@@ -73,6 +77,9 @@ export interface StoryboardGenerationResult {
   storyboardId: string;
   plan: StoryboardPlan;
   scenes: SceneSpec[];
+  /** Phase 11A: the bible every scene was written against (undefined offline and for game levels). */
+  bible?: StoryBible;
+  bibleScore?: number;
   assistantMessage: string;
   diffSummary: string[];
   source: 'gemini' | 'local' | 'mixed';
@@ -981,6 +988,8 @@ function summarizeSceneForContinuity(spec: SceneSpec) {
         endsAt: last?.position.map((v) => Number(v.toFixed(1))), endsDoing: last?.clip };
     }),
     script: spec.sequence?.script,
+    // Phase 11A: what was already said, so the next scene answers it instead of repeating or contradicting it.
+    dialogue: spec.dialogue?.length ? spec.dialogue.map((l) => `${l.speaker}${l.emotion ? ` (${l.emotion})` : ''}: ${l.text}`) : undefined,
     nodes2D: spec.engineType === '2d' ? { count: spec.nodes2D.length, palette: Array.from(new Set(spec.nodes2D.map((n) => n.stroke))).slice(0, 4) } : undefined,
     gameRules: spec.mode === 'game' ? { targetScore: spec.gameRules.targetScore, timeLimitSeconds: spec.gameRules.timeLimitSeconds } : undefined,
   };
@@ -1078,10 +1087,43 @@ export async function generateStoryboardWithAgent(
   intent: StoryboardIntent,
   settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'aiFallbackEnabled' | 'aiFallbackOrder' | 'directorQA' | 'directorQAThreshold'>,
   callbacks: StoryboardGenerationCallbacks = {},
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Phase 11B: a bible the Writers' Room already wrote and you approved: used as is, the story editor step is skipped. */
+  options: { bible?: StoryBible; bibleScore?: number } = {}
 ): Promise<StoryboardGenerationResult> {
   const storyboardId = uid('storyboard');
   const localPlan = buildLocalStoryboardPlan(prompt, intent);
+
+  // STEP 0.5 (Phase 11A): the story editor writes the story bible. Films and ads only; with no AI the offline generator
+  // keeps its own structure and the placeholder bible is discarded (it would not describe what the offline scenes show).
+  let bible: StoryBible | undefined;
+  let bibleScore: number | undefined;
+  const bibleNotes: string[] = [];
+  if (options.bible && intent.kind !== 'game-levels') {
+    bible = options.bible;
+    bibleScore = options.bibleScore;
+    bibleNotes.push('story approved in the Writers’ Room');
+    callbacks.onBible?.(bible, bibleScore ?? lintStoryBible(bible, intent.sceneCount).score);
+  } else if (intent.kind !== 'game-levels') {
+    callbacks.onProgress?.({ phase: 'planning', completed: 0, total: intent.sceneCount, label: 'Writing the story' });
+    const written = await writeStoryBible({
+      prompt,
+      intent,
+      ask: (req) =>
+        postJSON(
+          '/api/agent/storyboard/bible',
+          { prompt, intent, ...req, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+          signal,
+          aiHeaders(settings)
+        ),
+    });
+    bibleNotes.push(...written.notes);
+    if (written.source === 'ai') {
+      bible = written.bible;
+      bibleScore = written.lint.score;
+      callbacks.onBible?.(bible, bibleScore);
+    }
+  }
 
   // STEP 1: Plan
   callbacks.onProgress?.({ phase: 'planning', completed: 0, total: intent.sceneCount, label: 'Planning storyboard beats' });
@@ -1090,12 +1132,12 @@ export async function generateStoryboardWithAgent(
   try {
     const data = await postJSON(
       '/api/agent/storyboard/plan',
-      { prompt, intent, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+      { prompt, intent, bible, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
       signal,
       aiHeaders(settings)
     );
     if (isValidPlan(data, intent.sceneCount)) {
-      plan = sanitizePlan(data, intent, localPlan);
+      plan = { ...sanitizePlan(data, intent, localPlan), ...(bible ? { bible } : {}) };
       planSource = 'gemini';
     }
   } catch {
@@ -1127,6 +1169,7 @@ export async function generateStoryboardWithAgent(
             total: plan.beats.length,
             beat,
             previousScenes: scenes.map(summarizeSceneForContinuity),
+            bible,
             model: settings.geminiModel,
             customSystemPrompt: settings.customSystemPrompt,
           },
@@ -1134,7 +1177,7 @@ export async function generateStoryboardWithAgent(
           aiHeaders(settings)
         );
         if (data && data.sceneSpec && typeof data.sceneSpec === 'object') {
-          spec = normalizeGeneratedSceneSpec(data.sceneSpec, beat.engineType);
+          spec = applyBibleToScene(normalizeGeneratedSceneSpec(data.sceneSpec, beat.engineType), bible);
           source = 'gemini';
         }
       } catch {
@@ -1142,7 +1185,8 @@ export async function generateStoryboardWithAgent(
         geminiAvailable = false;
       }
     }
-    if (!spec) spec = buildLocalSceneForBeat(prompt, plan, i);
+    // The offline scene is written on the stand-in rigs; an approved bible still swaps in the models you generated.
+    if (!spec) spec = applyBibleToScene(buildLocalSceneForBeat(prompt, plan, i), bible);
     // Phase 4 verification loop: every generated level/shot must pass the deterministic verifier.
     spec = autoFixSceneSpec(spec).spec;
 
@@ -1159,6 +1203,7 @@ export async function generateStoryboardWithAgent(
       beat: beat.beat,
       ...(beat.transition && i > 0 ? { transition: beat.transition } : {}),
       ...(beat.script ? { script: beat.script } : {}),
+      ...(bible ? { bible } : {}),
     };
     // Phase 10A: AI film shots that still look static / empty get up to 2 polish rounds through the patch loop.
     if (source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && !signal?.aborted) {
@@ -1187,14 +1232,17 @@ export async function generateStoryboardWithAgent(
     storyboardId,
     plan,
     scenes,
+    ...(bible ? { bible, bibleScore } : {}),
     source,
-    assistantMessage: `Generated storyboard "${plan.storyboardTitle}" with ${scenes.length} ${unit}s (${
+    assistantMessage: `${bible ? `Story: ${bible.logline}
+
+` : ''}Generated storyboard "${plan.storyboardTitle}" with ${scenes.length} ${unit}s (${
       source === 'local' ? 'offline studio generator' : source === 'gemini' ? settings.aiProvider : `${settings.aiProvider} + offline fallback`
     }). ${
       plan.kind === 'game-levels'
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'
         : 'Scenes are linked in order — open the Scenes tab to review each shot.'
     }`,
-    diffSummary: [...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
+    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
   };
 }

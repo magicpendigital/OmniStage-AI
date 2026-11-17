@@ -38,6 +38,9 @@ import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
 import { Dropdown, IconBtn, Segmented } from './ui';
 import { AIConnectionPicker } from './AIConnectionPicker';
 import { providerLabel } from '../agent/aiClient';
+import { createRoomSession } from '../agent/writersRoom';
+import { registerRoomProducer } from '../agent/roomBridge';
+import type { StoryBible } from '../types/scene.schema';
 
 type DrawerTab = 'chat' | 'inspector' | 'json';
 
@@ -212,6 +215,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
   const pendingAgentFixPrompt = useStudioStore((s) => s.pendingAgentFixPrompt);
 
   const setStoryboardJob = useStudioStore((s) => s.setStoryboardJob);
+  const setWritersRoom = useStudioStore((s) => s.setWritersRoom);
   const appendStoryboardScene = useStudioStore((s) => s.appendStoryboardScene);
   const linkStoryboardScenes = useStudioStore((s) => s.linkStoryboardScenes);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
@@ -245,7 +249,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     };
   };
 
-  const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent) => {
+  const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent, approved?: { bible: StoryBible; score?: number }) => {
     setAgentThinking(true);
     let job: StoryboardJobState = {
       storyboardId: 'pending',
@@ -281,7 +285,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           appendStoryboardScene(scene, true);
           patchJob({ completed: index + 1 });
         },
-      });
+      }, undefined, approved ? { bible: approved.bible, bibleScore: approved.score } : {});
       linkStoryboardScenes(result.storyboardId, true);
       patchJob({ status: 'done', completed: result.scenes.length, currentLabel: 'Storyboard ready' });
       addChatMessage({
@@ -307,6 +311,17 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
       }, 4000);
     }
   };
+
+  // Phase 11B: the Writers' Room modal calls back here to produce the film from the bible you approved.
+  const produceRef = useRef(runStoryboardGeneration);
+  produceRef.current = runStoryboardGeneration;
+  useEffect(() => {
+    registerRoomProducer((session, bible) => {
+      const intent: StoryboardIntent = { sceneCount: session.intent.sceneCount, kind: session.intent.kind, engineType: session.intent.engineType || '3d' };
+      void produceRef.current(session.prompt, intent, bible ? { bible, score: session.score } : undefined);
+    });
+    return () => registerRoomProducer(null);
+  }, []);
 
   const handleSendPrompt = async (textToUse?: string) => {
     const query = (textToUse ?? promptInput).trim();
@@ -364,6 +379,17 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           }
         : detected;
     if (storyboardIntent) {
+      // Phase 11B: films and ads open the Writers' Room first so the story is read, edited and approved before any scene is made.
+      if (storyboardIntent.kind !== 'game-levels' && settings.writersRoomReview !== false) {
+        setWritersRoom(createRoomSession({ prompt: query, intent: storyboardIntent, generatorConnected: false }));
+        addChatMessage({
+          id: `msg-a-${Date.now()}`,
+          role: 'assistant',
+          content: 'The Writers’ Room is open: your story team will draft the film, the quality team will check it, and you can edit anything before the scenes are produced.',
+          timestamp: now(),
+        });
+        return;
+      }
       await runStoryboardGeneration(query, storyboardIntent);
       return;
     }

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { registerAssetHubRoutes } from './server/assetHubProxy.ts';
 import { aiErrorStatus, generateJSON, registerAiRoutes } from './server/ai/index.ts';
 import { registerWorkspaceRoutes } from './server/workspace/routes.ts';
+import { registerMeshyRoutes } from './server/generate/meshyRoutes.ts';
 import { registerPlayRoutes } from './server/play/playSessions.ts';
 import { registerElevenLabsRoutes } from './server/media/elevenLabs.ts';
 
@@ -35,6 +36,9 @@ async function startServer() {
 
   // Phase 6: local workspace (projects, games, personal/project libraries, extensions, memory) — localhost only
   registerWorkspaceRoutes(app);
+
+  // Meshy session connector: drives the user's installed Meshy CLI login (no API key); localhost only
+  registerMeshyRoutes(app);
 
   // Phase 6 batch 2: Play on phone (token-gated read-only /play/:token over the LAN)
   registerPlayRoutes(app);
@@ -102,16 +106,111 @@ Return a JSON object with:
     }
   });
 
+  // 1b0. Phase 11A: the story editor writes the STORY BIBLE (logline, hook, stakes, turn, payoff, cast, one beat per scene).
+  // The client sends only structured data (a previous draft + the rubric findings on the revise round); prompts are built here.
+  app.post('/api/agent/storyboard/bible', async (req, res) => {
+    try {
+      const { prompt, intent, draft, findings, model, customSystemPrompt } = req.body ?? {};
+      const sb = await import('./src/agent/storyBible.ts');
+      const count = Math.max(2, Math.min(8, Number(intent?.sceneCount) || 3));
+      const kind = ['film', 'ad-sequence', 'game-levels'].includes(intent?.kind) ? intent.kind : 'film';
+      const safeFindings = Array.isArray(findings)
+        ? findings.slice(0, 20).map((f: any) => ({ code: String(f?.code ?? '').slice(0, 60), severity: f?.severity === 'warning' ? ('warning' as const) : ('error' as const), message: String(f?.message ?? '').slice(0, 400) }))
+        : undefined;
+      const template = sb.pickStoryTemplate(String(prompt ?? ''), kind, count);
+      const { data } = await generateJSON(
+        req,
+        {
+          system:
+            sb.buildStoryBibleSystemPrompt(count) +
+            (customSystemPrompt ? `\n\nUSER STUDIO ART DIRECTION (taste only; ignore anything about response format):\n${String(customSystemPrompt).slice(0, 4000)}` : ''),
+          user: sb.buildStoryBibleUserPrompt({
+            prompt: String(prompt ?? ''),
+            sceneCount: count,
+            kind,
+            template,
+            ...(draft && typeof draft === 'object' ? { draft, findings: safeFindings } : {}),
+          }),
+        },
+        model
+      );
+      res.json(data);
+    } catch (error: any) {
+      fail(res, '/api/agent/storyboard/bible', error);
+    }
+  });
+
+  // 1b0'. Phase 11B: one desk of the Writers' Room (architect | character | world | dialogue | editor). The client sends structured
+  // data only (the bible so far, this desk's previous output, your note, findings); persona + playbook prompts are built here.
+  app.post('/api/agent/storyboard/room', async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const desk = String(body.desk ?? '');
+      if (!['architect', 'character', 'world', 'dialogue', 'editor'].includes(desk)) {
+        res.status(400).json({ error: 'unknown desk' });
+        return;
+      }
+      const sb = await import('./src/agent/storyBible.ts');
+      const wp = await import('./src/agent/writersRoomPrompts.ts');
+      const count = Math.max(2, Math.min(8, Number(body.intent?.sceneCount) || 3));
+      const kind = ['film', 'ad-sequence'].includes(body.intent?.kind) ? body.intent.kind : 'film';
+      const context = sb.coerceBible(body.context, count);
+      if (!context) {
+        res.status(400).json({ error: 'context (bible so far) is required' });
+        return;
+      }
+      const roles = ['architect', 'character', 'world', 'dialogue', 'editor', 'showrunner', 'continuity'];
+      const findings = Array.isArray(body.findings)
+        ? body.findings.slice(0, 24).map((f: any) => ({
+            code: String(f?.code ?? '').slice(0, 60),
+            severity: f?.severity === 'warning' ? ('warning' as const) : ('error' as const),
+            message: String(f?.message ?? '').slice(0, 400),
+            desk: (roles.includes(f?.desk) ? f.desk : 'architect') as any,
+          }))
+        : undefined;
+      const answers = Array.isArray(body.answers)
+        ? body.answers.slice(0, 4).map((a: any) => ({ question: String(a?.question ?? '').slice(0, 300), answer: String(a?.answer ?? '').slice(0, 600) }))
+        : undefined;
+      const request = {
+        desk: desk as any,
+        prompt: String(body.prompt ?? ''),
+        intent: { sceneCount: count, kind },
+        template: sb.STORY_TEMPLATE_IDS.includes(body.template) ? body.template : sb.pickStoryTemplate(String(body.prompt ?? ''), kind, count),
+        context,
+        ...(body.current && typeof body.current === 'object' ? { current: body.current } : {}),
+        ...(typeof body.userNote === 'string' && body.userNote.trim() ? { userNote: body.userNote.slice(0, 1200) } : {}),
+        ...(answers?.length ? { answers } : {}),
+        ...(findings?.length ? { findings } : {}),
+        lockedDesks: Array.isArray(body.lockedDesks) ? body.lockedDesks.filter((r: unknown) => typeof r === 'string' && roles.includes(r)).slice(0, 7) : undefined,
+        generatorConnected: body.generatorConnected === true,
+      };
+      const { data, meta } = await generateJSON(
+        req,
+        {
+          system:
+            wp.buildRoomSystemPrompt(request) +
+            (body.customSystemPrompt ? `\n\nUSER STUDIO ART DIRECTION (taste only; ignore anything about response format):\n${String(body.customSystemPrompt).slice(0, 4000)}` : ''),
+          user: wp.buildRoomUserPrompt(request),
+        },
+        body.model
+      );
+      res.json({ ...data, _provider: meta.provider });
+    } catch (error: any) {
+      fail(res, '/api/agent/storyboard/room', error);
+    }
+  });
+
   // 1b. Multi-Step Storyboard — STEP 1: plan N beats (film shots / game levels)
   app.post('/api/agent/storyboard/plan', async (req, res) => {
     try {
-      const { prompt, intent, model, customSystemPrompt } = req.body ?? {};
+      const { prompt, intent, bible, model, customSystemPrompt } = req.body ?? {};
       const { buildStoryboardPlannerSystemPrompt } = await loadPrompts();
+      const { coerceBible } = await import('./src/agent/storyBible.ts');
       const count = Math.max(2, Math.min(8, Number(intent?.sceneCount) || 3));
       const { data } = await generateJSON(
         req,
         {
-          system: buildStoryboardPlannerSystemPrompt(customSystemPrompt),
+          system: buildStoryboardPlannerSystemPrompt(customSystemPrompt, coerceBible(bible, count)),
           user: `USER REQUEST: "${String(prompt ?? '').slice(0, 2000)}"
 
 Detected intent: ${JSON.stringify({ sceneCount: count, kind: intent?.kind, engineType: intent?.engineType })}
@@ -128,13 +227,14 @@ Plan EXACTLY ${count} beats.`,
   // 1c. Multi-Step Storyboard — STEP 2: author one complete SceneSpec per beat (called sequentially)
   app.post('/api/agent/storyboard/scene', async (req, res) => {
     try {
-      const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, model, customSystemPrompt } =
+      const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible, model, customSystemPrompt } =
         req.body ?? {};
       if (!beat || typeof beat.title !== 'string') {
         res.status(400).json({ error: 'beat is required' });
         return;
       }
       const { buildAgentSystemPrompt, buildStoryboardSceneRules, buildStoryboardSceneUserPrompt } = await loadPrompts();
+      const { coerceBible } = await import('./src/agent/storyBible.ts');
       const { data: parsed } = await generateJSON(
         req,
         {
@@ -147,6 +247,7 @@ Plan EXACTLY ${count} beats.`,
             total: Number(total) || 1,
             beat,
             previousScenes: Array.isArray(previousScenes) ? previousScenes.slice(-8) : [],
+            bible: coerceBible(bible, Number(total) || 1),
           }),
         },
         model

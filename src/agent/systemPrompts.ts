@@ -5,6 +5,8 @@ import {
   VFX_PRESETS,
 } from '../registry/assetRegistry';
 import { PATCH_RESPONSE_FORMAT } from './patchLoop';
+import { buildStoryBiblePlannerSection, describeBibleForScene } from './storyBible';
+import type { StoryBible } from '../types/scene.schema';
 
 /**
  * Visual Logic Graph authoring contract (scene.logicGraph).
@@ -251,7 +253,7 @@ Return a JSON object containing:
 // MULTI-STEP STORYBOARD GENERATION (Plan -> Scene 1..N, sequential with continuity)
 // ============================================================================
 
-export function buildStoryboardPlannerSystemPrompt(customRules?: string): string {
+export function buildStoryboardPlannerSystemPrompt(customRules?: string, bible?: StoryBible): string {
   return `You are the OmniStage AI Storyboard Planner.
 Your job is STEP 1 of a multi-step pipeline: break the user's request into an ordered list of scenes
 (film shots / ad beats) or game levels. You do NOT author SceneSpec JSON in this step.
@@ -270,6 +272,7 @@ PLANNING RULES:
    Every scene needs a change: the hero starts doing one thing and ends doing another (wakes -> stands -> walks -> waves).
    Open the film with an establishing shot; use close-ups for emotion; vary shot sizes; 8-12 s per scene.
    "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic), "crossfade".
+${bible ? buildStoryBiblePlannerSection(bible) : ''}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY JSON:
 {
@@ -314,12 +317,14 @@ export function buildStoryboardSceneUserPrompt(params: {
   total: number;
   beat: { title: string; description: string; engineType: string; mode: string; beat: string; difficulty?: number };
   previousScenes: unknown[];
+  /** Phase 11A: the film's story bible; the scene is authored against it. */
+  bible?: StoryBible;
 }): string {
-  const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes } = params;
+  const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible } = params;
   return `ORIGINAL USER REQUEST: "${prompt}"
 
 STORYBOARD: "${storyboardTitle}" (${kind}) — authoring scene ${beatIndex + 1} of ${total}.
-
+${bible ? `\n${describeBibleForScene(bible, beatIndex, total)}\n` : ''}
 THIS SCENE'S BEAT:
 ${JSON.stringify(beat, null, 2)}
 

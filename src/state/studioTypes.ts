@@ -9,6 +9,7 @@ import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe }
 import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
 import type { StoreApi } from 'zustand';
 import { voiceClipAssets } from '../audio/voices';
+import type { WritersRoomSession } from '../agent/writersRoom';
 
 export interface FullPreviewState {
   order: string[];
@@ -245,6 +246,9 @@ export interface StudioState {
   // Multi-Scene Storyboard Generation (AI Director multi-step pipeline)
   storyboardJob: StoryboardJobState | null;
   setStoryboardJob: (job: StoryboardJobState | null) => void;
+  /** Phase 11B: the open Writers' Room session (null = closed). Updated by the room modal as desks finish. */
+  writersRoom: WritersRoomSession | null;
+  setWritersRoom: (session: WritersRoomSession | null | ((current: WritersRoomSession | null) => WritersRoomSession | null)) => void;
   appendStoryboardScene: (spec: SceneSpec, activate?: boolean) => void;
   linkStoryboardScenes: (storyboardId: string, activateFirst?: boolean) => void;
   advanceToNextScene: () => boolean;

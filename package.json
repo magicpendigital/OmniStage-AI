@@ -17,7 +17,9 @@
     "review:agent": "bash scripts/agent-review.sh",
     "build:player": "node scripts/build-player.mjs",
     "test:e2e": "node scripts/build-player.mjs && playwright test --project=default",
-    "test:e2e:gpu": "node scripts/build-player.mjs && playwright test --project=gpu"
+    "test:e2e:gpu": "node scripts/build-player.mjs && playwright test --project=gpu",
+    "eval:film": "tsx scripts/eval-film.ts",
+    "meshy:smoke": "tsx scripts/meshy-smoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",

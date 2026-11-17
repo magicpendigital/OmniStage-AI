@@ -214,6 +214,20 @@ export const AIProviderPanel: React.FC = () => {
         </div>
       </div>
 
+      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2" data-testid="writers-room-toggle">
+        <div className="flex items-center justify-between">
+          <label className="font-semibold text-slate-200">Writers’ Room</label>
+          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300">
+            <input type="checkbox" checked={settings.writersRoomReview !== false} onChange={(e) => updateSettings({ writersRoomReview: e.target.checked })} />
+            Review the story first
+          </label>
+        </div>
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          For films and ads, a team of writing desks (architect, character, world, dialogue, continuity, editor) drafts the story and
+          shows it to you before any scene is built, so you can edit, lock, or send notes. Turn off to let the Director write the story in one step.
+        </p>
+      </div>
+
       <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2" data-testid="ai-fallback-order">
         <div className="flex items-center justify-between">
           <label className="font-semibold text-slate-200">Fallback connections</label>

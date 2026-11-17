@@ -1,0 +1,15 @@
+{
+  "description": "Golden prompts for `npm run eval:film`. Keep this set stable so scores are comparable over time; add new prompts at the end. `shape` is the story shape each prompt is meant to exercise.",
+  "prompts": [
+    { "id": "robot-stream-vi", "shape": "mini-journey", "prompt": "Làm phim hoạt hình 3 cảnh: chú rô-bốt nhỏ sợ nước phải băng qua con suối để lấy lại chiếc pin của mình" },
+    { "id": "giftbox-gag-en", "shape": "visual-gag", "prompt": "A 3-scene silent comedy: a robot keeps failing to open a gift box while a fox watches and reacts" },
+    { "id": "friendship-forest-vi", "shape": "meet-cute", "prompt": "Phim 4 cảnh về tình bạn giữa chú rô-bốt và chú cáo trong khu rừng, từ lúc gặp nhau đến lúc cùng nhau vượt khó" },
+    { "id": "waterfall-mystery-en", "shape": "reveal-twist", "prompt": "A 4-scene mystery film: the robot finds a glowing object at the waterfall and slowly discovers what it really is" },
+    { "id": "water-ad-vi", "shape": "story-ad", "prompt": "Quảng cáo 3 cảnh cho nước uống Suối Xanh: nhân vật khát nước giữa sa mạc rồi tìm thấy chai nước" },
+    { "id": "lost-fox-vi", "shape": "mini-journey", "prompt": "Phim ngắn 5 cảnh: cáo con lạc đường trong rừng đêm và chú rô-bốt dẫn nó về nhà" },
+    { "id": "rain-dance-en", "shape": "mini-journey", "prompt": "A 3-scene film: a lonely robot learns to dance in the rain" },
+    { "id": "delivery-comedy-vi", "shape": "visual-gag", "prompt": "Phim hài 3 cảnh: chú rô-bốt đi giao hàng nhưng gặp đủ thứ rắc rối trên đường" },
+    { "id": "goodbye-beach-en", "shape": "meet-cute", "prompt": "A 2-scene short about a robot saying goodbye to its fox friend at the beach" },
+    { "id": "snow-treasure-vi", "shape": "reveal-twist", "prompt": "Phim 4 cảnh thám hiểm núi tuyết: rô-bốt và cáo cùng đi tìm kho báu" }
+  ]
+}
