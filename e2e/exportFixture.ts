@@ -17,13 +17,13 @@ export function template(id: string): SceneSpec {
   return cloneSceneSpec(spec);
 }
 
-export async function openExport(page: Page, spec: SceneSpec, opts: Partial<PlayerHtmlOptions> = {}) {
+export async function openExport(page: Page, spec: SceneSpec, opts: Partial<PlayerHtmlOptions> = {}, scenes: SceneSpec[] = [spec]) {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error' && !/favicon|GPU stall|WebGL warning/i.test(m.text())) errors.push(m.text());
   });
-  const html = generatePlayerHTML(spec, 'universal', [spec], {
+  const html = generatePlayerHTML(spec, 'universal', scenes, {
     playerRuntimeSource: PLAYER_RUNTIME,
     touchControls: false,
     sound: false,

@@ -1,4 +1,5 @@
 import { SceneSpec } from '../types/scene.schema';
+import { compositorTransition, drawSceneTransition } from '../runtime/transitionDraw';
 import { renderFilmSoundtrack } from '../audio/soundtrack';
 import { voiceClipAssets } from '../audio/voices';
 import { analyzePlayableBudget, buildZip, PlayableBudgetReport } from './playableBundle';
@@ -153,45 +154,9 @@ export interface MultiSceneRecordingProgress {
   phase: 'preparing' | 'recording' | 'transitioning' | 'finalizing' | 'completed';
 }
 
-export type CompositorTransition = 'none' | 'crossfade' | 'fade-to-black' | 'fade-white' | 'wipe';
-
-/** A scene's own transition (Phase 10A `sequence.transition`) mapped to the compositor's names; falls back to `fallback`. */
-export function compositorTransition(scene: SceneSpec, fallback: string): CompositorTransition {
-  const own = scene.sequence?.transition;
-  const t = own === 'cut' ? 'none' : own === 'fade' ? 'fade-to-black' : own || fallback;
-  return (['none', 'crossfade', 'fade-to-black', 'fade-white', 'wipe'].includes(t) ? t : 'fade-to-black') as CompositorTransition;
-}
-
-/** Draws the transition from the previous scene's last frame over the current frame. `progress` 0..1. */
-export function drawSceneTransition(
-  ctx: CanvasRenderingContext2D,
-  previous: CanvasImageSource,
-  kind: CompositorTransition,
-  progress: number,
-  width: number,
-  height: number
-) {
-  if (kind === 'fade-white' || kind === 'fade-to-black') {
-    const alpha = progress < 0.5 ? (0.5 - progress) * 2 : 0;
-    if (alpha > 0) {
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.drawImage(previous, 0, 0, width, height);
-      ctx.restore();
-    }
-    const veil = progress < 0.5 ? progress * 2 : (1 - progress) * 2;
-    ctx.fillStyle = kind === 'fade-white' ? `rgba(255, 255, 255, ${veil})` : `rgba(0, 0, 0, ${veil})`;
-    ctx.fillRect(0, 0, width, height);
-  } else if (kind === 'wipe') {
-    const edge = Math.round(width * progress);
-    if (width - edge > 0) ctx.drawImage(previous, edge, 0, width - edge, height, edge, 0, width - edge, height);
-  } else if (kind === 'crossfade') {
-    ctx.save();
-    ctx.globalAlpha = 1 - progress;
-    ctx.drawImage(previous, 0, 0, width, height);
-    ctx.restore();
-  }
-}
+// Transition drawing lives in src/runtime/transitionDraw.ts (shared with the Player); re-exported for the exporters.
+export { compositorTransition, drawSceneTransition } from '../runtime/transitionDraw';
+export type { CompositorTransition } from '../runtime/transitionDraw';
 
 /** OmniStage badge in the top-left corner of exported videos (optional). */
 export function drawWatermark(ctx: CanvasRenderingContext2D, scene: SceneSpec, sceneIdx: number, total: number) {

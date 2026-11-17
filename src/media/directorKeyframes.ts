@@ -91,3 +91,45 @@ export async function captureDirectorContactSheet(
     mounted?.frame.remove();
   }
 }
+
+/**
+ * Phase 11E: the two frames of a cut side by side (LEFT = last frame of A, RIGHT = first frame of B), labelled, as one JPEG.
+ * Each scene is rendered on its own exported Player, frame-stepped. null when either capture fails.
+ */
+export async function captureCutPairSheet(
+  a: SceneSpec,
+  b: SceneSpec,
+  opts: { tileWidth?: number; tileHeight?: number; signal?: AbortSignal } = {}
+): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  if (typeof document === 'undefined') return null;
+  const { cutFrameTimes } = await import('../agent/cutQA');
+  const { outTime, inTime } = cutFrameTimes(a, b);
+  const tileWidth = opts.tileWidth ?? 640;
+  const tileHeight = opts.tileHeight ?? 360;
+  const left = await captureDirectorContactSheet(a, [{ time: outTime, label: 'A last frame' }], { tileWidth, tileHeight, signal: opts.signal });
+  if (!left || opts.signal?.aborted) return null;
+  const right = await captureDirectorContactSheet(b, [{ time: inTime, label: 'B first frame' }], { tileWidth, tileHeight, signal: opts.signal });
+  if (!right || opts.signal?.aborted) return null;
+  const load = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('frame decode failed'));
+      img.src = src;
+    });
+  try {
+    const [la, rb] = await Promise.all([load(left.dataUrl), load(right.dataUrl)]);
+    const gap = 8;
+    const sheet = document.createElement('canvas');
+    sheet.width = tileWidth * 2 + gap;
+    sheet.height = tileHeight;
+    const ctx = sheet.getContext('2d', { alpha: false })!;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, sheet.width, sheet.height);
+    ctx.drawImage(la, 0, 0, tileWidth, tileHeight);
+    ctx.drawImage(rb, tileWidth + gap, 0, tileWidth, tileHeight);
+    return { dataUrl: sheet.toDataURL('image/jpeg', 0.85), width: sheet.width, height: sheet.height };
+  } catch {
+    return null;
+  }
+}

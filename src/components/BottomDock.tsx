@@ -25,6 +25,7 @@ import { DockTabId, useShellStore } from '../state/useShellStore';
 import { ExecutionConsole, useLogIssueCounts } from './ExecutionConsole';
 import { AUDIO_KIND_COLOR, canSpeak, speakText } from './panels/AudioPanel';
 import { IconBtn, Kbd, startDrag } from './ui';
+import { coverageLabel, scriptCoverage } from '../verification/scriptCoverage';
 
 const HEAD_HEIGHT = 34;
 
@@ -254,6 +255,19 @@ const StoryboardTab: React.FC = () => {
             />
             <div className="font-mono text-[10px] text-dim">
               {count} {sc.engineType === '2d' ? 'layers' : 'actors'} · {(sc.durationSeconds || 8).toFixed(0)}s · {sc.aspectRatio}
+              {(() => {
+                // Phase 11E: how much of the shot's script the scene really performs (every script line has an id).
+                const cov = sc.mode === 'media' && sc.engineType === '3d' ? coverageLabel(sc) : undefined;
+                return cov ? (
+                  <span
+                    className={`ml-1.5 ${cov.ok ? 'text-emerald-400' : 'text-amber-400'}`}
+                    title={scriptCoverage(sc).uncovered.concat(scriptCoverage(sc).unperformable).map((l) => `${l.id} ${l.start}-${l.end}s: ${l.action}${l.missingClip ? ` (no ${l.missingClip} clip)` : ''}`).join('\n') || 'Every script line is performed'}
+                    data-testid="script-coverage"
+                  >
+                    · Script {cov.text}
+                  </span>
+                ) : null;
+              })()}
             </div>
             <div className="mt-auto flex items-center" onClick={(e) => e.stopPropagation()}>
               <IconBtn small label="Move scene earlier" disabled={idx === 0} onClick={() => moveScene(sc.id, -1)}>

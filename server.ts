@@ -347,6 +347,31 @@ Plan EXACTLY ${count} beats.`,
         res.json({ ...report, provider: meta.provider, model: meta.model });
         return;
       }
+      // Phase 11E: cut QA: last frame of scene A beside the first frame of scene B, judged like an editor.
+      if (mode === 'cut') {
+        const { sceneA, sceneB } = req.body ?? {};
+        const isScene = (s: any) => s && Array.isArray(s.actors) && typeof s.title === 'string';
+        if (!isScene(sceneA) || !isScene(sceneB)) {
+          res.status(400).json({ error: 'sceneA and sceneB are required' });
+          return;
+        }
+        const cut = await import('./src/agent/cutQA.ts');
+        const match = /^data:(image\/\w+);base64,/.exec(String(screenshotDataUrl));
+        const { data, meta } = await generateJSON(req, {
+          system: cut.buildCutQASystemPrompt(),
+          image: { mimeType: match?.[1] || 'image/jpeg', base64: String(screenshotDataUrl).replace(/^data:image\/\w+;base64,/, '') },
+          user: cut.buildCutQAUserPrompt(sceneA, sceneB),
+          requireVision: true,
+          timeoutMs: 120_000,
+        });
+        const report = cut.normalizeCutQAReport(data);
+        if (!report) {
+          res.status(502).json({ error: 'The vision model returned no cut score' });
+          return;
+        }
+        res.json({ ...report, provider: meta.provider, model: meta.model });
+        return;
+      }
       const { buildVisionQASystemPrompt } = await loadPrompts();
       const match = /^data:(image\/\w+);base64,/.exec(String(screenshotDataUrl));
       const { data } = await generateJSON(req, {

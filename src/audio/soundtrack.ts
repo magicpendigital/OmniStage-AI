@@ -183,7 +183,7 @@ const PHRYGIAN = [0, 1, 3, 5, 7, 8, 10];
 type Inst = 'pad' | 'bass' | 'pluck' | 'bell' | 'flute' | 'kick' | 'snare' | 'hat' | 'tom';
 interface NoteEvent { start: number; dur: number; midi: number; inst: Inst; vel: number; pan: number; id: number }
 
-interface MoodDef {
+export interface MoodDef {
   bpm: number;
   root: number;
   scale: number[];
@@ -199,7 +199,7 @@ interface MoodDef {
   lead: 'flute' | 'bell' | 'pluck';
 }
 
-const MOODS: Record<Exclude<MusicMood, 'none'>, MoodDef> = {
+export const MOODS: Record<Exclude<MusicMood, 'none'>, MoodDef> = {
   calm: { bpm: 76, root: 53, scale: MAJOR, prog: [0, 5, 3, 4], pad: 0.9, padTable: SOFT, bass: 'whole', arp: 'up', arpRate: 2, arpInst: 'pluck', drums: 'none', melody: 0.45, lead: 'flute' },
   happy: { bpm: 112, root: 60, scale: MAJOR, prog: [0, 4, 5, 3], pad: 0.6, padTable: WARM, bass: 'half', arp: 'broken', arpRate: 2, arpInst: 'pluck', drums: 'soft', melody: 0.75, lead: 'pluck' },
   playful: { bpm: 124, root: 62, scale: MAJOR, prog: [0, 3, 4, 0], pad: 0.45, padTable: SOFT, bass: 'half', arp: 'updown', arpRate: 2, arpInst: 'bell', drums: 'soft', melody: 0.9, lead: 'bell' },
@@ -751,16 +751,23 @@ export interface SceneLayers {
   resolved: ResolvedSoundtrack;
 }
 
-/** Renders a scene's three layers for `samples` samples. `musicOffsetSamples` places the music on the global grid. */
-export function renderSoundtrackLayers(scene: SoundtrackScene, samples: number, sampleRate = SOUNDTRACK_SAMPLE_RATE, musicOffsetSamples = 0): SceneLayers | null {
+/**
+ * Renders a scene's three layers for `samples` samples. `musicOffsetSamples` places the music on the global grid.
+ * `leadSamples` (J-cut) makes music and ambience start that many samples BEFORE the scene's own time zero: every layer is then
+ * `leadSamples + samples` long, and cues and voices (which are scene-relative) sit `leadSamples` into the buffer.
+ */
+export function renderSoundtrackLayers(scene: SoundtrackScene, samples: number, sampleRate = SOUNDTRACK_SAMPLE_RATE, musicOffsetSamples = 0, leadSamples = 0): SceneLayers | null {
   const r = resolveSoundtrack(scene);
   if (!r) return null;
-  const music = empty(samples, sampleRate);
-  const ambience = empty(samples, sampleRate);
-  const cues = empty(samples, sampleRate);
+  const lead = Math.max(0, Math.round(leadSamples));
+  const total = samples + lead;
+  const music = empty(total, sampleRate);
+  const ambience = empty(total, sampleRate);
+  const cues = empty(total, sampleRate);
   renderMusic(music, r.mood, r.tempo, r.seed, musicOffsetSamples, r.musicGain);
   renderAmbience(ambience, r.ambience, r.seed + hashString(r.ambience), r.ambienceGain);
-  renderCues(cues, r.cues, 1);
+  const own = lead ? empty(samples, sampleRate) : cues; // scene-relative cues + voices
+  renderCues(own, r.cues, 1);
   // Phase 10C: voices go into the foreground layer; the music ducks under them.
   const dlg = hasDialogue(scene) ? renderDialogueTrack(dialogueScene(scene), samples, sampleRate) : null;
   if (dlg) {
@@ -771,20 +778,30 @@ export function renderSoundtrackLayers(scene: SoundtrackScene, samples: number, 
       for (let i = p.from; i < p.to; i++) {
         if (mixed[i]) continue; // overlapping lines: the voice track already holds both
         mixed[i] = 1;
-        cues.left[i] += dlg.voice[i] * gl;
-        cues.right[i] += dlg.voice[i] * gr;
+        own.left[i] += dlg.voice[i] * gl;
+        own.right[i] += dlg.voice[i] * gr;
       }
     }
     for (let i = 0; i < samples; i++) {
       const g = 1 - 0.6 * dlg.duck[i];
-      music.left[i] *= g;
-      music.right[i] *= g;
-      ambience.left[i] *= 1 - 0.45 * dlg.duck[i];
-      ambience.right[i] *= 1 - 0.45 * dlg.duck[i];
+      music.left[lead + i] *= g;
+      music.right[lead + i] *= g;
+      ambience.left[lead + i] *= 1 - 0.45 * dlg.duck[i];
+      ambience.right[lead + i] *= 1 - 0.45 * dlg.duck[i];
+    }
+  }
+  if (lead) {
+    for (let i = 0; i < samples; i++) {
+      cues.left[lead + i] += own.left[i];
+      cues.right[lead + i] += own.right[i];
     }
   }
   return { music, ambience, cues, resolved: r };
 }
+
+/** Longest J-cut lead / L-cut tail (seconds). */
+export const MAX_AUDIO_OVERLAP = 1.5;
+const overlapSeconds = (v: unknown) => clamp(num(v, 0), 0, MAX_AUDIO_OVERLAP);
 
 /** One scene's soundtrack, faded in and out (live Preview / Player playback). Null when the scene has none. */
 export function renderSceneSoundtrack(scene: SoundtrackScene, sampleRate = SOUNDTRACK_SAMPLE_RATE): StereoPcm | null {
@@ -815,6 +832,11 @@ export function renderFilmSoundtrack(scenes: SoundtrackScene[], sampleRate = SOU
   const total = lengths.reduce((a, b) => a + b, 0);
   const out = empty(total, sampleRate);
   const xf = Math.round(0.5 * sampleRate);
+  // Each cut into scene i has a crossfade window [cut - lead, cut + linger]: with no J/L cut it is the plain [cut, cut + 0.5 s];
+  // a J-cut (`audioLead`) moves its start before the cut, an L-cut (`audioTail`) stretches its end past it.
+  const leads = scenes.map((s, i) => (i === 0 ? 0 : Math.round(overlapSeconds(s.sequence?.audioLead) * sampleRate)));
+  const lingers = scenes.map((s, i) => (i === 0 ? 0 : Math.round(overlapSeconds(s.sequence?.audioTail) * sampleRate)));
+  const after = (i: number) => (i + 1 < scenes.length ? (leads[i + 1] > 0 && lingers[i + 1] === 0 ? 0 : lingers[i + 1] || xf) : 0); // samples past the cut that scene i still sounds
   let start = 0;
   let musicOffset = 0;
   let prevMood: string | null = null;
@@ -825,25 +847,38 @@ export function renderFilmSoundtrack(scenes: SoundtrackScene[], sampleRate = SOU
     const continues = moodKey !== null && moodKey === prevMood && r!.mood !== 'none';
     if (!continues) musicOffset = 0;
     const last = i === scenes.length - 1;
-    const tail = last ? 0 : xf;
-    const layers = renderSoundtrackLayers(scene, n + tail, sampleRate, musicOffset);
+    const lead = leads[i];
+    const tail = after(i);
+    const layers = renderSoundtrackLayers(scene, n + tail, sampleRate, continues ? musicOffset - lead : 0, lead);
     const nextR = last ? null : resolveSoundtrack(scenes[i + 1]);
     const nextContinues = !!(r && nextR && nextR.mood === r.mood && r.mood !== 'none' && (nextR.tempo || '') === (r.tempo || '') && nextR.seed === r.seed);
     if (layers) {
       const v = layers.resolved.volume;
-      // music: no seam when the next scene continues it; otherwise fade over the tail
+      const fadeIn = lead + (i > 0 && lingers[i] > 0 ? lingers[i] : lead > 0 ? 0 : xf); // the window this scene fades in over
+      const fadeOut = (last ? 0 : leads[i + 1] + (lingers[i + 1] > 0 ? lingers[i + 1] : leads[i + 1] > 0 ? 0 : xf));
+      const length = lead + n + tail;
+      // music: no seam when the next scene continues it; otherwise fade over the window
       const music = layers.music;
-      if (!continues && i > 0) ramp(music, 0, xf, true);
+      if (continues && lead) {
+        music.left.fill(0, 0, lead); // the running piece is still playing from the previous scene
+        music.right.fill(0, 0, lead);
+      } else if (!continues && i > 0) ramp(music, 0, fadeIn, true);
       if (nextContinues) {
-        music.left.fill(0, n);
-        music.right.fill(0, n);
-      } else if (tail) ramp(music, n + tail, tail, false);
+        music.left.fill(0, lead + n);
+        music.right.fill(0, lead + n);
+      } else if (fadeOut) ramp(music, length, fadeOut, false);
       const amb = layers.ambience;
-      if (i > 0) ramp(amb, 0, xf, true);
-      if (tail) ramp(amb, n + tail, tail, false);
-      for (let k = 0; k < n + tail && start + k < total; k++) {
-        out.left[start + k] += (music.left[k] + amb.left[k] + (k < n ? layers.cues.left[k] : 0)) * v;
-        out.right[start + k] += (music.right[k] + amb.right[k] + (k < n ? layers.cues.right[k] : 0)) * v;
+      if (i > 0) ramp(amb, 0, fadeIn, true);
+      if (fadeOut) ramp(amb, length, fadeOut, false);
+      // voices and cues belong to the scene; an L-cut lets a line still being spoken run on into the next picture
+      const voiced = lead + n + (lingers[i + 1] || 0);
+      for (let k = 0; k < length && start - lead + k < total; k++) {
+        const o = start - lead + k;
+        if (o < 0) continue;
+        const cl = k < voiced ? layers.cues.left[k] : 0;
+        const cr = k < voiced ? layers.cues.right[k] : 0;
+        out.left[o] += (music.left[k] + amb.left[k] + cl) * v;
+        out.right[o] += (music.right[k] + amb.right[k] + cr) * v;
       }
     }
     prevMood = moodKey;

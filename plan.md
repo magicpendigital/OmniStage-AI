@@ -450,7 +450,7 @@ quality between pipeline changes. Fix: write the story first, then a number that
   - Offline baseline 2026-11-17: mean 75 (was 70), continuity 79 (was 54). Most of that gain is the stable ids (the eval counts
     carried characters now) plus the new term; the eval scores raw scenes, before `editFilm` runs.
   - Tests: `tests/filmEditor.test.ts`.
-  - Still open in P0: #2 script line ids + `script.unperformable` / `script.uncovered` (coverage in the storyboard panel), #4a real
+  - (Closed in 11E below.) Was open in P0: #2 script line ids + `script.unperformable` / `script.uncovered` (coverage in the storyboard panel), #4a real
     cross-dissolve in the Player (MP4 export already crossfades from the previous frame; the Player and Preview still use an overlay),
     #4c J/L cuts, #4d whip-pan / iris, #4e film-wide music cues, vision QA of the cut pair (last frame A + first frame B).
     (#5 shared `locations[]` is 11D below.)
@@ -469,6 +469,30 @@ quality between pipeline changes. Fix: write the story first, then a number that
     continuity warns `room.location-missing`.
   - Tests: `tests/locations.test.ts` (13). Offline eval is unchanged (offline films have no bible, so no locations).
   - Not done: the offline director does not use locations; the Writers' Room modal does not show them yet; no live AI run.
+
+- [x] **11E (done 2026-11-17, unit + browser tested; no live AI run)** Film finishing (P0 #2, #4a/c/d/e, #3c):
+  - Transitions: `SceneTransition` gains `whip-pan` and `iris`. `src/runtime/transitionDraw.ts` is the one canvas-2D implementation (crossfade =
+    old frame dissolving over the live scene, wipe, whip-pan with ghost smear, iris mask, fades) used by the MP4 export (`filmExport` /
+    `mediaExporter`) AND the Player: the Player snapshots the last frame of the scene it leaves and draws the transition over the new one
+    (`gotoScene`; the colour overlay stays for fades and for manual / frame-stepped mode). Default durations per kind (`transitionSeconds`).
+    The Player handle gained `gotoScene` and `transitionRunning` (used by the e2e).
+  - J/L cuts: `sequence.audioLead` / `audioTail` (0-1.5 s, verifier `media.audio-overlap-invalid`, fixable by clamping). `soundCuts` in
+    `filmEditor.ts` sets them (new place with its own ambience → J-cut 0.8 s; last line of dialogue running to the end of a scene → L-cut
+    0.8 s; authored values kept). `renderFilmSoundtrack` honours them; with no overlap the render is identical to before.
+  - Cue sheet: `src/agent/musicCues.ts` plans the score once per film (one tempo = median of the moods' BPM, mood per ACT from the bible's closing
+    emotions); `generateStoryboard` applies it per scene. `MOODS` in `soundtrack.ts` is exported so a test pins `MOOD_BPM` to it.
+  - Script coverage: `src/verification/scriptCoverage.ts` gives script lines stable ids (L1…), the scene prompt shows them, and the verifier raises
+    `script.uncovered` (a line whose action or caption is not performed in its window; a line that names an actor needs THAT actor) and
+    `script.unperformable` (action needs a clip no actor has; only when every actor's clips are known). Both are craft warnings
+    (`MEDIA_CRAFT_CODES`), not fixable. The storyboard panel shows "Script x/y".
+  - Vision QA of the cut: `src/agent/cutQA.ts` (pure prompts + `normalizeCutQAReport`), `captureCutPairSheet` (last frame of A + first frame of
+    B on the exported Player), `reviewCut`, server route `/api/agent/vision-qa` mode `cut`. Runs in `generateStoryboard` only for AI scenes on a
+    vision-capable connection; findings are editor NOTES, never auto-applied.
+  - Tests: `tests/phase11e.test.ts` (33) + 5 Playwright tests (`player.e2e.ts`, each transition through the real Player). Offline eval unchanged (75).
+  - Not done: the studio Preview still uses the colour-overlay approximation; J/L cuts exist only in the MP4 soundtrack, not the live Player;
+    the cue sheet unifies tempo and mood, not the musical key, and only touches scenes that already have music; the planner does not yet receive
+    each actor's real clip list and scenes do not return a `scriptLineId` per action (coverage is inferred from time windows); cut QA and
+    the new transitions have not run against a live vision model; offline films have no scripts, so script coverage does not apply to them.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`

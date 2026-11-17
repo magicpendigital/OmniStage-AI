@@ -9,6 +9,8 @@
 import type { ActorNode, CameraShot, SceneSpec } from '../types/scene.schema';
 import { resolvePerformance, resolveShot, shotWindows } from '../runtime/cinematics';
 import { shareLocationWorlds } from './locations';
+import { resolveSoundtrack } from '../audio/soundtrack';
+import { dialogueTimeline } from '../audio/voices';
 
 export type CutCode =
   | 'cut.position-jump' // a character starts the scene somewhere other than where it ended the previous one
@@ -166,6 +168,46 @@ const MIRROR: Record<string, NonNullable<CameraShot['angle']>> = {
  * Anything that needs taste (lighting, jump cuts) is left to `lintCut` to report.
  */
 export function carryFromPrevious(prev: SceneSpec, next: SceneSpec): { scene: SceneSpec; notes: string[] } {
+  const pose = carryPose(prev, next);
+  const sound = soundCuts(prev, pose.scene);
+  return { scene: sound.scene, notes: [...pose.notes, ...sound.notes] };
+}
+
+/** Longest line of dialogue-overrun we treat as "still talking when the picture cuts". */
+const L_CUT_SECONDS = 0.8;
+const J_CUT_SECONDS = 0.8;
+
+/**
+ * J-cut / L-cut (Phase 11E): the sound of a cut does not have to land with the picture.
+ *  - a change of place with its own ambience: the new place's ambience comes in `J_CUT_SECONDS` BEFORE the picture (J-cut);
+ *  - a line of dialogue that is still being spoken when the scene ends keeps going over the next picture (L-cut).
+ * Values already authored on `next.sequence` are kept. Returns a copy.
+ */
+export function soundCuts(prev: SceneSpec, next: SceneSpec): { scene: SceneSpec; notes: string[] } {
+  if (!isFilmScene(prev) || !isFilmScene(next) || !next.sequence) return { scene: next, notes: [] };
+  const notes: string[] = [];
+  const seq = { ...next.sequence };
+  const index = (seq.index ?? 0) + 1;
+  if (seq.audioLead === undefined && !sameLocation(prev, next)) {
+    const a = resolveSoundtrack(prev)?.ambience;
+    const b = resolveSoundtrack(next)?.ambience;
+    if (b && b !== 'none' && a !== b) {
+      seq.audioLead = J_CUT_SECONDS;
+      notes.push(`J-cut into scene ${index}: the ${b} ambience arrives ${J_CUT_SECONDS}s before the picture`);
+    }
+  }
+  if (seq.audioTail === undefined && prev.dialogue?.length && prev.actors) {
+    const duration = prev.durationSeconds || 8;
+    const last = dialogueTimeline({ actors: prev.actors, dialogue: prev.dialogue, durationSeconds: duration }).pop();
+    if (last && last.end >= duration - 0.05) {
+      seq.audioTail = L_CUT_SECONDS;
+      notes.push(`L-cut into scene ${index}: the last line of scene ${index - 1} runs on over the new picture`);
+    }
+  }
+  return notes.length ? { scene: { ...next, sequence: seq }, notes } : { scene: next, notes };
+}
+
+function carryPose(prev: SceneSpec, next: SceneSpec): { scene: SceneSpec; notes: string[] } {
   const notes: string[] = [];
   const scene: SceneSpec = { ...next, actors: next.actors.map((a) => ({ ...a })) };
   if (!isFilmScene(prev) || !isFilmScene(next) || !sameLocation(prev, next)) return { scene, notes };

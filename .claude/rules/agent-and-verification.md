@@ -44,3 +44,6 @@ paths:
 - Shared locations (Phase 11D, `src/agent/locations.ts`): the bible names places (`locations[]`, `beat.location`), `autoFixStoryBible` keeps
   them consistent (`deriveLocations`), and a scene at an already-built location reuses that world (`shareLocationWorld`; weather, lighting,
   camera and blocking stay the scene's). The world desk owns locations; other desks must not touch them. Keep `tests/locations.test.ts` green.
+- Film finishing (Phase 11E): script lines get ids from `scriptCoverage.ts` (`script.uncovered` / `script.unperformable` are craft warnings, never fixable);
+  `soundCuts` (J/L) and the `musicCues.ts` cue sheet run per scene inside `generateStoryboard`; cut QA (`cutQA.ts`) is vision-only, notes only,
+  never auto-patches. `MOOD_BPM` must match `MOODS` in `soundtrack.ts`. Keep `tests/phase11e.test.ts` green.

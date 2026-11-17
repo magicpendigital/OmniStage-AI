@@ -46,10 +46,12 @@ import {
 import { autoFixSceneSpec } from '../verification/sceneVerifier';
 import { aiHeaders } from './aiClient';
 import { describeDirectorReview } from './directorQA';
-import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
+import { directorQAAvailable, reviewCut, runDirectorQAForShot } from './directorQARunner';
+import { describeCutQA } from './cutQA';
 import { applyBibleToScene, formatBibleSummary, lintStoryBible, writeStoryBible } from './storyBible';
 import { carryFromPrevious, lintCuts } from './filmEditor';
 import { shareLocationWorld } from './locations';
+import { applyCue, musicCueSheet } from './musicCues';
 import { sanitizeShaderEffect } from '../runtime/shaderEffects';
 
 export const MIN_STORYBOARD_SCENES = 2;
@@ -1035,7 +1037,7 @@ function sanitizePlan(raw: StoryboardPlan, intent: StoryboardIntent, fallback: S
       beat: str(b.beat, fallback.beats[i].beat),
       difficulty: num(b.difficulty, i + 1),
       script: typeof b.script === 'string' && b.script.trim() ? b.script.trim().slice(0, 1200) : fallback.beats[i].script,
-      transition: ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'].includes(b.transition) ? b.transition : i === 0 ? undefined : 'fade',
+      transition: ['cut', 'fade', 'crossfade', 'fade-white', 'wipe', 'whip-pan', 'iris'].includes(b.transition) ? b.transition : i === 0 ? undefined : 'fade',
     });
   }
   return {
@@ -1168,6 +1170,10 @@ export async function generateStoryboardWithAgent(
   const sources = new Set<'gemini' | 'local'>();
   const directorNotes: string[] = [];
   const editorNotes: string[] = [];
+  const cutNotes: string[] = [];
+  // Phase 11E: one score for the whole film (shared tempo, mood per act), planned up front from the bible.
+  const cueSheet = plan.kind === 'game-levels' ? [] : musicCueSheet(plan.beats.length, bible);
+  let cuesApplied = 0;
   let geminiAvailable = planSource === 'gemini';
   for (let i = 0; i < plan.beats.length; i++) {
     if (signal?.aborted) break;
@@ -1230,6 +1236,11 @@ export async function generateStoryboardWithAgent(
       spec = shared.scene;
       if (shared.note) editorNotes.push(`Editor: ${shared.note}`);
     }
+    if (spec.mode === 'media' && cueSheet[i]) {
+      const scored = applyCue(spec, cueSheet[i]);
+      if (scored !== spec) cuesApplied++;
+      spec = scored;
+    }
     // Phase 11C film editor: characters resume where the previous scene left them (same location), before polish and QA see the scene.
     if (i > 0 && scenes[i - 1] && spec.engineType === '3d' && spec.mode === 'media') {
       const carried = carryFromPrevious(scenes[i - 1], spec);
@@ -1252,11 +1263,21 @@ export async function generateStoryboardWithAgent(
         }
       }
     }
+    // Phase 11E: a vision model looks at the cut into this scene (last frame of the previous one beside this first frame). Notes only.
+    if (i > 0 && scenes[i - 1] && source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && scenes[i - 1].engineType === '3d' && !signal?.aborted && directorQAAvailable(settings)) {
+      callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Checking cut ${i}→${i + 1}` });
+      try {
+        for (const line of describeCutQA(i, await reviewCut(scenes[i - 1], spec, settings, signal))) cutNotes.push(line);
+      } catch {
+        // Cut QA is a bonus pass: capture / vision failures leave the cut unreviewed.
+      }
+    }
     scenes.push(spec);
     sources.add(source);
     callbacks.onScene?.(spec, i, source);
   }
 
+  if (cuesApplied) editorNotes.push(`Editor: score planned once for the film (${cueSheet[0]?.tempo} BPM, mood by act: ${[...new Set(cueSheet.map((c) => c.mood).filter(Boolean))].join(' → ') || 'as authored'}), ${cuesApplied} scene(s) followed it`);
   // What the editor could not decide for you (lighting jumps, jump cuts) goes to the summary.
   for (const f of lintCuts(scenes)) if (!f.fixable && f.severity === 'warning') editorNotes.push(`Editor: ${f.message}`);
 
@@ -1277,6 +1298,6 @@ export async function generateStoryboardWithAgent(
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'
         : 'Scenes are linked in order — open the Scenes tab to review each shot.'
     }`,
-    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...editorNotes, ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
+    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...editorNotes, ...cutNotes, ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
   };
 }

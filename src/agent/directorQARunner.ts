@@ -14,6 +14,7 @@ import {
   pickDirectorKeyframes,
   runDirectorQARound,
 } from './directorQA';
+import { CutQAReport, normalizeCutQAReport } from './cutQA';
 import type { PatchProposal } from './patchLoop';
 
 export type DirectorQASettings = Pick<
@@ -48,6 +49,26 @@ export async function reviewFilmShot(spec: SceneSpec, settings: DirectorQASettin
   if (!res.ok) return null;
   const json = await res.json().catch(() => null);
   const report = normalizeDirectorQAReport(json, sheet.keyframes);
+  return report ? { ...report, provider: json?.provider, model: json?.model } : null;
+}
+
+/** Phase 11E: renders the last frame of A beside the first frame of B and asks the vision model whether the cut works. */
+export async function reviewCut(a: SceneSpec, b: SceneSpec, settings: DirectorQASettings, signal?: AbortSignal): Promise<CutQAReport | null> {
+  if (!directorQAAvailable(settings)) return null;
+  const { captureCutPairSheet } = await import('../media/directorKeyframes');
+  const sheet = await captureCutPairSheet(a, b, { signal });
+  if (!sheet || signal?.aborted) return null;
+  // Only what the prompt reads: two full scenes would be megabytes of image-free JSON.
+  const slim = (s: SceneSpec) => ({ title: s.title, sequence: s.sequence, durationSeconds: s.durationSeconds, environment: { presetId: s.environment?.presetId }, actors: s.actors.map((x) => ({ id: x.id, name: x.name })) });
+  const res = await fetch('/api/agent/vision-qa', {
+    method: 'POST',
+    headers: aiHeaders(settings),
+    body: JSON.stringify({ mode: 'cut', screenshotDataUrl: sheet.dataUrl, sceneA: slim(a), sceneB: slim(b), model: settings.geminiModel }),
+    signal,
+  });
+  if (!res.ok) return null;
+  const json = await res.json().catch(() => null);
+  const report = normalizeCutQAReport(json);
   return report ? { ...report, provider: json?.provider, model: json?.model } : null;
 }
 

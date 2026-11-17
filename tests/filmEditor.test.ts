@@ -58,7 +58,8 @@ test('scenes in different places are not carried: the character is somewhere els
   scenes[1].world = { ...scenes[1].world, skybox: 'night-stars', biome: scenes[0].world?.biome === 'desert' ? 'snow' : 'desert' } as any;
   assert.equal(sameLocation(scenes[0], scenes[1]), false);
   const { scene, notes } = carryFromPrevious(scenes[0], scenes[1]);
-  assert.deepEqual(notes, []);
+  // The sound may still be cut J/L (a new place brings its own ambience early); no CHARACTER is carried.
+  assert.deepEqual(notes.filter((n) => !/^[JL]-cut/.test(n)), []);
   assert.deepEqual(scene.actors[0].position, scenes[1].actors[0].position);
   assert.equal(lintCut(scenes[0], scenes[1], 1).some((x) => x.code === 'cut.position-jump'), false);
 });

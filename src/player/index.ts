@@ -14,6 +14,7 @@ import { InputManager, isTouchDevice } from './input';
 import { View2D } from './view2d';
 import { QualityLevel, View3D } from './view3d';
 import { transitionInto, transitionOverlay } from '../runtime/cinematics';
+import { compositorTransition, drawSceneTransition, transitionSeconds, type CompositorTransition } from '../runtime/transitionDraw';
 import { Hud, PLAYER_CSS } from './hud';
 import { pendingLoads } from './loading';
 import { registerVoiceAssets } from '../audio/voices';
@@ -56,6 +57,10 @@ export interface OmniPlayerHandle {
   step: (dt: number) => void;
   /** Phase 7C: stop (true) or restart (false) the requestAnimationFrame loop so only step() advances time (E2E tests). */
   manual: (on: boolean) => void;
+  /** Switches to another scene with its authored transition (what the HUD "Next" button does). */
+  gotoScene: (id: string) => void;
+  /** True while a canvas-composited transition (crossfade, wipe, whip-pan, iris) is on screen. */
+  transitionRunning: () => boolean;
   /** Phase 7C: runtime-only state for tests (2D physics bodies live outside the store). */
   inspect: () => {
     engine: string;
@@ -175,10 +180,58 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   const fade = document.createElement('div');
   fade.style.cssText = 'position:absolute;inset:0;pointer-events:none;opacity:0;z-index:5;transition-property:opacity';
   frame.appendChild(fade);
+  // Phase 11E: dissolve / wipe / whip-pan / iris are drawn from the last frame of the scene we leave (same code as the MP4 export).
+  const tCanvas = document.createElement('canvas');
+  tCanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6;display:none';
+  frame.appendChild(tCanvas);
+  const tSnapshot = document.createElement('canvas');
+  let tRaf = 0;
+  const stopTransitionCanvas = () => {
+    cancelAnimationFrame(tRaf);
+    tCanvas.style.display = 'none';
+  };
+  /** True when the transition is composited here (so the colour overlay is skipped). */
+  const startCanvasTransition = (kind: CompositorTransition): boolean => {
+    if (manualMode || !view || !view.canvas.width || !view.canvas.height) return false;
+    try {
+      // Render the current state once more and copy it in the same task: the WebGL buffer is still readable.
+      view.frame(0);
+      tSnapshot.width = view.canvas.width;
+      tSnapshot.height = view.canvas.height;
+      tSnapshot.getContext('2d')!.drawImage(view.canvas, 0, 0);
+    } catch {
+      return false;
+    }
+    const octx = tCanvas.getContext('2d');
+    if (!octx) return false;
+    tCanvas.width = tSnapshot.width;
+    tCanvas.height = tSnapshot.height;
+    tCanvas.style.display = 'block';
+    const ms = transitionSeconds(kind) * 1000;
+    const t0 = performance.now();
+    const stepT = (now: number) => {
+      const p = (now - t0) / ms;
+      octx.clearRect(0, 0, tCanvas.width, tCanvas.height);
+      if (p >= 1) {
+        tCanvas.style.display = 'none';
+        return;
+      }
+      drawSceneTransition(octx, tSnapshot, kind, p, tCanvas.width, tCanvas.height);
+      tRaf = requestAnimationFrame(stepT);
+    };
+    cancelAnimationFrame(tRaf);
+    drawSceneTransition(octx, tSnapshot, kind, 0, tCanvas.width, tCanvas.height);
+    tRaf = requestAnimationFrame(stepT);
+    return true;
+  };
   const gotoScene = (id: string) => {
+    const incoming = store.getState().scenes.find((s) => s.id === id);
+    const kind = compositorTransition(incoming || {}, 'fade-to-black');
+    const composited = (kind === 'crossfade' || kind === 'wipe' || kind === 'whip-pan' || kind === 'iris') && incoming?.sequence?.index !== 0 && startCanvasTransition(kind);
+    if (!composited) stopTransitionCanvas();
     store.getState().switchScene(id);
     store.setState({ isPlaying: true });
-    const overlay = transitionOverlay(transitionInto(store.getState().scenes.find((s) => s.id === id)));
+    const overlay = composited ? null : transitionOverlay(transitionInto(incoming));
     if (overlay) {
       fade.style.transitionDuration = '0ms';
       fade.style.background = overlay.color;
@@ -323,6 +376,8 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   const handle: OmniPlayerHandle = {
     store,
     restart: restartScene,
+    gotoScene,
+    transitionRunning: () => tCanvas.style.display !== 'none',
     step: (dt) => tick(Math.min(Math.max(dt, 0), 0.05)),
     inspect: () => ({
       engine: viewEngine,

@@ -13,6 +13,7 @@ import { renderFilmSoundtrack } from '../audio/soundtrack';
 import { voiceClipAssets } from '../audio/voices';
 import { activeCaptions, drawCaptionOnCanvas } from '../media/captions';
 import { generatePlayerHTML } from './playerHtml';
+import { transitionSeconds as defaultTransitionSeconds } from '../runtime/transitionDraw';
 import {
   compositorTransition, downloadBlob, drawSceneTransition, drawWatermark, loadPlayerRuntime, slugifyTitle,
 } from './mediaExporter';
@@ -40,6 +41,7 @@ export interface FilmExportOptions {
   watermark?: boolean;
   /** Fallback transition when a scene has none of its own. */
   transition?: string;
+  /** Length of every transition in seconds; default: per kind (a whip-pan is quick, an iris is a beat). */
   transitionSeconds?: number;
   onProgress?: (p: FilmExportProgress) => void;
   abortSignal?: AbortSignal;
@@ -120,7 +122,7 @@ export async function waitForAssets(player: PlayerHandle, abort?: AbortSignal) {
 }
 
 export async function exportFilmMP4(options: FilmExportOptions): Promise<{ ok: boolean; filename?: string; blob?: Blob; error?: string }> {
-  const { scenes, width, height, fps = 30, quality = 'high', withSound = true, watermark = false, transition = 'fade-to-black', transitionSeconds = 0.5, onProgress, abortSignal } = options;
+  const { scenes, width, height, fps = 30, quality = 'high', withSound = true, watermark = false, transition = 'fade-to-black', transitionSeconds, onProgress, abortSignal } = options;
   if (!scenes.length) return { ok: false, error: 'No scenes to export' };
   const mb = await import('mediabunny');
   const videoCodec = await mb.getFirstEncodableVideoCodec(['avc', 'vp9', 'av1'], { width, height });
@@ -185,7 +187,7 @@ export async function exportFilmMP4(options: FilmExportOptions): Promise<{ ok: b
       await waitForAssets(player, abortSignal);
       player.store.setState({ isPlaying: true, currentTime: 0 });
       const kind = compositorTransition(scene, transition);
-      const transitionFrames = i > 0 && kind !== 'none' ? Math.round(transitionSeconds * fps) : 0;
+      const transitionFrames = i > 0 && kind !== 'none' ? Math.round((transitionSeconds ?? defaultTransitionSeconds(kind)) * fps) : 0;
 
       for (let f = 0; f < frameCounts[i]; f++) {
         if (abortSignal?.aborted) throw new Error('aborted');

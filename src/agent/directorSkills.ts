@@ -100,7 +100,8 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
   walking = 'tracking' or 'wide'; power / awe = 'low-angle'; loneliness / overview = 'high-angle'.
 - Keep the 180° rule: when two actors face each other, keep angle on the same side ('three-quarter-left' for both, or right for both).
 - Vary scene to scene: do not open every scene with the same shot type; end the film on a 'pull-out' or 'crane-up'.
-- Transition into the next scene: 'cut' for continuous action, 'fade' for a time / place jump, 'fade-white' for dreams or magic.`,
+- Transition into the next scene: 'cut' for continuous action, 'fade' for a time / place jump, 'fade-white' for dreams or magic,
+  'crossfade' for time passing in one place, 'whip-pan' for a burst of speed or energy, 'iris' for a classic closing beat.`,
   },
   {
     id: 'platformer-level-design',

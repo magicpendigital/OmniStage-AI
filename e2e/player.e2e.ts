@@ -260,3 +260,29 @@ test('3D shader effects: every preset applies to the rigged robot and composites
   expect(p.errors).toEqual([]);
   expect(q.errors).toEqual([]);
 });
+
+for (const kind of ['crossfade', 'wipe', 'whip-pan', 'iris', 'cut'] as const) {
+  test(`3D film: the ${kind} into the next scene is composited from the last frame of the one we leave (Phase 11E)`, async ({ page }) => {
+    const a = template('blank-3d-authoring');
+    a.mode = 'media';
+    a.id = 'scene-a';
+    a.durationSeconds = 6;
+    a.sequence = { storyboardId: 'sb', storyboardTitle: 't', kind: 'film', index: 0, total: 2 } as any;
+    const b = template('blank-3d-authoring');
+    b.mode = 'media';
+    b.id = 'scene-b';
+    b.durationSeconds = 6;
+    b.sequence = { storyboardId: 'sb', storyboardTitle: 't', kind: 'film', index: 1, total: 2, transition: kind } as any;
+    const p = await openExport(page, a, {}, [a, b]);
+    await p.waitAssets();
+    await p.step(10, 0.05);
+    // The canvas transition runs on real time, so hand the loop back to the Player for this check.
+    await page.evaluate(() => (window as any).__omniPlayer.manual(false));
+    await page.evaluate(() => (window as any).__omniPlayer.gotoScene('scene-b'));
+    const running = await page.evaluate(() => (window as any).__omniPlayer.transitionRunning());
+    expect(running).toBe(kind !== 'cut');
+    expect(await p.state<string>('s.sceneSpec.id')).toBe('scene-b');
+    if (kind !== 'cut') await page.waitForFunction(() => !(window as any).__omniPlayer.transitionRunning(), undefined, { timeout: 5000 });
+    expect(p.errors).toEqual([]);
+  });
+}

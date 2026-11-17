@@ -164,7 +164,8 @@ test('verifier: craft hints for a static, single-shot, bare film; fixes broken s
   const spec = film([robot('hero')]);
   spec.world = { ...spec.world, terrain: { ...spec.world.terrain, type: 'flat-grid' }, scatterObjects: [] };
   const codes = verifySceneSpec(spec).issues.map((i) => i.code);
-  for (const c of MEDIA_CRAFT_CODES) assert.ok(codes.includes(c), c);
+  // script.* hints need a timed script; this bare film has none.
+  for (const c of MEDIA_CRAFT_CODES.filter((x) => x.startsWith('media.'))) assert.ok(codes.includes(c), c);
   assert.equal(mediaQualityPenalty(verifySceneSpec(spec)), 4);
   // The same rules are silent in game mode.
   assert.equal(mediaQualityPenalty(verifySceneSpec({ ...spec, mode: 'game' })), 0);

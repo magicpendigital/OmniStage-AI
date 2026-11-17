@@ -762,7 +762,8 @@ export interface CameraShot {
 }
 
 /** Phase 10A — how this scene starts when it follows another scene (Preview, Player, video export). */
-export type SceneTransition = 'cut' | 'fade' | 'crossfade' | 'fade-white' | 'wipe';
+/** 'crossfade' is a real dissolve (Player + MP4); 'whip-pan' flings the old shot off with blur; 'iris' closes to black on the old shot and opens on the new one. */
+export type SceneTransition = 'cut' | 'fade' | 'crossfade' | 'fade-white' | 'wipe' | 'whip-pan' | 'iris';
 
 export interface VFXNode {
   id: string;
@@ -947,6 +948,10 @@ export interface SceneSequenceMeta {
   script?: string;
   /** Phase 11A: the film's story bible (same object on every scene of the storyboard). */
   bible?: StoryBible;
+  /** Phase 11E J-cut: seconds (0-1.5) this scene's ambience / music arrives BEFORE its picture (MP4 soundtrack). */
+  audioLead?: number;
+  /** Phase 11E L-cut: seconds (0-1.5) the previous scene's sound (a line still being spoken, its ambience) runs on over this scene's picture. */
+  audioTail?: number;
 }
 
 export interface StoryboardBeat {

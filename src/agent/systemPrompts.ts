@@ -6,6 +6,7 @@ import {
 } from '../registry/assetRegistry';
 import { PATCH_RESPONSE_FORMAT } from './patchLoop';
 import { buildStoryBiblePlannerSection, describeBibleForScene } from './storyBible';
+import { numberedScript } from '../verification/scriptCoverage';
 import type { StoryBible } from '../types/scene.schema';
 
 /**
@@ -307,7 +308,9 @@ PLANNING RULES:
    "start-end s | SHOT TYPE (wide/medium/close-up/over-shoulder/low-angle/high-angle/tracking/establishing) on WHO (over-shoulder: "on X over Y's shoulder") | ACTION | optional caption line".
    Every scene needs a change: the hero starts doing one thing and ends doing another (wakes -> stands -> walks -> waves).
    Open the film with an establishing shot; use close-ups for emotion; vary shot sizes; 8-12 s per scene.
-   "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic), "crossfade".
+   "transition" into each beat after the first: "cut" (same place, continuous action), "fade" (time/place change), "fade-white" (dream/magic),
+   "crossfade" (a real dissolve: time passing in the SAME place), "whip-pan" (fast action or a jolt of energy, short), "iris" (classic closing / comic beat, use rarely).
+   Vary them: a film where every transition is the same feels mechanical.
 ${bible ? buildStoryBiblePlannerSection(bible) : ''}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY JSON:
@@ -363,7 +366,12 @@ STORYBOARD: "${storyboardTitle}" (${kind}) — authoring scene ${beatIndex + 1} 
 ${bible ? `\n${describeBibleForScene(bible, beatIndex, total)}\n` : ''}
 THIS SCENE'S BEAT:
 ${JSON.stringify(beat, null, 2)}
-
+${numberedScript((beat as { script?: string }).script) ? `
+SCRIPT LINES (numbered; the scene is checked line by line):
+${numberedScript((beat as { script?: string }).script)}
+- Every line must HAPPEN inside its time window: an actors[].performance step (clip / moveTo / lookAt) that starts in the window, a camera shot that starts there for scenery lines, and the caption or dialogue the line carries.
+- Only write actions the cast's clips can do (each actor's availableClips); a line the cast cannot perform is rewritten, not faked.
+` : ''}
 PREVIOUSLY AUTHORED SCENES (continuity summary):
 ${previousScenes.length ? JSON.stringify(previousScenes, null, 2) : '(none — this is the opening scene)'}
 

@@ -41,3 +41,6 @@ paths:
 - Godot 4 export (`src/exporter/godotExport.ts`): GDScript comes only from the fixed templates in `godotTemplates.ts` (never user
   text; all strings escaped into tscn). Every contract feature it cannot convert must produce a warning + notes entry — when you add
   a SceneSpec field, update `godotExport.ts` warnings and `tests/godotExport.test.ts`.
+- Scene transitions (Phase 11E): ALL canvas-drawn transitions live in `src/runtime/transitionDraw.ts` and are shared by the MP4 export and the Player; a new
+  transition needs a `SceneTransition` literal, a `compositorTransition` mapping, a draw case, a `transitionSeconds` entry and a Player e2e case, then
+  `npm run build:player`. J/L overlap (`sequence.audioLead` / `audioTail`) is rendered only by `renderFilmSoundtrack`; the default render must stay identical.

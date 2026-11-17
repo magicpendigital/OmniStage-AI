@@ -19,7 +19,8 @@ import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS, particleRuntimeFor } from '../vfx/particles2D';
 import { MAX_SCENE_RECIPES, RECIPE_ID_RE, sameRecipe, sanitizeParticleRecipe, sanitizeSfxRecipe } from '../extensions/validate';
 import { heroActor, performanceActionCount } from '../runtime/cinematics';
-import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
+import { scriptCoverage } from './scriptCoverage';
+import { AMBIENCE_IDS, MAX_AUDIO_OVERLAP, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, dialogueTimeline } from '../audio/voices';
 import { BIOME_IDS, featureStageClearance } from '../runtime/biomes';
 import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
@@ -30,10 +31,10 @@ import { sanitizeShaderEffect, shaderEffectProblem } from '../runtime/shaderEffe
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
-export const SCENE_TRANSITIONS = ['cut', 'fade', 'crossfade', 'fade-white', 'wipe'];
+export const SCENE_TRANSITIONS = ['cut', 'fade', 'crossfade', 'fade-white', 'wipe', 'whip-pan', 'iris'];
 const STAGE_3D = 12; // performances stay within ±12 m
 /** Media craft hints: warnings the AI patch loop also tries to resolve (see `mediaQualityPenalty`). */
-export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage', 'media.silent'];
+export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage', 'media.silent', 'script.uncovered', 'script.unperformable'];
 export const WORLD_FEATURE_TYPES = ['waterfall', 'river', 'pond'];
 /** Water landmarks must leave the acting area (and the cameras around it) free. */
 export const FEATURE_STAGE_CLEARANCE = 6;
@@ -279,6 +280,13 @@ function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
   if (t !== undefined && !SCENE_TRANSITIONS.includes(t)) {
     issues.push(issue('media.transition-invalid', 'warning', `Unknown scene transition "${t}".`, true));
   }
+  for (const k of ['audioLead', 'audioTail'] as const) {
+    const v = spec.sequence?.[k];
+    if (v !== undefined && (!Number.isFinite(v) || v < 0 || v > MAX_AUDIO_OVERLAP)) {
+      issues.push(issue('media.audio-overlap-invalid', 'warning', `sequence.${k} must be 0-${MAX_AUDIO_OVERLAP} seconds (a J-cut / L-cut overlap).`, true));
+      break;
+    }
+  }
 
   // Craft hints (not fixable mechanically: the director has to make a creative choice).
   const hero = heroActor(spec);
@@ -292,6 +300,18 @@ function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
   const bare = (!w || ['flat-grid', 'none'].includes(w.terrain?.type)) && !(w?.scatterObjects?.length) && !w?.hdri?.url && !w?.biome;
   if (spec.actors.length && bare) {
     issues.push(issue('media.bare-stage', 'warning', 'The scene has no place: set world.biome (forest, meadow, beach, desert, snowy-peaks, waterfall-valley, night-forest, city-night) or world.terrain + scatterObjects + sky / weather (or an HDRI), and turn off environment.groundGrid.', false));
+  }
+  // Phase 11E: the scene must perform the script it was written from (each line has an id: L1, L2 …).
+  if (spec.sequence?.script) {
+    const cov = scriptCoverage(spec);
+    if (cov.uncovered.length) {
+      const list = cov.uncovered.slice(0, 4).map((l) => `${l.id} (${l.start}-${l.end}s: ${(l.action || l.shot).slice(0, 50)}${!l.actionOk ? '' : ' — caption missing'})`).join('; ');
+      issues.push(issue('script.uncovered', 'warning', `${cov.uncovered.length} of ${cov.total} script lines are not performed: ${list}. Put an actors[].performance step (or a dialogue line / camera shot for scenery) inside each line's time window, and a caption or dialogue line where the script has one.`, false));
+    }
+    if (cov.unperformable.length) {
+      const list = cov.unperformable.slice(0, 3).map((l) => `${l.id} "${l.action.slice(0, 40)}" needs a ${l.missingClip} clip`).join('; ');
+      issues.push(issue('script.unperformable', 'warning', `The cast cannot perform: ${list}. Their clips are: ${[...new Set(spec.actors.flatMap((a) => a.availableClips || []))].join(', ')}. Rewrite the action with those clips or swap the actor.`, false));
+    }
   }
   // Phase 10B: a film scene needs sound.
   const st = spec.soundtrack;
@@ -934,6 +954,14 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case 'media.transition-invalid':
       if (spec.sequence) spec.sequence.transition = 'fade';
       return 'Scene transition set to fade';
+    case 'media.audio-overlap-invalid':
+      if (spec.sequence) {
+        for (const k of ['audioLead', 'audioTail'] as const) {
+          const v = spec.sequence[k];
+          if (v !== undefined) spec.sequence[k] = Number.isFinite(v) ? Math.min(MAX_AUDIO_OVERLAP, Math.max(0, v)) : 0;
+        }
+      }
+      return 'J-cut / L-cut overlap limited to 0-1.5 s';
     case 'ids.duplicate': {
       for (const list of [spec.actors, spec.nodes2D, spec.vfx] as Array<Array<{ id: string }>>) {
         const seen = new Set<string>();

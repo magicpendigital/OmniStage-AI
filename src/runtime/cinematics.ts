@@ -527,7 +527,9 @@ export function transitionOverlay(t: SceneTransition): { color: string; ms: numb
   switch (t) {
     case 'cut': return null;
     case 'fade-white': return { color: '#ffffff', ms: 450 };
-    case 'crossfade': return { color: '#000000', ms: 300 };
+    case 'crossfade': return { color: '#000000', ms: 300 }; // the studio Preview has no frame to melt: a short dip; the Player dissolves for real
+    case 'whip-pan': return { color: '#000000', ms: 200 };
+    case 'iris': return { color: '#000000', ms: 600 };
     default: return { color: '#000000', ms: 450 };
   }
 }
