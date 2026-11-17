@@ -62,10 +62,12 @@ PLAYBOOK
 2. biome per scene, one of: ${BIOME_IDS.join(', ')}. Match the story's mood (a lonely scene may be night-forest, a warm payoff meadow).
 3. PROPS: at most 4 objects that matter to the story (a motif, the thing the hero wants, an obstacle). Each gets an id (slug), a name, the scenes it appears in, and a "look": a 3D-generator prompt in English, <= 300 chars (object, material, colour, scale cue, "single object, clean silhouette, stylised animated-film prop"). Do not list scenery that biomes already provide (trees, rocks, grass).
 4. A prop named by a motif in the bible must appear in its setup AND payoff scenes.
+5. LOCATIONS: 1-3 places the film returns to (a film is not a different world every 8 seconds). Each gets an id (slug), a name, one sentence a camera can show, and a biome. Every scene points at one location; scenes at the same location are built ONCE and reuse the same set, so give a place several scenes when the story allows (a different camera angle and a different moment, not a different sky). Change location only when the story moves.
 
 Return ONLY JSON:
 { "props": [ { "id": "battery", "name": "...", "look": "<3D generator prompt>", "scenes": [1, ${n}] } ],
-  "beats": [ { "scene": 1, "setting": "one sentence", "biome": "<biome id>", "props": ["battery"] } ] }   // beats: EXACTLY ${n}`,
+  "locations": [ { "id": "workshop", "name": "The workshop", "setting": "one sentence", "biome": "<biome id>" } ],
+  "beats": [ { "scene": 1, "setting": "one sentence", "biome": "<biome id>", "location": "workshop", "props": ["battery"] } ] }   // beats: EXACTLY ${n}`,
 
   dialogue: (n) => `${COMMON(n)}
 

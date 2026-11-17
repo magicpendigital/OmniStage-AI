@@ -8,6 +8,7 @@
  */
 import type { ActorNode, CameraShot, SceneSpec } from '../types/scene.schema';
 import { resolvePerformance, resolveShot, shotWindows } from '../runtime/cinematics';
+import { shareLocationWorlds } from './locations';
 
 export type CutCode =
   | 'cut.position-jump' // a character starts the scene somewhere other than where it ended the previous one
@@ -206,9 +207,13 @@ export interface FilmEditResult {
 }
 
 /** Runs `carryFromPrevious` down a finished film (in order, so a carried pose feeds the next cut) and lints what is left. */
-export function editFilm(scenes: SceneSpec[]): FilmEditResult {
+export function editFilm(input: SceneSpec[]): FilmEditResult {
   const out: SceneSpec[] = [];
   const fixes: string[] = [];
+  // Scenes at one bible location are dressed alike first, so the seams below see them as the same place.
+  const shared = shareLocationWorlds(input);
+  for (const n of shared.notes) fixes.push(`Location: ${n}`);
+  const scenes = shared.scenes;
   let prevFilm: SceneSpec | undefined;
   for (const scene of scenes) {
     if (!isFilmScene(scene)) { out.push(scene); continue; }

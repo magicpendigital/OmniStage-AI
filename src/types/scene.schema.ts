@@ -883,8 +883,20 @@ export interface StoryBibleBeat {
   biome?: string;
   /** Phase 11B: ids of `bible.props` that appear here. */
   props?: string[];
+  /** Phase 11D: id of the `bible.locations` entry this scene happens in (scenes at one location share one world). */
+  location?: string;
   /** Phase 11B (dialogue desk): the lines of this scene (0-4). */
   lines?: StoryLine[];
+}
+
+/** Phase 11D: a place the film returns to. Every scene at a location is dressed once and reuses that world; only the camera changes. */
+export interface StoryLocation {
+  id: string;
+  name: string;
+  /** One sentence a camera can show. */
+  setting: string;
+  /** One of BIOME_IDS. */
+  biome?: string;
 }
 
 /** A planted object / line that must come back (setup → payoff). */
@@ -914,6 +926,8 @@ export interface StoryBible {
   motifs?: StoryMotif[];
   /** Phase 11B (world desk): props that deserve their own model. */
   props?: StoryProp[];
+  /** Phase 11D (world desk): the places of the film; beats point at them with `location`. */
+  locations?: StoryLocation[];
 }
 
 /** Links a scene into an ordered storyboard (film shots or game levels). */

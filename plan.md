@@ -452,8 +452,23 @@ quality between pipeline changes. Fix: write the story first, then a number that
   - Tests: `tests/filmEditor.test.ts`.
   - Still open in P0: #2 script line ids + `script.unperformable` / `script.uncovered` (coverage in the storyboard panel), #4a real
     cross-dissolve in the Player (MP4 export already crossfades from the previous frame; the Player and Preview still use an overlay),
-    #4c J/L cuts, #4d whip-pan / iris, #4e film-wide music cues, #5 shared `locations[]`, vision QA of the cut pair (last frame A +
-    first frame B).
+    #4c J/L cuts, #4d whip-pan / iris, #4e film-wide music cues, vision QA of the cut pair (last frame A + first frame B).
+    (#5 shared `locations[]` is 11D below.)
+
+- [x] **11D (done 2026-11-17, offline-tested only)** Shared locations (P0 #5): a film returns to places instead of rebuilding the world:
+  - Schema: `StoryBible.locations?: StoryLocation[]` (`id`, `name`, `setting`, `biome`) and `StoryBibleBeat.location?` (optional, old
+    bundles load). `storyBible.ts`: `cleanLocations` / `deriveLocations` (no locations given → one per distinct beat biome; a beat takes
+    the biome of its location; unused locations dropped), run inside `autoFixStoryBible`, so every path (AI bible, Writers' Room edit,
+    bible over the wire) gets consistent places. `describeBible` lists LOCATIONS; the scene prompt says "scene N already built this
+    place: keep its world, change the camera and blocking".
+  - `src/agent/locations.ts` (pure): `shareLocationWorld` dresses a scene like the first earlier scene at the same location (skybox,
+    sun, terrain, scatter, biome, features, hdri + ground colour and haze); weather, clouds, lighting preset, camera and actors stay the
+    scene's own. Called per scene in `generateStoryboard` before the carry step, and first in `editFilm`, so `sameLocation` is true
+    and characters carry across those scenes.
+  - Writers' Room: the world desk now owns `locations` and `beat.location` (prompt, merge, parallel merge, `currentOf`);
+    continuity warns `room.location-missing`.
+  - Tests: `tests/locations.test.ts` (13). Offline eval is unchanged (offline films have no bible, so no locations).
+  - Not done: the offline director does not use locations; the Writers' Room modal does not show them yet; no live AI run.
 
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`

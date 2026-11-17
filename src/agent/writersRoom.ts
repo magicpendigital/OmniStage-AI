@@ -23,6 +23,7 @@ import {
   buildLocalStoryBible,
   characterClips,
   cleanLines,
+  deriveLocations,
   lintStoryBible,
   pickStoryTemplate,
   sanitizeStoryBible,
@@ -264,6 +265,8 @@ export function mergeDeskOutput(bible: StoryBible, role: RoomRoleId, raw: unknow
     if (!clean) return null;
     if (clean.props) out.props = clean.props;
     else delete out.props;
+    if (clean.locations) out.locations = clean.locations;
+    else delete out.locations;
     const propIds = new Set((out.props || []).map((p) => p.id));
     out.beats = out.beats.map((b, i) => {
       const nb: StoryBibleBeat | undefined = clean.beats[i];
@@ -271,13 +274,14 @@ export function mergeDeskOutput(bible: StoryBible, role: RoomRoleId, raw: unknow
       const next: StoryBibleBeat = { ...b };
       if (nb.setting) next.setting = nb.setting; else delete next.setting;
       if (nb.biome) next.biome = nb.biome; else delete next.biome;
+      if (nb.location) next.location = nb.location; else delete next.location;
       const props = (nb.props || []).filter((id) => propIds.has(id));
       if (props.length) next.props = props; else delete next.props;
       return next;
     });
     const placed = out.beats.some((b) => b.setting || b.biome);
     if (!placed && !out.props?.length) return null;
-    return { bible: out };
+    return { bible: deriveLocations(out).bible };
   }
 
   if (role === 'dialogue') {
@@ -333,6 +337,9 @@ export function continuityCheck(bible: StoryBible, opts: { requireLook?: boolean
   const someSetting = bible.beats.some((b) => b.setting || b.biome);
   if (someSetting) {
     for (const b of bible.beats) if (!b.setting && !b.biome) add('room.setting-missing', 'warning', 'world', `Scene ${b.scene} has no setting.`);
+  }
+  if (bible.locations?.length) {
+    for (const b of bible.beats) if (!b.location) add('room.location-missing', 'warning', 'world', `Scene ${b.scene} is not at any of the film's locations (${bible.locations.map((l) => l.name).join(', ')}).`);
   }
   // Nobody should be in the cast without ever appearing in the story text.
   const storyText = fold(bible.beats.map((b) => [b.purpose, b.conflict, b.endsOn, b.setting, ...(b.lines || []).map((l) => l.speaker + ' ' + l.text)].join(' ')).join(' ') + ' ' + bible.logline);
@@ -504,7 +511,7 @@ export function deriveSource(desks: Record<RoomRoleId, RoomDesk>): WritersRoomSe
 function currentOf(b: StoryBible, role: RoomRoleId): unknown {
   if (role === 'architect') return { template: b.template, logline: b.logline, theme: b.theme, tone: b.tone, hook: b.hook, hookSeconds: b.hookSeconds, stakes: b.stakes, turn: b.turn, payoff: b.payoff, beats: b.beats.map(({ scene, purpose, conflict, emotionStart, emotionEnd, endsOn }) => ({ scene, purpose, conflict, emotionStart, emotionEnd, endsOn })), motifs: b.motifs };
   if (role === 'character') return { characters: b.characters };
-  if (role === 'world') return { props: b.props, beats: b.beats.map(({ scene, setting, biome, props }) => ({ scene, setting, biome, props })) };
+  if (role === 'world') return { props: b.props, locations: b.locations, beats: b.beats.map(({ scene, setting, biome, props, location }) => ({ scene, setting, biome, props, location })) };
   if (role === 'dialogue') return { beats: b.beats.map(({ scene, lines }) => ({ scene, lines })) };
   return undefined;
 }
@@ -629,10 +636,11 @@ function mergeParallel(base: WritersRoomSession, a: WritersRoomSession, b: Write
   bible.beats = bible.beats.map((beat, i) => {
     const wb = b.bible.beats[i];
     const next = { ...beat };
-    for (const k of ['setting', 'biome', 'props'] as const) { if (wb?.[k] !== undefined) (next as any)[k] = wb[k]; else delete (next as any)[k]; }
+    for (const k of ['setting', 'biome', 'props', 'location'] as const) { if (wb?.[k] !== undefined) (next as any)[k] = wb[k]; else delete (next as any)[k]; }
     return next;
   });
   if (b.bible.props) bible.props = b.bible.props; else delete bible.props;
+  if (b.bible.locations) bible.locations = b.bible.locations; else delete bible.locations;
   const desks = { ...base.desks, character: a.desks.character, world: b.desks.world };
   return { ...base, bible, desks, source: deriveSource(desks) };
 }

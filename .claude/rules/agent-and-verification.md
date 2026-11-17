@@ -41,3 +41,6 @@ paths:
 - Film editor (Phase 11C, `src/agent/filmEditor.ts`): cut lint and carry are deterministic and pure; a fix is mechanical only (character state, a mirror
   that is re-linted before it is kept), taste calls (lighting, jump cuts) are reported. Characters need a stable id across scenes (bible `actorId`,
   offline `char-<assetId>`) or nothing carries. Keep `tests/filmEditor.test.ts` green; new seam rules get a code + test there.
+- Shared locations (Phase 11D, `src/agent/locations.ts`): the bible names places (`locations[]`, `beat.location`), `autoFixStoryBible` keeps
+  them consistent (`deriveLocations`), and a scene at an already-built location reuses that world (`shareLocationWorld`; weather, lighting,
+  camera and blocking stay the scene's). The world desk owns locations; other desks must not touch them. Keep `tests/locations.test.ts` green.

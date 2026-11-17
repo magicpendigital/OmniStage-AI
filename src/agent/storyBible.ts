@@ -19,6 +19,7 @@ import type {
   StoryBibleBeat,
   StoryCharacter,
   StoryLine,
+  StoryLocation,
   StoryMotif,
   StoryProp,
   StoryTemplateId,
@@ -238,9 +239,10 @@ export function describeBible(bible: StoryBible): string {
     .join('\n');
   const motifs = (bible.motifs || []).map((m) => `- "${m.what}": planted in scene ${m.setupScene}, pays off in scene ${m.payoffScene}`).join('\n');
   const propLine = (bible.props || []).map((p) => `- ${p.id} "${p.name}" (scenes ${p.scenes.join(', ') || '-'})${p.look ? `: ${p.look}` : ''}`).join('\n');
+  const places = (bible.locations || []).map((l) => `- ${l.id} "${l.name}"${l.biome ? ` (biome ${l.biome})` : ''}${l.setting ? `: ${l.setting}` : ''} — scenes ${bible.beats.filter((b) => b.location === l.id).map((b) => b.scene).join(', ')}`).join('\n');
   const beats = bible.beats
     .map((b) => {
-      const where = [b.setting, b.biome ? `biome ${b.biome}` : '', b.props?.length ? `props ${b.props.join(', ')}` : ''].filter(Boolean).join('; ');
+      const where =[b.location ? `location ${b.location}` : '', b.setting, b.biome ? `biome ${b.biome}` : '', b.props?.length ? `props ${b.props.join(', ')}` : ''].filter(Boolean).join('; ');
       const lines = (b.lines || []).map((l) => `    ${l.speaker}${l.emotion ? ` (${l.emotion})` : ''}: "${l.text}"`).join('\n');
       return `- Scene ${b.scene}: ${b.purpose} | conflict: ${b.conflict} | ${b.emotionStart} → ${b.emotionEnd} | ends on: ${b.endsOn}${where ? ` | set: ${where}` : ''}${lines ? `\n  lines:\n${lines}` : ''}`;
     })
@@ -253,8 +255,20 @@ Turn: ${bible.turn}
 Payoff: ${bible.payoff}
 CAST:
 ${cast}
-${motifs ? `MOTIFS:\n${motifs}\n` : ''}${propLine ? `PROPS:\n${propLine}\n` : ''}BEATS:
+${motifs ? `MOTIFS:\n${motifs}\n` : ''}${propLine ? `PROPS:\n${propLine}\n` : ''}${places ? `LOCATIONS (scenes at one location share ONE world):\n${places}\n` : ''}BEATS:
 ${beats}`;
+}
+
+/** The location line of a scene prompt: where it is, and whether the set was already built by an earlier scene. */
+function locationRule(bible: StoryBible, beat: StoryBibleBeat, beatIndex: number): string {
+  const loc = (bible.locations || []).find((l) => l.id === beat.location);
+  if (!loc) return '';
+  const earlier = bible.beats.slice(0, beatIndex).find((b) => b.location === loc.id);
+  return `\n- Location: "${loc.name}" (${loc.id}).${
+    earlier
+      ? ` Scene ${earlier.scene} already built this place: keep its world (same biome, skybox and terrain) and change the camera and the blocking, not the set.`
+      : ' Build the set well: later scenes at this location reuse it.'
+  }`;
 }
 
 /** Scene-author section: the whole bible plus the highlighted beat of THIS scene. */
@@ -275,7 +289,7 @@ THIS SCENE (${beatIndex + 1} of ${total}):${
 - Purpose: ${beat.purpose}
 - Conflict: ${beat.conflict}
 - Emotion: ${beat.emotionStart} → ${beat.emotionEnd} (acting, music and framing must show the change)
-- Ends on: ${beat.endsOn}${beat.setting ? `\n- Set: ${beat.setting}` : ''}${beat.biome ? `\n- Use world.biome "${beat.biome}" for this scene.` : ''}${
+- Ends on: ${beat.endsOn}${beat.setting ? `\n- Set: ${beat.setting}` : ''}${locationRule(bible, beat, beatIndex)}${beat.biome ? `\n- Use world.biome "${beat.biome}" for this scene.` : ''}${
           beat.props?.length ? `\n- Props on stage: ${beat.props.join(', ')} (see PROPS above).` : ''
         }${
           beat.lines?.length
@@ -334,7 +348,12 @@ export function sanitizeStoryBible(raw: any, sceneCount: number): StoryBible | n
       ...(BIOME_IDS.includes(b.biome) ? { biome: String(b.biome) } : {}),
       ...(Array.isArray(b.props) ? { props: b.props.filter((x: unknown) => typeof x === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(x)).slice(0, 6) } : {}),
       ...(cleanLines(b.lines).length ? { lines: cleanLines(b.lines) } : {}),
+      ...(typeof b.location === 'string' && ID_RE.test(b.location) ? { location: b.location } : {}),
     }));
+  const locations = cleanLocations(src.locations);
+  // A beat may only point at a location that exists.
+  const locationIds = new Set(locations.map((l) => l.id));
+  for (const b of beats) if (b.location && !locationIds.has(b.location)) delete b.location;
   const props = cleanProps(src.props, sceneCount);
   const motifs: StoryMotif[] = (Array.isArray(src.motifs) ? src.motifs : [])
     .filter((m: any) => m && typeof m.what === 'string' && finite(Number(m.setupScene)) && finite(Number(m.payoffScene)))
@@ -354,7 +373,74 @@ export function sanitizeStoryBible(raw: any, sceneCount: number): StoryBible | n
     beats,
     ...(motifs.length ? { motifs } : {}),
     ...(props.length ? { props } : {}),
+    ...(locations.length ? { locations } : {}),
   };
+}
+
+const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+export const MAX_LOCATIONS = 5;
+
+export function cleanLocations(raw: unknown): StoryLocation[] {
+  const seen = new Set<string>();
+  const out: StoryLocation[] = [];
+  for (const l of Array.isArray(raw) ? raw : []) {
+    if (!l || typeof l !== 'object' || typeof l.name !== 'string' || !l.name.trim()) continue;
+    const id = typeof l.id === 'string' && ID_RE.test(l.id) ? l.id : `loc-${out.length + 1}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      name: l.name.trim().slice(0, 60),
+      setting: typeof l.setting === 'string' ? l.setting.trim().slice(0, 240) : '',
+      ...(BIOME_IDS.includes(l.biome) ? { biome: String(l.biome) } : {}),
+    });
+    if (out.length >= MAX_LOCATIONS) break;
+  }
+  return out;
+}
+
+const titleCase = (s: string) => s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * Makes the places of a bible consistent (structure only, never invents story):
+ *  - with no `locations`, every distinct biome the beats use becomes a location (a film that returns to the forest returns to the
+ *    same forest), named after the biome and described by the first beat that uses it;
+ *  - a beat with a biome but no location joins the location of that biome; a beat with a location but no biome takes its biome.
+ * Returns the same bible object when there is nothing to do.
+ */
+export function deriveLocations(bible: StoryBible): { bible: StoryBible; fixes: string[] } {
+  const fixes: string[] = [];
+  const next: StoryBible = { ...bible, beats: bible.beats.map((b) => ({ ...b })) };
+  let locations = (bible.locations || []).map((l) => ({ ...l }));
+
+  if (!locations.length) {
+    for (const b of next.beats) {
+      if (!b.biome || locations.some((l) => l.biome === b.biome)) continue;
+      if (locations.length >= MAX_LOCATIONS) break;
+      locations.push({ id: `loc-${b.biome}`, name: titleCase(b.biome), setting: b.setting || '', biome: b.biome });
+    }
+    if (locations.length) fixes.push(`${locations.length} location(s) derived from the beats' biomes`);
+  }
+  if (!locations.length) return { bible, fixes };
+
+  const ids = new Set(locations.map((l) => l.id));
+  for (const b of next.beats) {
+    if (b.location && !ids.has(b.location)) delete b.location;
+    if (!b.location && b.biome) {
+      const hit = locations.find((l) => l.biome === b.biome);
+      if (hit) b.location = hit.id;
+    }
+    const loc = locations.find((l) => l.id === b.location);
+    if (loc?.biome && b.biome !== loc.biome) b.biome = loc.biome;
+  }
+  // A location nobody uses is noise for the prompts.
+  const used = new Set(next.beats.map((b) => b.location).filter(Boolean));
+  locations = locations.filter((l) => used.has(l.id));
+  if (!locations.length) {
+    const { locations: _drop, ...rest } = next;
+    return { bible: rest, fixes };
+  }
+  return { bible: { ...next, locations }, fixes };
 }
 
 function cleanGenerated(g: any): StoryCharacter['generated'] | undefined {
@@ -450,7 +536,9 @@ export function autoFixStoryBible(input: StoryBible, sceneCount: number): { bibl
       payoffScene: Math.max(1, Math.min(sceneCount, m.payoffScene)),
     }));
   }
-  return { bible, fixes };
+  const placed = deriveLocations(bible);
+  fixes.push(...placed.fixes);
+  return { bible: placed.bible, fixes };
 }
 
 /** A bible received over the wire (planner / scene routes): sanitised and structurally fixed, or undefined. */

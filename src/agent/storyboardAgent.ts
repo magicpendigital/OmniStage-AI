@@ -49,6 +49,7 @@ import { describeDirectorReview } from './directorQA';
 import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
 import { applyBibleToScene, formatBibleSummary, lintStoryBible, writeStoryBible } from './storyBible';
 import { carryFromPrevious, lintCuts } from './filmEditor';
+import { shareLocationWorld } from './locations';
 import { sanitizeShaderEffect } from '../runtime/shaderEffects';
 
 export const MIN_STORYBOARD_SCENES = 2;
@@ -1223,6 +1224,12 @@ export async function generateStoryboardWithAgent(
       ...(beat.script ? { script: beat.script } : {}),
       ...(bible ? { bible } : {}),
     };
+    // Phase 11D: a scene at a bible location already built by an earlier scene reuses that set (only the camera changes).
+    if (i > 0 && spec.engineType === '3d' && spec.mode === 'media') {
+      const shared = shareLocationWorld(scenes, spec, bible);
+      spec = shared.scene;
+      if (shared.note) editorNotes.push(`Editor: ${shared.note}`);
+    }
     // Phase 11C film editor: characters resume where the previous scene left them (same location), before polish and QA see the scene.
     if (i > 0 && scenes[i - 1] && spec.engineType === '3d' && spec.mode === 'media') {
       const carried = carryFromPrevious(scenes[i - 1], spec);
