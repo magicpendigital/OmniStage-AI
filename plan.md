@@ -437,6 +437,24 @@ quality between pipeline changes. Fix: write the story first, then a number that
     ran from the library button.
   - Comics / interactive comics analysis: `docs/research/comic-interactive-comic-fit.md` (recommendation: storyboard grid view first).
 
+- [x] **11C (done 2026-11-17, offline-tested only)** Film editor: seams between scenes (P0 #3 lint + #4b carry; plan in
+  `docs/research/film-quality-and-commercialization.md` B1):
+  - `src/agent/filmEditor.ts` (pure, no AI): `lintCuts` reports `cut.position-jump`, `cut.facing-jump`, `cut.axis-flip` (180° rule),
+    `cut.jump-cut`, `cut.light-jump` (straight cuts in one place) and `cut.no-carryover`; `carryFromPrevious` / `editFilm` repair what
+    needs no taste: characters present in both scenes resume where and how they ended (only when both scenes share a location, else the
+    move is deliberate) and a straight cut that crosses the line gets its opening left/right angle mirrored, kept only if that clears
+    the flag. Lighting and jump cuts are reported, never guessed.
+  - Wired in `generateStoryboard`: each scene is carried from the previous one before polish / Director QA, leftovers go to the
+    summary as "Editor: ...". Offline characters now keep one id for the whole film (`char-<assetId>`; before, every scene minted new
+    ids, so nothing could carry). `filmEval` continuity gains a cut-grammar term (weights 35/20/15/10/5/15).
+  - Offline baseline 2026-11-17: mean 75 (was 70), continuity 79 (was 54). Most of that gain is the stable ids (the eval counts
+    carried characters now) plus the new term; the eval scores raw scenes, before `editFilm` runs.
+  - Tests: `tests/filmEditor.test.ts`.
+  - Still open in P0: #2 script line ids + `script.unperformable` / `script.uncovered` (coverage in the storyboard panel), #4a real
+    cross-dissolve in the Player (MP4 export already crossfades from the previous frame; the Player and Preview still use an overlay),
+    #4c J/L cuts, #4d whip-pan / iris, #4e film-wide music cues, #5 shared `locations[]`, vision QA of the cut pair (last frame A +
+    first frame B).
+
 ### Phase 6 — Batch 3 "Generate" (runs alongside Phases 7–9)
 - [x] Asset-generation providers as Extensions (2026-11-14): catalog extensions `meshy-3d-generator`, `tripo-3d-generator`
   (text → GLB; Meshy preview → PBR refine), `fal-sprite-generator` (FLUX schnell + background cut-out → transparent PNG) and

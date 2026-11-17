@@ -48,6 +48,7 @@ import { aiHeaders } from './aiClient';
 import { describeDirectorReview } from './directorQA';
 import { directorQAAvailable, runDirectorQAForShot } from './directorQARunner';
 import { applyBibleToScene, formatBibleSummary, lintStoryBible, writeStoryBible } from './storyBible';
+import { carryFromPrevious, lintCuts } from './filmEditor';
 import { sanitizeShaderEffect } from '../runtime/shaderEffects';
 
 export const MIN_STORYBOARD_SCENES = 2;
@@ -790,7 +791,11 @@ function buildLocal3DFilmShot(prompt: string, beat: StoryboardBeat, index: numbe
     const clip = isFinale ? c.hero : isClimax || index > 0 ? c.run : c.walk;
     const x = (i - (Math.min(characters.length, 3) - 1) / 2) * 2.2;
     const actor = buildActor(c.id, clip, [x, 0, index === 0 ? -1 : 0], duration, isClimax ? Math.PI / 2 : 0);
-    if (actor) actors.push(actor);
+    // Phase 11C: a character keeps one id for the whole film, so the film editor can carry it across scenes.
+    if (actor) {
+      actor.id = `char-${c.id}`;
+      actors.push(actor);
+    }
   });
   if (isClimax) {
     const hazard = buildActor('hazard-laser-mine', undefined, [0, 0, -3.2], duration);
@@ -1161,6 +1166,7 @@ export async function generateStoryboardWithAgent(
   const scenes: SceneSpec[] = [];
   const sources = new Set<'gemini' | 'local'>();
   const directorNotes: string[] = [];
+  const editorNotes: string[] = [];
   let geminiAvailable = planSource === 'gemini';
   for (let i = 0; i < plan.beats.length; i++) {
     if (signal?.aborted) break;
@@ -1217,6 +1223,12 @@ export async function generateStoryboardWithAgent(
       ...(beat.script ? { script: beat.script } : {}),
       ...(bible ? { bible } : {}),
     };
+    // Phase 11C film editor: characters resume where the previous scene left them (same location), before polish and QA see the scene.
+    if (i > 0 && scenes[i - 1] && spec.engineType === '3d' && spec.mode === 'media') {
+      const carried = carryFromPrevious(scenes[i - 1], spec);
+      spec = carried.scene;
+      for (const n of carried.notes) editorNotes.push(`Editor, scene ${i + 1}: ${n}`);
+    }
     // Phase 10A: AI film shots that still look static / empty get up to 2 polish rounds through the patch loop.
     if (source === 'gemini' && spec.engineType === '3d' && spec.mode === 'media' && !signal?.aborted) {
       callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Polishing ${beat.title}` });
@@ -1238,6 +1250,9 @@ export async function generateStoryboardWithAgent(
     callbacks.onScene?.(spec, i, source);
   }
 
+  // What the editor could not decide for you (lighting jumps, jump cuts) goes to the summary.
+  for (const f of lintCuts(scenes)) if (!f.fixable && f.severity === 'warning') editorNotes.push(`Editor: ${f.message}`);
+
   const source = sources.size > 1 ? 'mixed' : (sources.values().next().value ?? 'local');
   const unit = plan.kind === 'game-levels' ? 'level' : 'scene';
   return {
@@ -1255,6 +1270,6 @@ export async function generateStoryboardWithAgent(
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'
         : 'Scenes are linked in order — open the Scenes tab to review each shot.'
     }`,
-    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
+    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...editorNotes, ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
   };
 }

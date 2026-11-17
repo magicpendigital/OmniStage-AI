@@ -38,3 +38,6 @@ paths:
   write its own fields (`mergeDeskOutput`); `POST /api/agent/storyboard/room` builds prompts from `RoomAskRequest`, never from client
   text; a failed desk falls back to the offline template and is marked `local`; abort must propagate. Keep `tests/writersRoom.test.ts`
   green. Generated models reach scenes only through `applyBibleToScene` (stand-in rig stays the `assetId`).
+- Film editor (Phase 11C, `src/agent/filmEditor.ts`): cut lint and carry are deterministic and pure; a fix is mechanical only (character state, a mirror
+  that is re-linted before it is kept), taste calls (lighting, jump cuts) are reported. Characters need a stable id across scenes (bible `actorId`,
+  offline `char-<assetId>`) or nothing carries. Keep `tests/filmEditor.test.ts` green; new seam rules get a code + test there.

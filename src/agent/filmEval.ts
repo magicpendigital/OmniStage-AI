@@ -11,6 +11,7 @@
 import { resolvePerformance, shotWindows } from '../runtime/cinematics';
 import { MEDIA_CRAFT_CODES, verifySceneSpec } from '../verification/sceneVerifier';
 import { lintStoryBible, MAX_HOOK_SECONDS, strictClipMatch } from './storyBible';
+import { lintCuts } from './filmEditor';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import type { ActorNode, SceneSpec, StoryBible } from '../types/scene.schema';
 
@@ -297,7 +298,11 @@ function evalContinuity(scenes: SceneSpec[]): EvalDimension {
   if (mean(music) < 1) notes.push('the music mood changes on a straight cut');
   const variety = scenes.length >= 3 ? Math.min(1, transitions.size / 2) : 1;
   if (variety < 1) notes.push('every transition is the same');
-  return dim('continuity', 40 * mean(position) + 20 * mean(identity) + 20 * mean(worldLogic) + 10 * mean(music) + 10 * variety, notes);
+  // Phase 11C cut grammar: the film editor's seam checks (180° rule, jump cuts, lighting jumps on a straight cut).
+  const grammar = lintCuts(scenes).filter((f) => f.code === 'cut.axis-flip' || f.code === 'cut.jump-cut' || f.code === 'cut.light-jump');
+  const grammarScore = Math.max(0, 1 - grammar.length / (scenes.length - 1));
+  for (const f of grammar.slice(0, 2)) notes.push(f.message);
+  return dim('continuity', 35 * mean(position) + 20 * mean(identity) + 15 * mean(worldLogic) + 10 * mean(music) + 5 * variety + 15 * grammarScore, notes);
 }
 
 function evalTechnical(reports: ReturnType<typeof verifySceneSpec>[]): EvalDimension {
