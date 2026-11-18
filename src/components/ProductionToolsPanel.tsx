@@ -85,7 +85,7 @@ export function ProductionToolsPanel() {
         <p className={`text-[11px] ${vision ? 'text-slate-400' : 'text-amber-300'}`}>
           {vision
             ? 'Works with your current AI connection (it can see images).'
-            : 'Your current AI connection is a CLI and cannot see images, so Director QA is skipped. Use Gemini, Anthropic, OpenRouter or an OpenAI-compatible connection.'}
+            : 'Your current AI connection is Claude Code (CLI), which cannot see images, so Director QA is skipped. Use an API connection, Codex, OpenCode (with a vision model) or Antigravity.'}
         </p>
       </div>
 

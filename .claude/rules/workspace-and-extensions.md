@@ -48,6 +48,9 @@ paths:
   `tests/glbOptimize.test.ts` green. Image decoding stays in the browser codec (no native image dependency).
 - CLI providers: prompts via stdin or a temp file, never argv; model ids through `sanitizeModelId`; run in a temp cwd with tools disabled
   where the CLI allows. Re-verify flags with `<cli> --help` after CLI upgrades and update `server/ai/cliProviders.ts` comments.
+  Vision (Phase 11E): Codex (`--image`), OpenCode (`-f`, needs a vision + tool-use model) and Antigravity (agent opens the temp file by path) get the
+  image as a temp file in their temp cwd; Claude Code CLI runs with no tools so it stays `vision: false`. `CLI_VISION` (server) and `providerInfo().vision`
+  (studio) must agree (`tests/cliVision.test.ts`). OpenCode needs ABSOLUTE `-f` paths and `PWD` set to the temp cwd. Codex: never put `-` after `--image`.
 - Anthropic calls use the official `@anthropic-ai/sdk` (default `claude-opus-5-5`, adaptive thinking, server-side refusal fallback).
 - Phone preview: `/play/:token` is the ONLY route meant for the LAN. Keep tokens random (crypto) with an expiry, never serve workspace
   files through it, and keep session creation behind `isLoopbackRequest`. Play Test iframes stay `sandbox="allow-scripts allow-pointer-lock"`

@@ -21,9 +21,9 @@ export const AI_PROVIDERS: AIProviderInfo[] = [
   { id: 'openrouter', label: 'OpenRouter', kind: 'api', needsKey: true, modelHint: 'anthropic/claude-sonnet-5.5', vision: true, description: 'One key, hundreds of models (provider/model ids).' },
   { id: 'openai-compatible', label: 'OpenAI-compatible', kind: 'api', needsKey: true, needsBaseUrl: true, modelHint: 'gpt-5', vision: true, description: 'OpenAI, Ollama, LM Studio, vLLM, Groq, DeepSeek… any /chat/completions endpoint. Local URLs need no key.' },
   { id: 'cli-claude', label: 'Claude Code (CLI)', kind: 'cli', needsKey: false, modelHint: 'sonnet', vision: false, description: 'Uses the Claude Code CLI signed in on this computer.' },
-  { id: 'cli-codex', label: 'Codex CLI', kind: 'cli', needsKey: false, modelHint: 'gpt-5-codex', vision: false, description: 'Uses `codex exec` signed in on this computer.' },
-  { id: 'cli-antigravity', label: 'Antigravity CLI', kind: 'cli', needsKey: false, modelHint: 'see `agy models`', vision: false, description: 'Uses the Google Antigravity CLI (`agy`) signed in on this computer.' },
-  { id: 'cli-opencode', label: 'OpenCode (CLI)', kind: 'cli', needsKey: false, modelHint: 'opencode/big-pickle', vision: false, description: 'Uses `opencode run` with any model configured in OpenCode (provider/model).' },
+  { id: 'cli-codex', label: 'Codex CLI', kind: 'cli', needsKey: false, modelHint: 'gpt-5-codex', vision: true, description: 'Uses `codex exec` signed in on this computer. Sees images (--image); weak at left/right.' },
+  { id: 'cli-antigravity', label: 'Antigravity CLI', kind: 'cli', needsKey: false, modelHint: 'see `agy models`', vision: true, description: 'Uses the Google Antigravity CLI (`agy`) signed in on this computer. Sees images by opening the file (a bit slower).' },
+  { id: 'cli-opencode', label: 'OpenCode (CLI)', kind: 'cli', needsKey: false, modelHint: 'opencode/big-pickle', vision: true, description: 'Uses `opencode run` with any model configured in OpenCode (provider/model). Images need a model with vision and tool use, e.g. google/gemini-2.5-flash.' },
 ];
 
 export function providerInfo(id: AIProviderId): AIProviderInfo {

@@ -56,7 +56,7 @@ Toàn bộ "diễn xuất" hiện nay là: **chọn clip có sẵn** + `moveTo` 
   `assetRegistry.ts` cũng **không có trường giấy phép** cho từng model (xem D3).
 - **Verifier đo "hợp lệ", chưa đo "hay"**: chỉ có 4 mã craft (`media.hero-static`, `single-shot`, `bare-stage`, `silent`).
   Luật "hero ≥ 3 hành động" khuyến khích AI **thêm clip cho đủ số**, không cần có mục đích.
-- **Director QA bị bỏ qua khi dùng CLI login** (Claude Code, Codex…), vì các CLI này không có vision. Đây lại là đường rẻ nhất mà người dùng hay chọn.
+- **Director QA bị bỏ qua khi dùng CLI login** (Claude Code, Codex…), vì các CLI này không có vision. Đây lại là đường rẻ nhất mà người dùng hay chọn. *(Cập nhật 2026-11-18: Codex, OpenCode và Antigravity đã nhận ảnh qua tệp tạm; chỉ còn Claude Code CLI là không có vision. Xem plan.md, 11E.)*
   Khi chạy, nó chỉ chụp 1 khung giữa mỗi shot (tối đa 4) và sửa **một vòng**. Không có đánh giá chuyển động hay ranh giới giữa các cảnh.
 - **Không có bộ kiểm thử chất lượng phim** (golden prompts). Mỗi lần sửa prompt không biết phim tốt lên hay tệ đi.
 

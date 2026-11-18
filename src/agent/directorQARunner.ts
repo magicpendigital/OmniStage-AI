@@ -22,7 +22,7 @@ export type DirectorQASettings = Pick<
   'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'directorQA' | 'directorQAThreshold'
 >;
 
-/** Director QA runs only on connections that can see images (CLI providers cannot), unless switched off in Settings. */
+/** Director QA runs only on connections that can see images (API providers, Codex, OpenCode, Antigravity; not Claude Code CLI), unless switched off in Settings. */
 export function directorQAAvailable(settings: Pick<SettingsConfig, 'aiProvider' | 'directorQA'>): boolean {
   return settings.directorQA !== false && providerInfo(settings.aiProvider || 'gemini').vision;
 }

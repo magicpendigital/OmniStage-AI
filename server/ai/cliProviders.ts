@@ -11,11 +11,17 @@
  *   agy      --input-format stream-json --output-format stream-json --sandbox -p=   (Google Antigravity CLI 1.5.4:
  *            stdin NDJSON {"event":"user","message":{"content":...}} → NDJSON, final {"event":"result"} .result.response;
  *            tool calls needing permission are auto-denied in headless mode)
+ * Vision (Phase 11E, verified 2026-11-18 with a red/blue + solid-colour PNG): the image is written next to the prompt in the temp cwd and
+ *   codex    --image <file> (prompt on stdin WITHOUT the trailing "-": --image takes several values and would swallow it)
+ *   opencode -f <image> next to the prompt file (needs a model with vision AND tool use; the default OpenRouter model may have neither)
+ *   agy      no image flag: the user message tells the agent to open the file by its absolute path (read_file tool, works under --sandbox)
+ *   claude   not enabled: it runs with --tools "" so it has no way to open a file.
+ * Codex named both colours right but swapped left/right on a 64x32 image: treat spatial answers (screen direction) with care.
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { CliProviderId, GenerateRequest, GenerateResult, ProviderConfig } from './types';
 import { ProviderUnavailableError, sanitizeModelId } from './types';
 
@@ -25,6 +31,50 @@ export const CLI_BINARIES: Record<CliProviderId, { command: string; label: strin
   'cli-antigravity': { command: 'agy', label: 'Google Antigravity CLI', install: 'Install Google Antigravity, run `agy install`, then `agy` once to sign in' },
   'cli-opencode': { command: 'opencode', label: 'OpenCode', install: 'npm i -g opencode-ai, then `opencode auth login`' },
 };
+
+/** Which CLI providers can be given an image (see the header). The studio mirrors this in `providerInfo(...).vision` (tests check both). */
+export const CLI_VISION: Record<CliProviderId, boolean> = {
+  'cli-claude': false,
+  'cli-codex': true,
+  'cli-opencode': true,
+  'cli-antigravity': true,
+};
+
+const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+
+/** File name an image is saved under in the CLI's temp cwd: the real format (sniffed from the bytes) wins over the claimed mime type. */
+export function imageFileName(mimeType: string, bytes?: Uint8Array): string {
+  const sniffed = bytes && bytes.length > 4
+    ? bytes[0] === 0x89 && bytes[1] === 0x50 ? 'png' : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'jpg' : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'gif' : bytes[0] === 0x52 && bytes[1] === 0x49 ? 'webp' : undefined
+    : undefined;
+  return `omnistage-image.${sniffed || IMAGE_EXT[String(mimeType).toLowerCase()] || 'png'}`;
+}
+
+/** Codex arguments. With an image the prompt still comes from stdin, but without the trailing "-" (--image is variadic and would take it as a file). */
+export function codexArgs(model: string | undefined, outFile: string, imageFile?: string): string[] {
+  const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--color', 'never', '-o', outFile];
+  if (model) args.push('-m', model);
+  if (imageFile) args.push('--image', imageFile);
+  else args.push('-');
+  return args;
+}
+
+const baseName = (p: string) => p.split(/[\\/]/).pop() || p;
+
+/**
+ * OpenCode arguments: the prompt file and (optionally) the image are both attached with -f; the instruction follows "--".
+ * Pass ABSOLUTE paths (the caller's temp dir): OpenCode 1.19 does not find a relative -f path when $PWD differs from the cwd.
+ */
+export function openCodeArgs(model: string | undefined, promptFile: string, imageFile?: string): string[] {
+  const args = ['run', '--format', 'json', '-f', shellArg(promptFile)];
+  if (imageFile) args.push('-f', shellArg(imageFile));
+  if (model) args.push('-m', model);
+  const prompt = baseName(promptFile);
+  args.push('--', shellArg(imageFile
+    ? `Follow the instructions in the attached file ${prompt} exactly. The attached image ${baseName(imageFile)} is the picture it refers to.`
+    : `Follow the instructions in the attached file ${prompt} exactly.`));
+  return args;
+}
 
 interface RunResult {
   code: number | null;
@@ -42,7 +92,8 @@ function run(command: string, args: string[], opts: { cwd: string; stdin?: strin
       shell: process.platform === 'win32',
       windowsHide: true,
       stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      env: { ...process.env, NO_COLOR: '1' },
+      // PWD too: some CLIs (OpenCode 1.19) resolve relative paths against $PWD, which `cwd` alone does not update.
+      env: { ...process.env, NO_COLOR: '1', PWD: opts.cwd },
     });
     let stdout = '';
     let stderr = '';
@@ -76,17 +127,28 @@ export function shellArg(value: string): string {
   return process.platform === 'win32' ? `"${value.replace(/"/g, '')}"` : value;
 }
 
-/** Single text prompt for CLIs that have no separate system channel. */
-export function composeCliPrompt(req: GenerateRequest): string {
+/**
+ * Single text prompt for CLIs that have no separate system channel. `image` says how the picture reaches the model:
+ * 'attached' (the CLI got it as an attachment) or { path } (the agent must open that file itself, its file viewer is the only tool allowed).
+ */
+export function composeCliPrompt(req: GenerateRequest, image?: 'attached' | { path: string }): string {
+  const imageLines = !image
+    ? []
+    : image === 'attached'
+      ? ['# IMAGE', 'An image is attached to this message. Look at it: the task below is about what is IN the picture.', '']
+      : ['# IMAGE', `The picture is the file ${image.path}. Open it with your file viewing tool NOW (that is the only tool you may use), look at it, then answer: the task below is about what is IN the picture.`, ''];
   return [
     '# ROLE AND RULES',
     req.system,
     '',
+    ...imageLines,
     '# TASK',
     req.user,
     '',
     '# OUTPUT',
-    'Answer with ONE JSON object only. No markdown fences, no commentary, do not use tools or edit files.',
+    image && image !== 'attached'
+      ? 'Answer with ONE JSON object only. No markdown fences, no commentary, do not edit files or run anything.'
+      : 'Answer with ONE JSON object only. No markdown fences, no commentary, do not use tools or edit files.',
   ].join('\n');
 }
 
@@ -157,10 +219,18 @@ export async function callCliProvider(cfg: ProviderConfig, req: GenerateRequest)
   const bin = CLI_BINARIES[id];
   if (!bin) throw new Error(`Unknown CLI provider ${cfg.provider}`);
   const model = sanitizeModelId(cfg.model);
-  const prompt = composeCliPrompt(req);
   const timeoutMs = req.timeoutMs ?? 300_000;
   const cwd = await mkdtemp(join(tmpdir(), 'omnistage-cli-'));
   try {
+    // An image (vision QA) is saved in the temp cwd; a CLI that cannot see (claude) refuses it instead of answering blind.
+    let imageFile: string | undefined;
+    if (req.image) {
+      if (!CLI_VISION[id]) throw new ProviderUnavailableError(`${bin.label} cannot see images.`);
+      const bytes = Buffer.from(req.image.base64, 'base64');
+      imageFile = imageFileName(req.image.mimeType, bytes);
+      await writeFile(join(cwd, imageFile), bytes);
+    }
+    const prompt = composeCliPrompt(req, imageFile ? (id === 'cli-antigravity' ? { path: resolve(cwd, imageFile) } : 'attached') : undefined);
     let text: string;
     if (id === 'cli-claude') {
       const args = ['-p', '--output-format', 'json', '--tools', shellArg(''), '--no-session-persistence'];
@@ -170,17 +240,13 @@ export async function callCliProvider(cfg: ProviderConfig, req: GenerateRequest)
       text = parseClaudeOutput(r.stdout);
     } else if (id === 'cli-codex') {
       const out = join(cwd, 'last-message.txt');
-      const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--color', 'never', '-o', out];
-      if (model) args.push('-m', model);
-      args.push('-');
+      const args = codexArgs(model, out, imageFile);
       const r = await run(bin.command, args, { cwd, stdin: prompt, timeoutMs });
       if (r.code !== 0) fail(bin.label, r);
       text = await readFile(out, 'utf8');
     } else if (id === 'cli-opencode') {
       await writeFile(join(cwd, 'omnistage-prompt.md'), prompt, 'utf8');
-      const args = ['run', '--format', 'json', '-f', 'omnistage-prompt.md'];
-      if (model) args.push('-m', model);
-      args.push('--', shellArg('Follow the instructions in the attached file omnistage-prompt.md exactly.'));
+      const args = openCodeArgs(model, join(cwd, 'omnistage-prompt.md'), imageFile ? join(cwd, imageFile) : undefined);
       const r = await run(bin.command, args, { cwd, timeoutMs });
       if (r.code !== 0 && !r.stdout.includes('"type":"text"')) fail(bin.label, r);
       text = parseOpenCodeEvents(r.stdout);

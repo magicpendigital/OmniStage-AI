@@ -489,6 +489,14 @@ quality between pipeline changes. Fix: write the story first, then a number that
     B on the exported Player), `reviewCut`, server route `/api/agent/vision-qa` mode `cut`. Runs in `generateStoryboard` only for AI scenes on a
     vision-capable connection; findings are editor NOTES, never auto-applied.
   - Tests: `tests/phase11e.test.ts` (33) + 5 Playwright tests (`player.e2e.ts`, each transition through the real Player). Offline eval unchanged (75).
+  - Live check 2026-11-18 (`rain-dance-en`, Claude CLI, 865 s): eval 93 (A), cue sheet 112 BPM across the film, script coverage 16/16 (time-window
+    check: it does not prove the action is the RIGHT one), no J/L cut or whip-pan / iris happened to occur. Cut QA not run live (needs a vision connection).
+  - Vision for CLI providers (follow-up, same day): Codex (`--image`), OpenCode (`-f`, vision + tool-use model) and Antigravity (agent opens the temp
+    file) now receive the image, so Director QA and cut QA no longer need an API key; Claude Code CLI stays text-only (`CLI_VISION`). Checked live on a
+    solid yellow PNG through `callCliProvider`: codex 9 s, opencode 7 s (google/gemini-2.5-flash), antigravity 25 s, all `{"colour":"yellow"}`. Codex swapped
+    left/right on a 64x32 red|blue test image (one sample), so screen-direction findings from it deserve a second look. Also fixed: the OpenCode CLI
+    provider failed on every call on opencode 1.19 ("File not found: omnistage-prompt.md"; it resolves relative `-f` paths against $PWD): now absolute
+    paths + `PWD` = the temp cwd. Tests: `tests/cliVision.test.ts`. Not yet run: cut QA / Director QA with a CLI on real film frames.
   - Not done: the studio Preview still uses the colour-overlay approximation; J/L cuts exist only in the MP4 soundtrack, not the live Player;
     the cue sheet unifies tempo and mood, not the musical key, and only touches scenes that already have music; the planner does not yet receive
     each actor's real clip list and scenes do not return a `scriptLineId` per action (coverage is inferred from time windows); cut QA and

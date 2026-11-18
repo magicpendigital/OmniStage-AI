@@ -9,10 +9,11 @@
  */
 import type { Express, Request } from 'express';
 import { apiProviderConfigured, callApiProvider, DEFAULT_MODELS } from './apiProviders';
-import { callCliProvider, CLI_BINARIES, detectCliProviders } from './cliProviders';
+import { callCliProvider, CLI_BINARIES, CLI_VISION, detectCliProviders } from './cliProviders';
 import { AllProvidersFailedError, buildChain, fallbackNote, parseFallbackHeader, providerHealth, runWithFallback } from './fallback';
 import {
   API_PROVIDERS,
+  CliProviderId,
   extractJSON,
   GenerateRequest,
   GenerateResult,
@@ -59,8 +60,8 @@ export function resolveProviderConfig(req: Request, bodyModel?: unknown): Provid
 
 export async function generate(cfg: ProviderConfig, request: GenerateRequest, req?: Request): Promise<GenerateResult> {
   if (isCliProvider(cfg.provider)) {
-    if (request.requireVision) {
-      throw new ProviderUnavailableError('This needs a vision-capable AI connection (Gemini, Anthropic, OpenRouter or OpenAI-compatible); CLI providers cannot see images.');
+    if (request.requireVision && !CLI_VISION[cfg.provider as CliProviderId]) {
+      throw new ProviderUnavailableError('This needs a vision-capable AI connection (an API provider, Codex, OpenCode or Antigravity); this CLI cannot see images.');
     }
     if (req && !isLoopbackRequest(req)) {
       throw new ProviderUnavailableError('CLI providers are only available when OmniStage is opened on this computer (localhost).');

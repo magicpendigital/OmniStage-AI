@@ -493,7 +493,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     const say = (content: string, extra: Partial<ChatMessage> = {}) =>
       addChatMessage({ id: `msg-dqa-${Date.now()}`, role: 'assistant', content, timestamp: now(), ...extra });
     if (!providerInfo(settings.aiProvider || 'gemini').vision) {
-      say('Director QA needs a vision-capable AI connection (an API provider, not a CLI login). Switch the connection and try again.');
+      say('Director QA needs a vision-capable AI connection (an API provider, Codex, OpenCode with a vision model, or Antigravity; not Claude Code CLI). Switch the connection and try again.');
       return;
     }
     setDirectorQARunning(true);
