@@ -346,7 +346,10 @@ export const LogicPanel: React.FC = () => {
               <option value="none">none / UI</option>
               <option value="player-platformer">platformer player</option>
               <option value="player-topdown">top-down player</option>
-              <option value="static-platform">solid platform</option>
+              <option value="static-platform">one-way platform</option>
+              <option value="solid">solid block</option>
+              <option value="hazard">hazard</option>
+              <option value="checkpoint">checkpoint</option>
               <option value="collectible">collectible</option>
               <option value="bouncing">bouncing</option>
             </select>

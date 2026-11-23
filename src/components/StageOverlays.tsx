@@ -194,7 +194,10 @@ export const Node2DInspectorPill: React.FC<{ selectedNode2D: Node2D }> = ({ sele
         <option value="none">Role: None / UI</option>
         <option value="player-platformer">Role: 2D Platformer Player</option>
         <option value="player-topdown">Role: 2D Top-Down Player</option>
-        <option value="static-platform">Role: Solid Platform</option>
+        <option value="static-platform">Role: One-way Platform</option>
+        <option value="solid">Role: Solid Block</option>
+        <option value="hazard">Role: Hazard</option>
+        <option value="checkpoint">Role: Checkpoint</option>
         <option value="collectible">Role: Collectible (+PTS)</option>
         <option value="bouncing">Role: Bouncing Orb</option>
       </select>

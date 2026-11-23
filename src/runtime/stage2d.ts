@@ -9,9 +9,15 @@ import { particleRuntimeFor } from '../vfx/particles2D';
 import { activeCaptions, drawCaptionOnCanvas } from '../media/captions';
 import { playSceneSfx } from '../audio/audioBus';
 import { sampleKeyframes } from '../animation/easing';
-import { Node2D } from '../types/scene.schema';
+import { Node2D, SceneSpec } from '../types/scene.schema';
 import { runtimeStore } from './host';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, findLogicContacts, RuntimeLogicGraph } from './logicGraph';
+import { overlaps, Solid } from './physics/collide2d';
+import { Camera2DState, createCamera2D, fitWorldCamera, resolveCamera2D, resolveWorld, screenToWorld, stepCamera2D } from './physics/camera2d';
+import { moverOffset } from './physics/mover';
+import { nodeBox2D } from './physics/nodeBox';
+import { ControllerInput, createPlatformerState, PlatformerState, stepPlatformer, stepTopDown } from './physics/platformer';
+import { resolveTuning } from './physics/constants';
 
 export interface RuntimeBody2D {
   x: number;
@@ -22,6 +28,138 @@ export interface RuntimeBody2D {
   collected?: boolean;
   specX?: number;
   specY?: number;
+  /** Phase 2: the player's controller state (coyote time, jump buffer, …), created on the first play frame. */
+  ctl?: PlatformerState;
+  /** Phase 2: where the player comes back after a hazard or a fall (start position, then the last checkpoint). */
+  respawnX?: number;
+  respawnY?: number;
+  /** Phase 2: a checkpoint the player has already touched. */
+  reached?: boolean;
+  /** Phase 2: a mover's offset last frame, so the platform's per-frame travel (and its rider's carry) is exact. */
+  moverPrev?: { x: number; y: number };
+}
+
+/** One camera per bodies map (= per stage instance / scene): the studio and Player both read it for pointer hit tests. */
+const cameras = new WeakMap<object, Camera2DState>();
+export function cameraFor(bodies: Record<string, RuntimeBody2D>): Camera2DState {
+  let cam = cameras.get(bodies);
+  if (!cam) {
+    cam = createCamera2D();
+    cameras.set(bodies, cam);
+  }
+  return cam;
+}
+
+function inputFromKeys(keys: Set<string>): ControllerInput {
+  return {
+    left: keys.has('a') || keys.has('arrowleft'),
+    right: keys.has('d') || keys.has('arrowright'),
+    up: keys.has('w') || keys.has('arrowup'),
+    down: keys.has('s') || keys.has('arrowdown'),
+    jump: keys.has('w') || keys.has('arrowup') || keys.has(' '),
+  };
+}
+
+function isCollidable(role: Node2D['physics2D']) {
+  return role === 'static-platform' || role === 'solid';
+}
+
+/**
+ * Phase 2: one game-mode physics step for the player: build the solids (moving platforms carry what stands on them),
+ * run the controller, then resolve hazards, checkpoints, the world edge and falling out of the world.
+ */
+function simulatePlayer2D(
+  spec: SceneSpec,
+  nodes: Node2D[],
+  player: Node2D,
+  bodies: Record<string, RuntimeBody2D>,
+  keys: Set<string>,
+  dt: number,
+  time: number,
+  gravityPx: number
+) {
+  const world = resolveWorld(spec.world2D);
+  const topDown = player.physics2D === 'player-topdown';
+  const body = bodies[player.id];
+  const tuning = resolveTuning(player.controller, gravityPx);
+
+  const solids: Solid[] = [];
+  for (const n of nodes) {
+    if (n.visible === false || !isCollidable(n.physics2D)) continue;
+    const off = moverOffset(n.mover, time);
+    const nb = bodies[n.id];
+    const prev = nb?.moverPrev ?? off;
+    if (nb) nb.moverPrev = off;
+    const box = nodeBox2D(n, { x: n.x + off.x, y: n.y + off.y });
+    solids.push({
+      id: n.id,
+      box,
+      kind: n.physics2D === 'solid' || topDown ? 'solid' : 'one-way',
+      dx: off.x - prev.x,
+      dy: off.y - prev.y,
+    });
+  }
+
+  const hit = nodeBox2D(player, { x: body.x, y: body.y });
+  const offX = hit.x - body.x;
+  const offY = hit.y - body.y;
+  let ctl = body.ctl;
+  if (!ctl) {
+    ctl = body.ctl = createPlatformerState(hit.x, hit.y, hit.w, hit.h);
+    body.respawnX ??= body.x;
+    body.respawnY ??= body.y;
+  }
+  ctl.w = hit.w;
+  ctl.h = hit.h;
+  ctl.x = hit.x;
+  ctl.y = hit.y;
+
+  const input = inputFromKeys(keys);
+  if (topDown) stepTopDown(ctl, input, dt, solids, tuning);
+  else if (stepPlatformer(ctl, input, dt, solids, tuning).jumped) playSceneSfx(spec, 'jump');
+
+  const halfW = ctl.w / 2;
+  if (ctl.x < halfW) ctl.x = halfW;
+  if (ctl.x > world.width - halfW) ctl.x = world.width - halfW;
+  if (topDown) ctl.y = Math.min(world.height - ctl.h / 2, Math.max(ctl.h / 2, ctl.y));
+
+  const respawn = () => {
+    const x = body.respawnX ?? player.x;
+    const y = body.respawnY ?? player.y;
+    body.ctl = createPlatformerState(x + offX, y + offY, hit.w, hit.h);
+    ctl = body.ctl;
+  };
+
+  // Hazards and checkpoints are sensors: they never block, they react to overlap.
+  const box = { x: ctl.x, y: ctl.y, w: ctl.w, h: ctl.h };
+  let dead = !topDown && ctl.y - ctl.h / 2 > world.height + 100;
+  for (const n of nodes) {
+    if (n.visible === false || (n.physics2D !== 'hazard' && n.physics2D !== 'checkpoint')) continue;
+    const off = moverOffset(n.mover, time);
+    const sensor = nodeBox2D(n, { x: n.x + off.x, y: n.y + off.y });
+    if (!overlaps(box, sensor)) continue;
+    if (n.physics2D === 'hazard') dead = true;
+    else {
+      const nb = bodies[n.id];
+      if (nb && !nb.reached) {
+        nb.reached = true;
+        playSceneSfx(spec, 'collect');
+      }
+      // Come back standing on the checkpoint.
+      body.respawnX = sensor.x - offX;
+      body.respawnY = sensor.y + sensor.h / 2 - hit.h / 2 - offY;
+    }
+  }
+  if (dead) {
+    playSceneSfx(spec, 'hit');
+    respawn();
+  }
+
+  body.x = ctl.x - offX;
+  body.y = ctl.y - offY;
+  body.vx = ctl.vx;
+  body.vy = ctl.vy;
+  body.onGround = ctl.grounded;
 }
 
 export function drawStage2D(
@@ -48,101 +186,55 @@ export function drawStage2D(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, DESIGN_WIDTH, DESIGN_HEIGHT);
 
+  // Phase 2: the world may be bigger than one screen. While authoring (or in media mode) the whole world is fitted on
+  // screen; while a game plays the camera follows the player.
+  const spec = runtimeStore.getState().sceneSpec;
+  const world = resolveWorld(spec.world2D);
+  const cam = cameraFor(bodies);
+  const follow = mode === 'game' && isPlaying;
+
+  // 2D Physics Simulation Step (Phase 2: src/runtime/physics/*)
+  let target: { x: number; y: number; vx: number } | null = null;
+  if (follow) {
+    const playerNode = nodes.find((n) => (n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown') && n.visible !== false);
+    if (playerNode) {
+      const b =
+        bodies[playerNode.id] ||
+        (bodies[playerNode.id] = { x: playerNode.x, y: playerNode.y, vx: 0, vy: 0, onGround: false });
+      simulatePlayer2D(spec, nodes, playerNode, bodies, keys, dt, currentTime, gravityPx);
+      target = { x: b.x, y: b.y, vx: b.vx };
+    }
+  }
+  if (follow) stepCamera2D(cam, target, resolveCamera2D(spec.camera2D, world), world, dt);
+  else fitWorldCamera(world, cam);
+
+  ctx.save();
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
+
   if (showGrid) {
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
     ctx.lineWidth = 1;
     const step = 50;
-    for (let x = 0; x <= DESIGN_WIDTH; x += step) {
+    for (let x = 0; x <= world.width; x += step) {
       ctx.beginPath();
       ctx.moveTo(x, 0);
-      ctx.lineTo(x, DESIGN_HEIGHT);
+      ctx.lineTo(x, world.height);
       ctx.stroke();
     }
-    for (let y = 0; y <= DESIGN_HEIGHT; y += step) {
+    for (let y = 0; y <= world.height; y += step) {
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(DESIGN_WIDTH, y);
+      ctx.lineTo(world.width, y);
       ctx.stroke();
     }
   }
-
-  // 2D Physics Simulation Step
-  if (mode === 'game' && isPlaying) {
-    const playerNode = nodes.find(
-      (n) =>
-        (n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown') &&
-        n.visible !== false
-    );
-    const platforms = nodes.filter(
-      (n) => n.physics2D === 'static-platform' && n.visible !== false
-    );
-
-    if (playerNode) {
-      const b =
-        bodies[playerNode.id] ||
-        (bodies[playerNode.id] = {
-          x: playerNode.x,
-          y: playerNode.y,
-          vx: 0,
-          vy: 0,
-          onGround: false,
-        });
-
-      const moveSpeed = 320;
-      if (keys.has('a') || keys.has('arrowleft')) b.vx = -moveSpeed;
-      else if (keys.has('d') || keys.has('arrowright')) b.vx = moveSpeed;
-      else b.vx *= 0.82;
-
-      if (playerNode.physics2D === 'player-topdown') {
-        if (keys.has('w') || keys.has('arrowup')) b.vy = -moveSpeed;
-        else if (keys.has('s') || keys.has('arrowdown')) b.vy = moveSpeed;
-        else b.vy *= 0.82;
-      } else {
-        if ((keys.has('w') || keys.has('arrowup') || keys.has(' ')) && b.onGround) {
-          b.vy = -520;
-          b.onGround = false;
-          playSceneSfx(runtimeStore.getState().sceneSpec, 'jump');
-        }
-        b.vy += gravityPx * dt;
-      }
-
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      b.onGround = false;
-
-      const halfW = playerNode.width / 2;
-      const halfH = playerNode.height / 2;
-
-      for (const plat of platforms) {
-        const pLeft = plat.x - plat.width / 2;
-        const pRight = plat.x + plat.width / 2;
-        const pTop = plat.y - plat.height / 2;
-        const pBottom = plat.y + plat.height / 2;
-
-        if (b.x + halfW > pLeft && b.x - halfW < pRight) {
-          if (
-            b.vy >= 0 &&
-            b.y + halfH >= pTop &&
-            b.y - halfH < pTop &&
-            b.y + halfH <= pBottom + 24
-          ) {
-            b.y = pTop - halfH;
-            b.vy = 0;
-            b.onGround = true;
-          }
-        }
-      }
-
-      if (b.x < halfW) b.x = halfW;
-      if (b.x > DESIGN_WIDTH - halfW) b.x = DESIGN_WIDTH - halfW;
-      if (b.y > DESIGN_HEIGHT + 100) {
-        b.x = playerNode.x;
-        b.y = playerNode.y;
-        b.vx = 0;
-        b.vy = 0;
-      }
-
-    }
+  if (!isPlaying && (world.width > DESIGN_WIDTH || world.height > DESIGN_HEIGHT)) {
+    ctx.strokeStyle = 'rgba(167, 139, 250, 0.5)';
+    ctx.lineWidth = 2 / cam.zoom;
+    ctx.setLineDash([10, 6]);
+    ctx.strokeRect(0, 0, world.width, world.height);
+    ctx.setLineDash([]);
   }
 
   if (isPlaying) {
@@ -167,8 +259,10 @@ export function drawStage2D(
     if (mode === 'game' && isPlaying && body?.collected) continue;
 
     const position = displayedPosition2D(node, isPlaying, currentTime, mode, bodies);
-    const drawX = position.x;
-    const drawY = position.y;
+    // Phase 2: a parallax layer drifts against the camera (factor 1 = moves with the world, 0 = pinned to the screen).
+    const parallax = node.type === 'parallax-layer' ? 1 - Math.min(1, Math.max(0, node.parallaxFactor ?? 0.5)) : 0;
+    const drawX = position.x + cam.x * parallax;
+    const drawY = position.y + cam.y * parallax;
     let drawRot = (node.rotation * Math.PI) / 180;
     let drawScaleX = node.scaleX ?? 1;
     let drawScaleY = node.scaleY ?? 1;
@@ -188,6 +282,8 @@ export function drawStage2D(
     ctx.rotate(drawRot);
     ctx.scale(drawScaleX, drawScaleY);
     ctx.globalAlpha = node.opacity ?? 1;
+    // Phase 2: a checkpoint lights up once the player has touched it.
+    if (isPlaying && mode === 'game' && node.physics2D === 'checkpoint' && !body?.reached) ctx.globalAlpha *= 0.5;
 
     const w = node.width;
     const h = node.height;
@@ -319,6 +415,7 @@ export function drawStage2D(
     ctx.restore();
   }
 
+  ctx.restore(); // end of the camera transform: captions are screen-space
   // Phase 5: captions are drawn into the canvas so recorded video and snapshots include them.
   for (const cue of activeCaptions(sceneCaptions(runtimeStore.getState().sceneSpec), currentTime)) {
     drawCaptionOnCanvas(ctx, cue, DESIGN_WIDTH, DESIGN_HEIGHT);
@@ -340,6 +437,12 @@ export function displayedPosition2D(node: Node2D, isPlaying: boolean, time: numb
     }
   } else if (isPlaying && (node.physics2D === 'collectible' || node.shapeKind === 'star')) {
     y += Math.sin(time * 3.5 + node.x * 0.02) * 8;
+  }
+  // Phase 2: moving platforms follow a pure function of timeline time.
+  if (isPlaying && node.mover && !node.keyframeTrack?.length) {
+    const off = moverOffset(node.mover, time);
+    x += off.x;
+    y += off.y;
   }
   return { x, y };
 }
@@ -420,7 +523,11 @@ export function stepStage2D(
     const body = bodies[node.id];
     if (!body) bodies[node.id] = { x: node.x, y: node.y, vx: 0, vy: 0, onGround: false, specX: node.x, specY: node.y };
     else if (body.specX !== node.x || body.specY !== node.y || !state.isPlaying) {
-      Object.assign(body, { x: node.x, y: node.y, specX: node.x, specY: node.y, vx: 0, vy: 0, onGround: false });
+      // Phase 2: stopping, restarting or moving a node from a logic action also restarts its controller / respawn state.
+      Object.assign(body, {
+        x: node.x, y: node.y, specX: node.x, specY: node.y, vx: 0, vy: 0, onGround: false,
+        ctl: undefined, respawnX: undefined, respawnY: undefined, reached: false, moverPrev: undefined,
+      });
     }
   }
   drawStage2D(
@@ -442,7 +549,12 @@ export function stepStage2D(
   return { bodiesReset };
 }
 
-/** Topmost visible node under a point in the 1000x600 design space (respects rotation and runtime positions). */
+/** Design-space (viewport) point → world coordinates through the stage's current camera. Pointer code calls this before `hitTest2D`. */
+export function designToWorld(x: number, y: number, bodies: Record<string, RuntimeBody2D>) {
+  return screenToWorld(cameraFor(bodies), x, y);
+}
+
+/** Topmost visible node under a WORLD point (see `designToWorld`; respects rotation and runtime positions). */
 export function hitTest2D(x: number, y: number, bodies: Record<string, RuntimeBody2D>): Node2D | undefined {
   const state = runtimeStore.getState();
   const nodes = [...(state.sceneSpec.nodes2D || [])].filter((n) => n.visible !== false && !(state.isPlaying && bodies[n.id]?.collected)).reverse();

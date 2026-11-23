@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore } from '../state/useStudioStore';
 import { EngineType } from '../types/scene.schema';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
-import { displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
+import { designToWorld, displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
+import { resolveWorld } from '../runtime/physics/camera2d';
 
 // Phase 7: the interpreter and the 2D frame live in src/runtime (shared with the OmniStage Player).
 export { findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
@@ -132,7 +133,9 @@ export const StageCanvas2D: React.FC = () => {
   const toCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
-    return toDesignCoords(e.clientX, e.clientY, canvas.getBoundingClientRect());
+    // Pointer → viewport design px → WORLD px (the camera may scroll or zoom a world bigger than 1000x600).
+    const view = toDesignCoords(e.clientX, e.clientY, canvas.getBoundingClientRect());
+    return designToWorld(view.x, view.y, bodiesRef.current);
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -206,7 +209,7 @@ export const StageCanvas2D: React.FC = () => {
       />
 
       <div className="pointer-events-none absolute bottom-16 left-4 flex items-center gap-2 px-2.5 py-1 rounded bg-slate-900/85 border border-fuchsia-500/40 text-[11px] font-mono text-fuchsia-300">
-        <span>2D VECTOR & SPRITE ENGINE (1000×600)</span>
+        <span>2D VECTOR & SPRITE ENGINE ({resolveWorld(sceneSpec.world2D).width}×{resolveWorld(sceneSpec.world2D).height})</span>
         <span className="text-slate-500">·</span>
         <span>
           {sceneSpec.mode === 'game'

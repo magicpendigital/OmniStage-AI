@@ -263,12 +263,76 @@ export type Node2DType =
   | 'particle-emitter';
 
 export type Physics2DRole =
+  /** One-way platform: the player lands on it from above and jumps up through it. */
   | 'static-platform'
+  /** Phase 2: solid block / wall — blocks the player from every side. */
+  | 'solid'
+  /** Phase 2: touching it sends the player back to the last checkpoint (or the start). */
+  | 'hazard'
+  /** Phase 2: touching it moves the respawn point here. */
+  | 'checkpoint'
   | 'player-platformer'
   | 'player-topdown'
   | 'bouncing'
   | 'collectible'
   | 'none';
+
+/** Phase 2: tuning for a `player-platformer` / `player-topdown` node. Every field is optional; see `PLATFORMER_DEFAULTS`. */
+export interface PlatformerController2D {
+  /** px/s while a direction is held (default 320). */
+  runSpeed?: number;
+  /** px/s upward at jump start (default 520, about 153 px apex). */
+  jumpVelocity?: number;
+  /** Multiplier on the scene gravity (default 1). */
+  gravityScale?: number;
+  /** Seconds a jump still works after leaving a ledge (default 0.1). */
+  coyoteTime?: number;
+  /** Seconds an early jump press is remembered (default 0.1). */
+  jumpBuffer?: number;
+  /** 1 = single jump, 2 = double jump, 3 = triple (default 1). */
+  maxJumps?: number;
+  /** Releasing jump early shortens it (default true). */
+  variableJump?: boolean;
+  /** 0..1 steering while airborne (default 1). */
+  airControl?: number;
+}
+
+/** Phase 2: hit box override, relative to the node centre (defaults to the node's own size x scale). */
+export interface Collider2D {
+  width?: number;
+  height?: number;
+  offsetX?: number;
+  offsetY?: number;
+}
+
+/** Phase 2: moving platform. Ping-pongs along one axis at constant speed as a pure function of timeline time. */
+export interface Mover2D {
+  axis: 'x' | 'y';
+  /** px travelled from the authored position (negative = the other way first). */
+  distance: number;
+  /** px/s. */
+  speed: number;
+  /** 0..1 fraction of a full cycle to start offset by. */
+  phase?: number;
+}
+
+/** Phase 2: world size of a 2D scene (default 1000x600 = one screen). */
+export interface World2DSpec {
+  width: number;
+  height: number;
+}
+
+/** Phase 2: the 2D camera. Defaults: fixed on a one-screen world, following the player on a bigger one. */
+export interface Camera2DSpec {
+  mode?: 'fixed' | 'follow';
+  zoom?: number;
+  /** Seconds to catch up with the player (default 0.15, 0 = glued). */
+  smoothing?: number;
+  deadzoneX?: number;
+  deadzoneY?: number;
+  /** px the camera leads in the running direction (default 80). */
+  lookAhead?: number;
+}
 
 // ============================================================================
 // PHASE 4: MOTION EASING, PROCEDURAL GAME AUDIO, DIRECTOR SKILLS & VERIFICATION
@@ -499,6 +563,12 @@ export interface Node2D {
   emitter?: Particle2DEmitterSpec;
   /** Phase 9: behaviour state machine (game mode), run by src/runtime/stateMachine.ts. */
   stateMachine?: ActorStateMachine;
+  /** Phase 2: player movement tuning (`player-platformer` / `player-topdown`). */
+  controller?: PlatformerController2D;
+  /** Phase 2: hit box override for any collidable role. */
+  collider?: Collider2D;
+  /** Phase 2: moving platform (`static-platform` / `solid`). */
+  mover?: Mover2D;
 }
 
 // ============================================================================
@@ -989,6 +1059,10 @@ export interface SceneSpec {
   camera: CameraRig;
   actors: ActorNode[];
   nodes2D: Node2D[];
+  /** Phase 2: 2D world size (default 1000x600, one screen). Bigger worlds scroll. */
+  world2D?: World2DSpec;
+  /** Phase 2: 2D camera (fixed / follow, zoom, dead zone, look-ahead). */
+  camera2D?: Camera2DSpec;
   vfx: VFXNode[];
   marketingOverlay: MarketingOverlayConfig;
   gameRules: GameRule;

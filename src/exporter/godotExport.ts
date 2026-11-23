@@ -21,6 +21,7 @@ import type {
   Vector3Tuple,
 } from '../types/scene.schema';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
+import { resolveWorld } from '../runtime/physics/camera2d';
 import { buildZip, crc32, type ZipInput } from './playableBundle';
 import { slugifyTitle } from './mediaExporter';
 import { collectAssetUrls } from './playerHtml';
@@ -959,9 +960,11 @@ function build2DScene(ctx: SceneContext): string {
   tscn.node(godotNodeName(scene.title, 'Scene'), 'Node2D', null, gameRootProps(ctx, script, []));
   tscn.uniqueName('.', 'Background');
   tscn.uniqueName('.', 'Camera2D');
+  // Phase 2: the background covers the whole world; the Godot camera still frames the first screen (see the warning below).
+  const world = resolveWorld(scene.world2D);
   tscn.node('Background', 'ColorRect', '.', [
-    ['offset_right', STAGE_2D.width],
-    ['offset_bottom', STAGE_2D.height],
+    ['offset_right', world.width],
+    ['offset_bottom', world.height],
     ['mouse_filter', 2],
     ['color', gdColor(env.backgroundColor, '#0b101b')],
   ]);
@@ -970,6 +973,9 @@ function build2DScene(ctx: SceneContext): string {
   tscn.node('Camera2D', 'Camera2D', '.', [['position', vec2(STAGE_2D.width / 2, STAGE_2D.height / 2)], ['zoom', vec2(zoom, zoom)]]);
 
   for (const node of scene.nodes2D) build2DNode(ctx, node);
+  if (world.width > STAGE_2D.width || world.height > STAGE_2D.height || (scene.camera2D && scene.camera2D.mode === 'follow')) {
+    warn('2D camera', `The scrolling / following 2D camera is not exported: the Godot camera frames the first ${STAGE_2D.width}x${STAGE_2D.height} screen of the ${world.width}x${world.height} world.`);
+  }
   if (scene.nodes2D.some((n) => !n.keyframeTrack?.length && (n.physics2D === 'collectible' || n.shapeKind === 'star'))) {
     warn('Animation', 'The idle spin of collectibles / stars and the pulse of kinetic text are not exported.');
   }
@@ -984,7 +990,9 @@ function build2DNode(ctx: SceneContext, node: Node2D) {
   const sx = Number(node.scaleX ?? 1) || 1, sy = Number(node.scaleY ?? 1) || 1;
   const role = node.physics2D || 'none';
   const isPlayer = role === 'player-platformer' || role === 'player-topdown';
-  const type = isPlayer ? 'CharacterBody2D' : role === 'static-platform' ? 'StaticBody2D' : role === 'collectible' ? 'Area2D' : 'Node2D';
+  // Phase 2: 'solid' is a StaticBody2D that blocks from every side (no one-way flag); hazards / checkpoints are Areas.
+  const isSensor = role === 'collectible' || role === 'hazard' || role === 'checkpoint';
+  const type = isPlayer ? 'CharacterBody2D' : role === 'static-platform' || role === 'solid' ? 'StaticBody2D' : isSensor ? 'Area2D' : 'Node2D';
 
   const props: Props = [
     ['position', vec2(Number(node.x) || 0, Number(node.y) || 0)],
@@ -1079,6 +1087,11 @@ function build2DNode(ctx: SceneContext, node: Node2D) {
   warnMachineAndShader(warn, node, label);
   if (node.type === 'parallax-layer') warn('2D', `${label}: parallax scrolling is not exported (static layer).`);
   if (role === 'bouncing') warn('Physics', `${label}: the "bouncing" role is not exported (static node).`);
+  if (role === 'hazard') warn('Physics', `${label}: a hazard is exported as an Area2D; sending the player back to the checkpoint is not exported.`);
+  if (role === 'checkpoint') warn('Physics', `${label}: a checkpoint is exported as an Area2D; remembering the respawn point is not exported.`);
+  if (node.controller) warn('Physics', `${label}: the custom controller values (jump height, double jump, coyote time ...) are not exported; the Godot player uses its default movement.`);
+  if (node.collider) warn('Physics', `${label}: the custom collider is not exported (the collision shape uses the node's size).`);
+  if (node.mover) warn('Physics', `${label}: the moving platform is not exported (the node stays at its start position).`);
 }
 
 // ============================================================================

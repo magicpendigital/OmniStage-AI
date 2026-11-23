@@ -113,11 +113,15 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
     source: 'builtin',
     guidance: `PLATFORMER LEVEL DESIGN (2D engine, 1000x600 stage, y grows downward):
 - Physics envelope: maximum step-up between platform tops is ${MAX_STEP_UP}px, maximum horizontal gap ${MAX_GAP}px. Stay well under both for the first level.
-- Always include a 'static-platform' ground under the player's start (x≈80-120) and one 'player-platformer' node.
+- Always include a ground under the player's start (x≈80-120) and one 'player-platformer' node. Roles: 'static-platform' = ONE-WAY platform (the player jumps up through it and lands on top), 'solid' = block that stops the player on every side (walls, floors, ceilings), 'hazard' = spikes / lava that send the player back to the last checkpoint, 'checkpoint' = respawn flag.
+- BIG LEVELS: set sceneSpec.world2D {width,height} up to 20000x20000 (default 1000x600 = one screen). Worlds bigger than one screen use a follow camera automatically (tune with sceneSpec.camera2D {mode:'fixed'|'follow', zoom, smoothing, lookAhead}). Put a solid ground across the WHOLE world width and a checkpoint every ~1500px.
+- MOVING PLATFORMS: node.mover {axis:'x'|'y', distance, speed, phase} ping-pongs a platform / hazard and carries the player. Keep speed <= 120 px/s and give the player a safe ledge at both ends.
+- PLAYER FEEL: node.controller {runSpeed, jumpVelocity, maxJumps (2 = double jump), gravityScale, coyoteTime, jumpBuffer, airControl, variableJump} on the player. Coyote time and jump buffering are already on by default; a bigger maxJumps or jumpVelocity widens how far apart platforms may be (the verifier takes it into account).
+- node.collider {width,height,offsetX,offsetY} shrinks / moves the hit box (e.g. a spike hits only its tip).
 - Teach → test → twist: first collectible on the ground, second needs one jump, third combines a gap and a step-up.
 - Place collectibles 50-90px above the surface they belong to; never inside platforms.
 - gameRules.targetScore must be ≤ the sum of collectible scoreValue (default 25 each).
-- Use 'bouncing' nodes as moving hazards only after the player has learned to jump.`,
+- Use 'hazard' nodes (optionally with a mover) as obstacles only after the player has learned to jump. Never put a hazard on the player's start position.`,
   },
   {
     id: 'playable-ad-hook',

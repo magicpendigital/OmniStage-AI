@@ -51,7 +51,9 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
     state: <T>(expr: string) =>
       page.evaluate((src) => new Function('s', `return (${src})`)((window as any).__omniPlayer.store.getState()), expr) as Promise<T>,
     /** Live 2D physics body of a node (the store keeps authored positions). */
-    body2D: (nodeId: string) => page.evaluate((id) => (window as any).__omniPlayer.inspect().bodies2D[id], nodeId) as Promise<{ x: number; y: number; collected: boolean }>,
+    body2D: (nodeId: string) => page.evaluate((id) => (window as any).__omniPlayer.inspect().bodies2D[id], nodeId) as Promise<{ x: number; y: number; collected: boolean; onGround: boolean; reached: boolean }>,
+    /** Phase 2: the live 2D camera. */
+    camera2D: () => page.evaluate(() => (window as any).__omniPlayer.inspect().camera2D) as Promise<{ x: number; y: number; zoom: number }>,
     /** Live 3D actor poses and camera from the Player view. */
     backend: () => page.evaluate(() => (window as any).__omniPlayer.backend()) as Promise<'webgl' | 'webgpu' | 'pending'>,
     /** Steps once (so the view requests its models) and waits until every asset load has finished. */

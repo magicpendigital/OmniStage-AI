@@ -443,3 +443,35 @@ test('Godot headless imports the exported project', { skip: hasGodot ? false : '
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Phase 2 2D roles: solid blocks, hazards and checkpoints export; controller, mover, collider and the scrolling camera warn', () => {
+  const scene = platformer2D('Phase Two');
+  scene.world2D = { width: 3000, height: 600 };
+  scene.camera2D = { mode: 'follow' };
+  const base = { width: 60, height: 40, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, fill: '#334155', stroke: '#FFFFFF' };
+  scene.nodes2D.push(
+    { ...base, id: 'wall', name: 'Wall', type: 'tile-platform', x: 700, y: 500, physics2D: 'solid' },
+    { ...base, id: 'spikes', name: 'Spikes', type: 'vector-shape', x: 800, y: 540, physics2D: 'hazard' },
+    { ...base, id: 'flag', name: 'Flag', type: 'vector-shape', x: 900, y: 520, physics2D: 'checkpoint' },
+    { ...base, id: 'lift', name: 'Lift', type: 'tile-platform', x: 1000, y: 500, physics2D: 'static-platform', mover: { axis: 'x', distance: 200, speed: 80 }, collider: { width: 50 } }
+  );
+  const hero = scene.nodes2D.find((n) => n.physics2D === 'player-platformer')!;
+  hero.controller = { maxJumps: 2 };
+  const build = buildGodotProject([scene]);
+  const tscn = sceneFile(build);
+  assertBalancedQuotes(tscn);
+  const headers = nodeHeaders(tscn);
+  const byName = (name: string) => headers.find((h) => h.name === name && h.parent === '.')!;
+  assert.equal(byName('Wall').type, 'StaticBody2D');
+  assert.equal(byName('Spikes').type, 'Area2D');
+  assert.equal(byName('Flag').type, 'Area2D');
+  assert.equal(byName('Lift').type, 'StaticBody2D');
+  // Only the one-way platform is one-way; the solid block blocks from every side.
+  assert.equal(tscn.split('one_way_collision = true').length - 1, tscn.split('one_way_collision').length - 1);
+  const wallShape = tscn.slice(tscn.indexOf('[node name="Collision" type="CollisionShape2D" parent="Wall"'));
+  assert.ok(!wallShape.slice(0, wallShape.indexOf('\n\n') > 0 ? wallShape.indexOf('\n\n') : 200).includes('one_way_collision'), 'solid is not one-way');
+  const details = build.warnings.map((w) => `${w.feature}: ${w.detail}`).join('\n');
+  for (const needle of ['scrolling / following 2D camera', 'custom controller', 'custom collider', 'moving platform', 'hazard is exported', 'checkpoint is exported']) {
+    assert.ok(details.includes(needle), `warns about ${needle}`);
+  }
+});

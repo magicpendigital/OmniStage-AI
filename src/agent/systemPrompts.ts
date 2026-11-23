@@ -334,7 +334,9 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
 - 3D: keep actors grounded (position[1] = 0) and >= 1.6m apart; durationSeconds 6-12.
 - 2D game levels (canvas 1000x600, x/y are node CENTERS):
   * Exactly ONE node with physics2D "player-platformer" (type "sprite-actor", ~58x58) standing on the first platform.
-  * Platforms use physics2D "static-platform" (type "tile-platform"). Player jump apex is ~150px and horizontal reach ~350px:
+  * Platforms use physics2D "static-platform" (one-way, type "tile-platform"); use "solid" for walls / floors that block every side, "hazard" for spikes / lava,
+    "checkpoint" for respawn flags. Optional: sceneSpec.world2D {width,height} (up to 20000) with a follow camera for scrolling levels, node.mover for moving platforms,
+    node.controller (double jump etc.) on the player. Player jump apex is ~150px and horizontal reach ~350px:
     keep each step-up between platform tops <= 110px and horizontal edge gaps <= 200px so every level is beatable.
   * Pits (gaps in the ground) are the obstacles; falling respawns the player at its start.
   * Collectibles use physics2D "collectible" (shapeKind "star", ~46x46) placed ~45px above platform tops, scoreValue 25-50.

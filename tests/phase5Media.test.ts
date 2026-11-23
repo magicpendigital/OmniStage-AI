@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { PLATFORMER_DEFAULTS } from '../src/runtime/physics/constants';
 import assert from 'node:assert/strict';
 import { inflateRawSync } from 'node:zlib';
 import { createBlankSceneSpec } from '../src/registry/assetRegistry';
@@ -159,9 +160,13 @@ test('verifier repairs invalid particle presets, spritesheets and captions', () 
 });
 
 test('exported platformer physics are the studio physics (shared stage2d) and match the verifier envelope', () => {
+  // Phase 2: one source of truth. The stage simulates through src/runtime/physics and the verifier reads the same constants.
   const stage = readFileSync(new URL('../src/runtime/stage2d.ts', import.meta.url), 'utf8');
-  assert.ok(stage.includes(`b.vy = -${PLATFORMER_PHYSICS.jumpVelocity}`), 'jump velocity');
+  assert.ok(stage.includes("from './physics/platformer'") && stage.includes('resolveTuning'), 'the stage uses the shared controller');
+  assert.ok(!/b.vy = -d+/.test(stage), 'no hand-written jump velocity left in the stage');
+  assert.equal(PLATFORMER_PHYSICS.jumpVelocity, PLATFORMER_DEFAULTS.jumpVelocity, 'jump velocity');
+  assert.equal(PLATFORMER_PHYSICS.runSpeed, PLATFORMER_DEFAULTS.runSpeed, 'run speed');
   const store = createPlayerStore([{ ...createBlankSceneSpec('2d'), mode: 'game' }]);
   assert.equal(store.getState().settings.physicsGravity * 90, PLATFORMER_PHYSICS.gravity, 'gravity');
-  assert.ok(stage.includes('DESIGN_HEIGHT + 100'), 'pit falls respawn instead of an invisible floor');
+  assert.ok(stage.includes('world.height + 100'), 'pit falls respawn instead of an invisible floor');
 });

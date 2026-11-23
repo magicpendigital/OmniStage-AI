@@ -26,8 +26,10 @@ paths:
 - Phase 9 pose layer: head look-at and foot IK run in `RigPoseLayer` (`src/render3d/rigPose.ts`) AFTER the mixer update, in both the
   studio (`RiggedGltfModel`) and the Player; where to look comes only from `gazeAt` (cinematics). Spring bones (tail / hair / ear chains, `SPRING_NAME`) also live there: films only, a pure function of
   time via `springDisplacement` over `resolvePerformance` history (never integrate frame to frame). Keep `tests/rigPose.test.ts` green.
-- 2D: `StageCanvas2D.tsx` works in a 1000×600 design space. Platformer physics constants (jump vy −520, gravity 9.8×90, run 320)
-  are mirrored in `src/verification/sceneVerifier.ts` (`PLATFORMER_PHYSICS`). Change both together and re-run `npm test`.
+- 2D (Phase 2): the viewport is 1000×600 design px into a `world2D` up to 20000 px; `src/runtime/physics/*` is the ONE deterministic engine
+  (`collide2d` move-and-collide, `platformer` controller with coyote / buffer / variable / multi jump, `mover`, `camera2d`, `constants`).
+  Runtime (`stage2d.ts`) and verifier both read `PLATFORMER_DEFAULTS` / `platformerLimits`; never duplicate a number. Pointer code converts
+  viewport → world with `designToWorld`. Keep `tests/physics2d.test.ts` green and run `npm run build:player` + `npm run test:e2e`.
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
 - Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`. The film soundtrack is rendered by

@@ -28,6 +28,11 @@ import { DEVICE_PROFILES, DeviceTier } from '../runtime/deviceProfiles';
 import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { repairStateMachine, stateMachineIssues } from '../runtime/stateMachine';
 import { sanitizeShaderEffect, shaderEffectProblem } from '../runtime/shaderEffects';
+import { CONTROLLER_LIMITS, PICKUP_MARGIN, PLATFORMER_DEFAULTS, platformerLimits, PlatformerLimits, REACH_MARGIN, resolveTuning } from '../runtime/physics/constants';
+import { nodeBox2D } from '../runtime/physics/nodeBox';
+import { validMover } from '../runtime/physics/mover';
+import { overlaps } from '../runtime/physics/collide2d';
+import { resolveWorld, VIEW_H, VIEW_W, WORLD_LIMITS } from '../runtime/physics/camera2d';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -39,22 +44,23 @@ export const WORLD_FEATURE_TYPES = ['waterfall', 'river', 'pond'];
 /** Water landmarks must leave the acting area (and the cameras around it) free. */
 export const FEATURE_STAGE_CLEARANCE = 6;
 
-// --- 2D physics envelope (mirrors StageCanvas2D: jump vy = -520 px/s, gravity = 9.8 * 90 px/s², run 320 px/s) ---
+// --- 2D physics envelope. Phase 2: the numbers come from src/runtime/physics/constants.ts, the SAME module the runtime
+// (stage2d / platformer) reads, so a level verified here is a level the engine can play. A player's own `controller`
+// (double jump, faster run …) widens the envelope per scene via `platformerLimits(resolveTuning(controller))`. ---
 export const PLATFORMER_PHYSICS = {
-  jumpVelocity: 520,
-  gravity: 9.8 * 90,
-  runSpeed: 320,
+  jumpVelocity: PLATFORMER_DEFAULTS.jumpVelocity,
+  gravity: PLATFORMER_DEFAULTS.gravity,
+  runSpeed: PLATFORMER_DEFAULTS.runSpeed,
   /** Safety margin for landing on platforms, so levels stay comfortable rather than pixel-perfect. */
-  margin: 0.82,
+  margin: REACH_MARGIN,
   /** Platforms are one-way (land from above only), so a near-full jump can touch pickups through them. */
-  pickupMargin: 0.95,
+  pickupMargin: PICKUP_MARGIN,
 };
-const JUMP_HEIGHT = (PLATFORMER_PHYSICS.jumpVelocity ** 2) / (2 * PLATFORMER_PHYSICS.gravity); // ≈ 153px
-export const MAX_STEP_UP = Math.floor(JUMP_HEIGHT * PLATFORMER_PHYSICS.margin); // ≈ 125px
-const AIR_TIME_SAME_LEVEL = (2 * PLATFORMER_PHYSICS.jumpVelocity) / PLATFORMER_PHYSICS.gravity; // ≈ 1.18s
-export const MAX_GAP = Math.floor(AIR_TIME_SAME_LEVEL * PLATFORMER_PHYSICS.runSpeed * PLATFORMER_PHYSICS.margin); // ≈ 309px
-const STAGE_W = 1000;
-const STAGE_H = 600;
+const DEFAULT_LIMITS = platformerLimits(PLATFORMER_DEFAULTS);
+export const MAX_STEP_UP = DEFAULT_LIMITS.maxStepUp; // ≈ 125px
+export const MAX_GAP = DEFAULT_LIMITS.maxGap; // ≈ 309px
+const STAGE_W = VIEW_W;
+const STAGE_H = VIEW_H;
 /** 3D WASD loop clamps the player to ±5.5 on X/Z (useStudioStore.movePlayerActor). */
 const ARENA_3D = 5.5;
 const DEFAULT_SCORE = 25;
@@ -70,6 +76,8 @@ export interface VerifyOptions {
 
 interface Surface {
   id: string;
+  /** Phase 2: the two ends of a vertical lift share a group; standing on one end you can ride to the other. */
+  group?: string;
   left: number;
   right: number;
   top: number;
@@ -85,10 +93,14 @@ function issue(
   return { code, severity, message, fixable, targetId };
 }
 
-function surfaceOf(n: Node2D): Surface {
-  const w = n.width * Math.abs(n.scaleX ?? 1);
-  const h = n.height * Math.abs(n.scaleY ?? 1);
-  return { id: n.id, left: n.x - w / 2, right: n.x + w / 2, top: n.y - h / 2 };
+/** Surfaces a platform offers the player. A mover covers everything it sweeps (an up/down lift counts at both ends). */
+function surfacesOf(n: Node2D): Surface[] {
+  const b = nodeBox2D(n, { x: n.x, y: n.y });
+  const base: Surface = { id: n.id, left: b.x - b.w / 2, right: b.x + b.w / 2, top: b.y - b.h / 2 };
+  if (!validMover(n.mover)) return [base];
+  const d = n.mover.distance;
+  if (n.mover.axis === 'x') return [{ ...base, left: base.left + Math.min(0, d), right: base.right + Math.max(0, d) }];
+  return [{ ...base, group: n.id }, { ...base, id: `${n.id}@end`, group: n.id, top: base.top + d }];
 }
 
 function horizontalGap(a: Surface, b: Surface): number {
@@ -98,14 +110,14 @@ function horizontalGap(a: Surface, b: Surface): number {
 }
 
 /** Can a platformer player standing on `from` land on `to`? (y grows downward). */
-export function canReachSurface(from: Surface, to: Surface): boolean {
+export function canReachSurface(from: Surface, to: Surface, limits: PlatformerLimits = DEFAULT_LIMITS): boolean {
   const rise = from.top - to.top; // > 0 when `to` is higher
-  if (rise > MAX_STEP_UP) return false;
+  if (rise > limits.maxStepUp) return false;
   const gap = horizontalGap(from, to);
   // Falling buys extra air time: t = sqrt(2*drop/g) added to the same-level arc.
   const drop = Math.max(0, -rise);
-  const extraAir = Math.sqrt((2 * drop) / PLATFORMER_PHYSICS.gravity);
-  const reach = MAX_GAP + extraAir * PLATFORMER_PHYSICS.runSpeed * PLATFORMER_PHYSICS.margin;
+  const extraAir = Math.sqrt((2 * drop) / limits.gravity);
+  const reach = limits.maxGap + extraAir * limits.runSpeed * REACH_MARGIN;
   return gap <= reach;
 }
 
@@ -119,23 +131,30 @@ function visible<T extends { visible?: boolean }>(list: T[] | undefined): T[] {
 
 /** Platform the player lands on when dropped from its start position (highest surface below it). */
 function startSurface(player: Node2D, surfaces: Surface[]): Surface | undefined {
-  const halfW = (player.width * Math.abs(player.scaleX ?? 1)) / 2;
-  const feet = player.y + (player.height * Math.abs(player.scaleY ?? 1)) / 2;
+  const box = nodeBox2D(player, { x: player.x, y: player.y });
+  const halfW = box.w / 2;
+  const feet = box.y + box.h / 2;
   return surfaces
-    .filter((s) => player.x + halfW > s.left && player.x - halfW < s.right && s.top >= feet - 24)
+    .filter((s) => box.x + halfW > s.left && box.x - halfW < s.right && s.top >= feet - 24)
     .sort((a, b) => a.top - b.top)[0];
 }
 
+/** The numbers this player can jump with (defaults + its own `controller`). */
+function limitsFor(player: Node2D): PlatformerLimits {
+  return platformerLimits(resolveTuning(player.controller));
+}
+
 export function reachableSurfaces(player: Node2D, platforms: Node2D[]): { start?: Surface; reachable: Surface[]; all: Surface[] } {
-  const all = platforms.map(surfaceOf);
+  const all = platforms.flatMap(surfacesOf);
   const start = startSurface(player, all);
   if (!start) return { start, reachable: [], all };
+  const limits = limitsFor(player);
   const seen = new Set([start.id]);
   const queue = [start];
   while (queue.length) {
     const cur = queue.shift()!;
     for (const s of all) {
-      if (!seen.has(s.id) && canReachSurface(cur, s)) {
+      if (!seen.has(s.id) && ((cur.group !== undefined && cur.group === s.group) || canReachSurface(cur, s, limits))) {
         seen.add(s.id);
         queue.push(s);
       }
@@ -146,23 +165,89 @@ export function reachableSurfaces(player: Node2D, platforms: Node2D[]): { start?
 
 /** A collectible is grabbable if the player's body can overlap it while standing on / jumping from a surface. */
 function collectibleReachableFrom(c: Node2D, s: Surface, player: Node2D): boolean {
-  const playerH = player.height * Math.abs(player.scaleY ?? 1);
-  const playerW = player.width * Math.abs(player.scaleX ?? 1);
+  const playerH = nodeBox2D(player, player).h;
+  const playerW = nodeBox2D(player, player).w;
   const cH = c.height * Math.abs(c.scaleY ?? 1);
   const cW = c.width * Math.abs(c.scaleX ?? 1);
-  const highestBodyTop = s.top - playerH - JUMP_HEIGHT * PLATFORMER_PHYSICS.pickupMargin;
+  const highestBodyTop = s.top - playerH - limitsFor(player).jumpHeight * PICKUP_MARGIN;
   const withinY = c.y + cH / 2 >= highestBodyTop && c.y - cH / 2 <= s.top + 4;
   const reachX = (playerW + cW) / 2 + 60; // small jump drift past the edge
   const withinX = c.x >= s.left - reachX && c.x <= s.right + reachX;
   return withinX && withinY;
 }
 
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const CONTROLLER_FIELDS: Array<[keyof NonNullable<Node2D['controller']>, readonly [number, number]]> = [
+  ['runSpeed', CONTROLLER_LIMITS.runSpeed],
+  ['jumpVelocity', CONTROLLER_LIMITS.jumpVelocity],
+  ['gravityScale', CONTROLLER_LIMITS.gravityScale],
+  ['coyoteTime', CONTROLLER_LIMITS.coyoteTime],
+  ['jumpBuffer', CONTROLLER_LIMITS.jumpBuffer],
+  ['maxJumps', CONTROLLER_LIMITS.maxJumps],
+  ['airControl', CONTROLLER_LIMITS.airControl],
+];
+const MOVER_ROLES = ['static-platform', 'solid', 'hazard', 'checkpoint', 'none', 'collectible', 'bouncing'];
+
+/** Phase 2: per-node checks of the optional controller / collider / mover fields. */
+function node2DProblems(n: Node2D, world: { width: number; height: number }): Array<{ code: string; message: string }> {
+  const out: Array<{ code: string; message: string }> = [];
+  const c = n.controller as Record<string, unknown> | undefined;
+  if (c) {
+    const bad = CONTROLLER_FIELDS.filter(([k, [lo, hi]]) => c[k] !== undefined && (!isNum(c[k]) || (c[k] as number) < lo || (c[k] as number) > hi)).map(([k]) => k);
+    if (c.variableJump !== undefined && typeof c.variableJump !== 'boolean') bad.push('variableJump');
+    if (bad.length) out.push({ code: '2d.controller-invalid', message: `"${n.name}" has controller values outside the allowed range (${bad.join(', ')}). Ranges: ${CONTROLLER_FIELDS.map(([k, [lo, hi]]) => `${k} ${lo}-${hi}`).join(', ')}.` });
+    if (!(n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown')) {
+      out.push({ code: '2d.controller-invalid', message: `"${n.name}" has a controller but is not a player node, so it does nothing.` });
+    }
+  }
+  const col = n.collider;
+  const colBad = !!col && (![col.width, col.height].every((v) => v === undefined || (isNum(v) && v > 0)) || ![col.offsetX, col.offsetY].every((v) => v === undefined || isNum(v)));
+  if (colBad) {
+    out.push({ code: '2d.collider-invalid', message: `"${n.name}" has a collider with a non-positive size or a non-numeric offset.` });
+  }
+  if (n.mover !== undefined) {
+    const m = n.mover;
+    const span = m && m.axis === 'x' ? world.width : world.height;
+    if (!validMover(m) || Math.abs(m.distance) > span || m.speed > 2000 || !MOVER_ROLES.includes(n.physics2D)) {
+      out.push({ code: '2d.mover-invalid', message: `"${n.name}" has an invalid mover (needs axis "x" | "y", a non-zero distance inside the world, a speed of 1-2000 px/s, and must not be a player).` });
+    }
+  }
+  return out;
+}
+
+const CAMERA_RANGES: Array<[string, number, number]> = [
+  ['zoom', 0.5, 3],
+  ['smoothing', 0, 2],
+  ['deadzoneX', 0, 400],
+  ['deadzoneY', 0, 300],
+  ['lookAhead', 0, 400],
+];
+
+/** Phase 2: scene-level 2D world size and camera. */
+function verifyWorld2D(spec: SceneSpec, issues: VerificationIssue[]) {
+  const w = spec.world2D;
+  if (w && (!isNum(w.width) || !isNum(w.height) || w.width < WORLD_LIMITS.min || w.height < WORLD_LIMITS.min || w.width > WORLD_LIMITS.max || w.height > WORLD_LIMITS.max)) {
+    issues.push(issue('2d.world-invalid', 'warning', `world2D must be ${WORLD_LIMITS.min}-${WORLD_LIMITS.max} px wide and high (got ${String((w as { width?: unknown }).width)}x${String((w as { height?: unknown }).height)}).`, true));
+  }
+  const cam = spec.camera2D as Record<string, unknown> | undefined;
+  if (cam) {
+    const badMode = cam.mode !== undefined && cam.mode !== 'fixed' && cam.mode !== 'follow';
+    const bad = CAMERA_RANGES.filter(([k, lo, hi]) => cam[k] !== undefined && (!isNum(cam[k]) || (cam[k] as number) < lo || (cam[k] as number) > hi)).map(([k]) => k);
+    if (badMode || bad.length) {
+      issues.push(issue('2d.camera-invalid', 'warning', `camera2D has invalid ${[...(badMode ? ['mode'] : []), ...bad].join(', ')} (mode "fixed" | "follow"; ${CAMERA_RANGES.map(([k, lo, hi]) => `${k} ${lo}-${hi}`).join(', ')}).`, true));
+    }
+  }
+}
+
 function verify2D(spec: SceneSpec, issues: VerificationIssue[]) {
   const nodes = visible(spec.nodes2D);
+  const world = resolveWorld(spec.world2D);
+  verifyWorld2D(spec, issues);
   for (const n of nodes) {
-    if (n.x < 0 || n.x > STAGE_W || n.y < 0 || n.y > STAGE_H) {
-      issues.push(issue('2d.out-of-bounds', 'warning', `"${n.name}" is outside the 1000x600 stage (${Math.round(n.x)}, ${Math.round(n.y)}).`, true, n.id));
+    if (n.x < 0 || n.x > world.width || n.y < 0 || n.y > world.height) {
+      issues.push(issue('2d.out-of-bounds', 'warning', `"${n.name}" is outside the ${world.width}x${world.height} world (${Math.round(n.x)}, ${Math.round(n.y)}).`, true, n.id));
     }
+    for (const problem of node2DProblems(n, world)) issues.push(issue(problem.code, 'warning', problem.message, true, n.id));
     if (n.type === 'particle-emitter' && (!n.emitter || !(PARTICLE_2D_PRESETS.includes(n.emitter.preset) || spec.particleLibrary?.[n.emitter.preset]))) {
       issues.push(issue('2d.unknown-particle', 'warning', `Particle emitter "${n.name}" has no valid preset (${PARTICLE_2D_PRESETS.join(', ')}).`, true, n.id));
     }
@@ -185,9 +270,21 @@ function verify2D(spec: SceneSpec, issues: VerificationIssue[]) {
     issues.push(issue('2d.no-player', 'error', 'Game scene has no player node (physics2D "player-platformer" / "player-topdown").', true));
   }
   verifyScoreGoal(spec, collectibles.map((c) => c.scoreValue ?? DEFAULT_SCORE), issues);
-  if (!player || player.physics2D !== 'player-platformer') return;
+  if (!player) return;
+  const playerBox = nodeBox2D(player, player);
+  // A hazard on top of the start would kill the player on the first frame, forever.
+  const deadly = nodes.find((n) => n.physics2D === 'hazard' && overlaps(playerBox, nodeBox2D(n, n)));
+  if (deadly) {
+    issues.push(issue('2d.hazard-at-start', 'error', `Hazard "${deadly.name}" overlaps the player's start, so the player would respawn into it forever. Move one of them.`, false, deadly.id));
+  }
+  if (player.physics2D !== 'player-platformer') return;
+  // A solid block around the start leaves the player stuck inside it.
+  const stuckIn = nodes.find((n) => n.physics2D === 'solid' && overlaps(playerBox, nodeBox2D(n, n)));
+  if (stuckIn) {
+    issues.push(issue('2d.player-stuck', 'error', `Player "${player.name}" starts inside the solid block "${stuckIn.name}".`, true, player.id));
+  }
 
-  const platforms = nodes.filter((n) => n.physics2D === 'static-platform');
+  const platforms = nodes.filter((n) => n.physics2D === 'static-platform' || n.physics2D === 'solid');
   const { start, reachable } = reachableSurfaces(player, platforms);
   if (!start) {
     issues.push(issue('2d.player-no-ground', 'error', `Player "${player.name}" starts above no platform and would fall forever.`, true, player.id));
@@ -195,7 +292,8 @@ function verify2D(spec: SceneSpec, issues: VerificationIssue[]) {
   }
   for (const c of collectibles) {
     if (!reachable.some((s) => collectibleReachableFrom(c, s, player))) {
-      issues.push(issue('2d.collectible-unreachable', 'error', `Collectible "${c.name}" cannot be reached with the platformer jump (max step-up ${MAX_STEP_UP}px, gap ${MAX_GAP}px).`, true, c.id));
+      const lim = limitsFor(player);
+      issues.push(issue('2d.collectible-unreachable', 'error', `Collectible "${c.name}" cannot be reached with the platformer jump (max step-up ${lim.maxStepUp}px, gap ${lim.maxGap}px).`, true, c.id));
     }
   }
 }
@@ -786,14 +884,14 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function makeGround(): Node2D {
+function makeGround(worldW = STAGE_W, worldH = STAGE_H): Node2D {
   return {
     id: `node2d-ground-${Math.random().toString(36).slice(2, 7)}`,
     name: 'Ground (auto-fix)',
     type: 'tile-platform',
-    x: 500,
-    y: 570,
-    width: 1000,
+    x: worldW / 2,
+    y: worldH - 30,
+    width: worldW,
     height: 40,
     rotation: 0,
     scaleX: 1,
@@ -1024,24 +1122,78 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case '2d.out-of-bounds': {
       const n = spec.nodes2D.find((x) => x.id === i.targetId);
       if (!n) return null;
-      n.x = clamp(n.x, 20, STAGE_W - 20);
-      n.y = clamp(n.y, 20, STAGE_H - 20);
-      return `Moved "${n.name}" back inside the stage`;
+      const world = resolveWorld(spec.world2D);
+      n.x = clamp(n.x, 20, world.width - 20);
+      n.y = clamp(n.y, 20, world.height - 20);
+      return `Moved "${n.name}" back inside the world`;
     }
     case '2d.no-player':
       spec.nodes2D.push(makePlayer2D());
       return 'Added a platformer hero';
     case '2d.player-no-ground': {
-      spec.nodes2D.push(makeGround());
+      const world = resolveWorld(spec.world2D);
+      spec.nodes2D.push(makeGround(world.width, world.height));
       const player = spec.nodes2D.find((n) => n.id === i.targetId);
-      if (player && player.y > 520) player.y = 480;
+      if (player && player.y > world.height - 80) player.y = world.height - 120;
       return 'Added a full-width ground platform under the player';
+    }
+    case '2d.player-stuck': {
+      const player = spec.nodes2D.find((n) => n.id === i.targetId);
+      if (!player) return null;
+      const pb = nodeBox2D(player, player);
+      const block = visible(spec.nodes2D).find((n) => n.physics2D === 'solid' && overlaps(pb, nodeBox2D(n, n)));
+      if (!block) return null;
+      const bb = nodeBox2D(block, block);
+      player.y -= pb.y + pb.h / 2 - (bb.y - bb.h / 2) + 2; // stand on top of the block
+      return `Moved "${player.name}" on top of "${block.name}"`;
+    }
+    case '2d.controller-invalid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n?.controller) return null;
+      if (!isPlayer2D(n)) {
+        delete n.controller;
+        return `Removed the controller from non-player "${n.name}"`;
+      }
+      const c = n.controller as Record<string, unknown>;
+      for (const [k, [lo, hi]] of CONTROLLER_FIELDS) {
+        if (c[k] === undefined) continue;
+        if (!isNum(c[k])) delete c[k];
+        else c[k] = k === 'maxJumps' ? Math.round(clamp(c[k] as number, lo, hi)) : clamp(c[k] as number, lo, hi);
+      }
+      if (c.variableJump !== undefined && typeof c.variableJump !== 'boolean') delete c.variableJump;
+      return `Clamped the controller of "${n.name}" to its allowed ranges`;
+    }
+    case '2d.collider-invalid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n?.collider) return null;
+      delete n.collider;
+      return `Removed the invalid collider from "${n.name}" (it uses its own size)`;
+    }
+    case '2d.mover-invalid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n?.mover) return null;
+      delete n.mover;
+      return `Removed the invalid mover from "${n.name}"`;
+    }
+    case '2d.world-invalid':
+      spec.world2D = resolveWorld(spec.world2D);
+      return 'Clamped world2D to the allowed size';
+    case '2d.camera-invalid': {
+      const cam = spec.camera2D as Record<string, unknown> | undefined;
+      if (!cam) return null;
+      if (cam.mode !== undefined && cam.mode !== 'fixed' && cam.mode !== 'follow') delete cam.mode;
+      for (const [k, lo, hi] of CAMERA_RANGES) {
+        if (cam[k] === undefined) continue;
+        if (!isNum(cam[k])) delete cam[k];
+        else cam[k] = clamp(cam[k] as number, lo, hi);
+      }
+      return 'Clamped camera2D to its allowed ranges';
     }
     case '2d.collectible-unreachable': {
       const c = spec.nodes2D.find((n) => n.id === i.targetId);
       const player = spec.nodes2D.find(isPlayer2D);
       if (!c || !player) return null;
-      const { reachable } = reachableSurfaces(player, visible(spec.nodes2D).filter((n) => n.physics2D === 'static-platform'));
+      const { reachable } = reachableSurfaces(player, visible(spec.nodes2D).filter((n) => n.physics2D === 'static-platform' || n.physics2D === 'solid'));
       const target = [...reachable].sort(
         (a, b) => Math.hypot(clamp(c.x, a.left, a.right) - c.x, a.top - c.y) - Math.hypot(clamp(c.x, b.left, b.right) - c.x, b.top - c.y)
       )[0];

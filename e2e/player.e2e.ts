@@ -286,3 +286,71 @@ for (const kind of ['crossfade', 'wipe', 'whip-pan', 'iris', 'cut'] as const) {
     expect(p.errors).toEqual([]);
   });
 }
+
+// ---- Phase 2: the 2D engine (shared physics, scrolling camera, hazards, checkpoints, moving platforms) ----
+import type { Node2D } from '../src/types/scene.schema';
+
+function node2d(id: string, over: Partial<Node2D>): Node2D {
+  return {
+    id, name: id, type: 'tile-platform', x: 0, y: 0, width: 40, height: 40, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1,
+    fill: '#334155', stroke: '#64748B', physics2D: 'none', ...over,
+  } as Node2D;
+}
+
+function platformerLevel(nodes: Node2D[], world?: { width: number; height: number }) {
+  const spec = template('blank-2d-authoring');
+  spec.mode = 'game';
+  spec.nodes2D = nodes;
+  if (world) spec.world2D = world;
+  spec.gameRules = { winCondition: 'survive-timer', targetScore: 0, timeLimitSeconds: 120, instructions: '' } as typeof spec.gameRules;
+  return spec;
+}
+
+test('2D engine: a scrolling world follows the player, a checkpoint is remembered and a hazard sends the player back to it', async ({ page }) => {
+  const spec = platformerLevel(
+    [
+      node2d('ground', { type: 'tile-platform', x: 1500, y: 570, width: 3000, height: 40, physics2D: 'solid' }),
+      node2d('hero', { type: 'sprite-actor', x: 100, y: 510, width: 40, height: 60, physics2D: 'player-platformer' }),
+      node2d('flag', { x: 500, y: 520, width: 30, height: 60, physics2D: 'checkpoint' }),
+      node2d('spikes', { x: 1000, y: 530, width: 60, height: 40, physics2D: 'hazard' }),
+    ],
+    { width: 3000, height: 600 }
+  );
+  const p = await openExport(page, spec);
+  await p.step(20);
+  expect((await p.body2D('hero')).onGround, 'lands on the solid ground').toBe(true);
+  expect((await p.camera2D()).x, 'camera starts at the world start').toBeCloseTo(0, 0);
+
+  await p.key('arrowright', true);
+  let sawCamera = 0;
+  let respawnedAt: number | null = null;
+  let prevX = (await p.body2D('hero')).x;
+  for (let i = 0; i < 400 && respawnedAt === null; i++) {
+    await p.step(1);
+    const b = await p.body2D('hero');
+    sawCamera = Math.max(sawCamera, (await p.camera2D()).x);
+    if (b.x < prevX - 100) respawnedAt = b.x;
+    prevX = b.x;
+  }
+  await p.key('arrowright', false);
+  expect((await p.body2D('flag')).reached, 'the checkpoint was touched on the way').toBe(true);
+  expect(sawCamera, 'the camera scrolled right with the player').toBeGreaterThan(200);
+  expect(respawnedAt, 'the hazard sent the player back').not.toBeNull();
+  expect(respawnedAt!, 'to the checkpoint, not the start').toBeGreaterThan(400);
+  expect(respawnedAt!).toBeLessThan(600);
+  expect(p.errors).toEqual([]);
+});
+
+test('2D engine: a moving platform carries the player standing on it', async ({ page }) => {
+  const lift = node2d('lift', { x: 200, y: 500, width: 160, height: 20, physics2D: 'static-platform', mover: { axis: 'x', distance: 300, speed: 100 } });
+  const hero = node2d('hero', { type: 'sprite-actor', x: 200, y: 468, width: 40, height: 44, physics2D: 'player-platformer' });
+  const p = await openExport(page, platformerLevel([lift, hero]));
+  await p.step(10);
+  const x0 = (await p.body2D('hero')).x;
+  await p.step(120); // 2 s at 100 px/s
+  const b = await p.body2D('hero');
+  expect(b.onGround, 'still standing on the lift').toBe(true);
+  expect(b.x - x0, 'carried about 200 px by the platform').toBeGreaterThan(170);
+  expect(b.x - x0).toBeLessThan(230);
+  expect(p.errors).toEqual([]);
+});

@@ -224,3 +224,125 @@ test('fixSceneIssue repairs one issue and leaves the input untouched', async () 
   assert.equal(same.fix, null);
   assert.equal(same.spec, spec);
 });
+
+// ---- Phase 2: engine E1 (solid / hazard / checkpoint roles, controller, mover, collider, world2D, camera2D) ----
+function codes(spec: SceneSpec) {
+  return verifySceneSpec(spec).issues.map((i) => i.code);
+}
+
+function level(...extra: Node2D[]): SceneSpec {
+  const spec = game2D();
+  spec.nodes2D = [platform('ground', 500, 560, 1000), ...extra];
+  return spec;
+}
+
+function hero(over: Partial<Node2D> = {}): Node2D {
+  return {
+    id: 'hero', name: 'hero', type: 'sprite-actor', x: 100, y: 500, width: 40, height: 60, rotation: 0, scaleX: 1, scaleY: 1,
+    opacity: 1, fill: '#0ea5e9', stroke: '#fff', physics2D: 'player-platformer', ...over,
+  };
+}
+
+test('a bigger world2D moves the stage bounds and the auto-fix ground spans it', () => {
+  const spec = level(hero(), { ...platform('far', 2500, 560, 400) });
+  assert.ok(codes(spec).includes('2d.out-of-bounds'), 'x=2500 is outside the default one-screen world');
+  spec.world2D = { width: 3000, height: 600 };
+  assert.equal(codes(spec).includes('2d.out-of-bounds'), false, 'inside a 3000px world');
+  const noGround = level(hero({ y: 300 }));
+  noGround.nodes2D = noGround.nodes2D.filter((n) => n.id !== 'ground');
+  noGround.world2D = { width: 3000, height: 600 };
+  const fixed = autoFixSceneSpec(noGround).spec;
+  const ground = fixed.nodes2D.find((n) => n.name === 'Ground (auto-fix)');
+  assert.equal(ground?.width, 3000);
+  assert.equal(codes(fixed).includes('2d.player-no-ground'), false);
+});
+
+test('solid blocks are landable surfaces and a player starting inside one is moved on top of it', () => {
+  const spec = level(hero({ x: 500, y: 540 }));
+  spec.nodes2D.push({ ...platform('block', 500, 540, 120), physics2D: 'solid', height: 60 });
+  assert.ok(codes(spec).includes('2d.player-stuck'));
+  const fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(codes(fixed).includes('2d.player-stuck'), false);
+  const h = fixed.nodes2D.find((n) => n.id === 'hero')!;
+  assert.ok(h.y + 30 <= 510 + 1, `hero stands on the block (y=${h.y})`);
+});
+
+test('a hazard on the player start is an error the fixer cannot guess', () => {
+  const spec = level(hero(), { ...platform('spikes', 100, 500, 60), physics2D: 'hazard' });
+  const issue = verifySceneSpec(spec).issues.find((i) => i.code === '2d.hazard-at-start');
+  assert.ok(issue);
+  assert.equal(issue.severity, 'error');
+  assert.equal(issue.fixable, false);
+  const apart = level(hero(), { ...platform('spikes', 600, 540, 60), physics2D: 'hazard' });
+  assert.equal(codes(apart).includes('2d.hazard-at-start'), false);
+});
+
+test("the player's own controller widens what the verifier accepts (double jump)", () => {
+  // 200 px above the ground: out of reach of a single jump (≈125 px), fine for a double jump.
+  const single = level(hero(), platform('ledge', 300, 360, 200), star('gem', 300, 310));
+  assert.ok(codes(single).includes('2d.collectible-unreachable'), 'single jump cannot reach it');
+  const double = level(hero({ controller: { maxJumps: 2 } }), platform('ledge', 300, 360, 200), star('gem', 300, 310));
+  assert.equal(codes(double).includes('2d.collectible-unreachable'), false, 'double jump can');
+});
+
+test('moving platforms count as surfaces over the whole range they sweep', () => {
+  // The far ledge is 1400 px past the start: far too wide to jump. A lift that travels 1000 px bridges it.
+  const far = platform('far', 1800, 560, 200);
+  const build = (...mid: Node2D[]) => {
+    const spec = level(hero(), ...mid, far, star('gem', 1800, 500));
+    spec.world2D = { width: 2400, height: 600 };
+    spec.nodes2D = spec.nodes2D.filter((n) => n.id !== 'ground');
+    spec.nodes2D.push(platform('start', 100, 560, 400)); // right edge at x = 300
+    return spec;
+  };
+  assert.ok(codes(build()).includes('2d.collectible-unreachable'), 'unreachable without the lift');
+  const lift = { ...platform('lift', 500, 560, 200), mover: { axis: 'x', distance: 1000, speed: 120 } } as Node2D;
+  assert.equal(codes(build(lift)).includes('2d.collectible-unreachable'), false, 'the lift bridges the gap');
+  // A vertical lift connects a low floor with a high ledge the player cannot jump to.
+  const high = platform('high', 400, 200, 200);
+  const noLift = level(hero(), high, star('gem', 400, 150));
+  assert.ok(codes(noLift).includes('2d.collectible-unreachable'));
+  const elevator = { ...platform('elevator', 400, 560, 160), mover: { axis: 'y', distance: -340, speed: 60 } } as Node2D;
+  const withLift = level(hero(), elevator, high, star('gem', 400, 150));
+  assert.equal(codes(withLift).includes('2d.collectible-unreachable'), false, 'the elevator reaches the high ledge');
+});
+
+test('invalid controller, collider, mover, world and camera values are flagged and clamped / removed by the fixer', () => {
+  const spec = level(
+    hero({ controller: { jumpVelocity: 99999, maxJumps: 7, runSpeed: NaN } as never, collider: { width: -4 } }),
+    { ...platform('lift', 400, 560, 120), mover: { axis: 'z', distance: 50, speed: 10 } as never },
+    { ...star('gem', 400, 500), controller: { runSpeed: 100 } }
+  );
+  spec.world2D = { width: 50, height: NaN } as never;
+  spec.camera2D = { mode: 'orbit', zoom: 10 } as never;
+  const found = codes(spec);
+  for (const c of ['2d.controller-invalid', '2d.collider-invalid', '2d.mover-invalid', '2d.world-invalid', '2d.camera-invalid']) {
+    assert.ok(found.includes(c), `${c} reported`);
+  }
+  const fixed = autoFixSceneSpec(spec).spec;
+  const left = codes(fixed).filter((c) => c.endsWith('-invalid') && c.startsWith('2d.'));
+  assert.deepEqual(left, [], 'everything flagged was repaired');
+  const h = fixed.nodes2D.find((n) => n.id === 'hero')!;
+  assert.equal(h.controller?.jumpVelocity, 1100);
+  assert.equal(h.controller?.maxJumps, 3);
+  assert.equal('runSpeed' in (h.controller || {}), false);
+  assert.equal(h.collider, undefined);
+  assert.equal(fixed.nodes2D.find((n) => n.id === 'lift')?.mover, undefined);
+  assert.equal(fixed.nodes2D.find((n) => n.id === 'gem')?.controller, undefined, 'a controller on a non-player does nothing and is removed');
+  assert.equal(fixed.camera2D?.zoom, 3);
+  assert.equal(fixed.camera2D?.mode, undefined);
+});
+
+test('valid Phase 2 data passes without a single new issue', () => {
+  const spec = level(
+    hero({ controller: { maxJumps: 2, runSpeed: 380, coyoteTime: 0.15, variableJump: true }, collider: { width: 30, height: 56, offsetY: 2 } }),
+    { ...platform('lift', 500, 560, 160), mover: { axis: 'x', distance: 200, speed: 80 } },
+    { ...platform('wall', 700, 500, 40), physics2D: 'solid', height: 120 },
+    { ...platform('flag', 300, 520, 20), physics2D: 'checkpoint' },
+    { ...platform('spikes', 800, 540, 60), physics2D: 'hazard' },
+    star('gem', 300, 500)
+  );
+  spec.world2D = { width: 2000, height: 600 };
+  spec.camera2D = { mode: 'follow', zoom: 1.2, smoothing: 0.2, deadzoneX: 80, lookAhead: 100 };
+  assert.deepEqual(codes(spec).filter((c) => c.startsWith('2d.')), []);
+});

@@ -4,7 +4,7 @@
  */
 import { trackImage } from './loading';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, RuntimeLogicGraph } from '../runtime/logicGraph';
-import { displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
+import { cameraFor, designToWorld, displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
 import { runtimeStore } from '../runtime/host';
 import type { InputManager } from './input';
 
@@ -16,10 +16,16 @@ export class View2D {
   private sceneId = '';
 
   /** Phase 7C: live physics positions (E2E tests / debugging); the SceneSpec keeps authored positions. */
-  bodyPositions(): Record<string, { x: number; y: number; collected: boolean }> {
-    const out: Record<string, { x: number; y: number; collected: boolean }> = {};
-    for (const [id, b] of Object.entries(this.bodies)) out[id] = { x: b.x, y: b.y, collected: !!b.collected };
+  bodyPositions(): Record<string, { x: number; y: number; collected: boolean; onGround: boolean; reached: boolean }> {
+    const out: Record<string, { x: number; y: number; collected: boolean; onGround: boolean; reached: boolean }> = {};
+    for (const [id, b] of Object.entries(this.bodies)) out[id] = { x: b.x, y: b.y, collected: !!b.collected, onGround: b.onGround, reached: !!b.reached };
     return out;
+  }
+
+  /** Phase 2: current camera (E2E tests / debugging). */
+  cameraState(): { x: number; y: number; zoom: number } {
+    const c = cameraFor(this.bodies);
+    return { x: c.x, y: c.y, zoom: c.zoom };
   }
 
   constructor(parent: HTMLElement, private runtime: RuntimeLogicGraph, private input: InputManager, private resolveUrl: (url: string) => string) {
@@ -41,7 +47,8 @@ export class View2D {
   }
 
   private onPointer = (e: PointerEvent) => {
-    const { x, y } = toDesignCoords(e.clientX, e.clientY, this.canvas.getBoundingClientRect());
+    const view = toDesignCoords(e.clientX, e.clientY, this.canvas.getBoundingClientRect());
+    const { x, y } = designToWorld(view.x, view.y, this.bodies);
     const hit = hitTest2D(x, y, this.bodies);
     if (hit && runtimeStore.getState().isPlaying) this.runtime.emit('actor-click', { actorId: hit.id });
   };

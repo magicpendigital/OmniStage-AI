@@ -64,7 +64,9 @@ export interface OmniPlayerHandle {
   /** Phase 7C: runtime-only state for tests (2D physics bodies live outside the store). */
   inspect: () => {
     engine: string;
-    bodies2D: Record<string, { x: number; y: number; collected: boolean }>;
+    bodies2D: Record<string, { x: number; y: number; collected: boolean; onGround: boolean; reached: boolean }>;
+    /** Phase 2: the 2D camera (world position of the viewport's top-left, zoom). */
+    camera2D?: { x: number; y: number; zoom: number };
     view3d?: ReturnType<View3D['inspect']>;
   };
   /** Phase 10B: asset loads still in flight (frame-stepped capture waits for 0). */
@@ -382,6 +384,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
     inspect: () => ({
       engine: viewEngine,
       bodies2D: view instanceof View2D ? view.bodyPositions() : {},
+      camera2D: view instanceof View2D ? view.cameraState() : undefined,
       view3d: view instanceof View3D ? view.inspect() : undefined,
     }),
     manual: (on) => {

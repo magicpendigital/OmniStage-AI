@@ -3,7 +3,7 @@
  */
 import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, MarketingOverlayConfig } from '../types/scene.schema';
 import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
-import { ActorNode, AspectRatioPreset, CameraMode, CameraRig, CaptionCue, ChatMessage, DirectorSkill, EngineType, EnvironmentConfig, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXNode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
+import { ActorNode, AspectRatioPreset, Camera2DSpec, World2DSpec, CameraMode, CameraRig, CaptionCue, ChatMessage, DirectorSkill, EngineType, EnvironmentConfig, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXNode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
 import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
@@ -191,6 +191,9 @@ export interface StudioState {
   /** Properties dock: tweak the free camera (fov, position, target, follow target) or the lighting / environment. */
   updateCamera: (patch: Partial<CameraRig>) => void;
   updateEnvironment: (patch: Partial<EnvironmentConfig>) => void;
+  /** Phase 2: 2D world size and camera (Properties → Scene settings). */
+  updateWorld2D: (patch: Partial<World2DSpec>) => void;
+  updateCamera2D: (patch: Partial<Camera2DSpec>) => void;
 
   // World & Environment Builder Actions
   updateWorld: (patch: Partial<WorldSpec>) => void;

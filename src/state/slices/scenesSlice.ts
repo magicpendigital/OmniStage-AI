@@ -299,6 +299,28 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       };
     }),
 
+  updateWorld2D: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.world2D = { width: 1000, height: 600, ...nextSpec.world2D, ...patch };
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('world2D', patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateCamera2D: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.camera2D = { ...nextSpec.camera2D, ...patch };
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('camera2D', patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
   // ================= DOCKING SHELL: storyboard order, HUD rules, duration, camera keyframes =================
   renameScene: (sceneId, title) =>
     set((state) => {

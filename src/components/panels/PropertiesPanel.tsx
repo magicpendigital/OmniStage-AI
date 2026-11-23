@@ -11,18 +11,24 @@ import {
   ActorNode,
   AnimationType,
   AspectRatioPreset,
+  Camera2DSpec,
   CameraMode,
+  Collider2D,
   EngineType,
   EnterEffect,
   GameRule,
   LightingPresetId,
+  Mover2D,
   Node2D,
   Physics2DRole,
   PhysicsRole,
+  PlatformerController2D,
   SettingsConfig,
   VFXNode,
   Vector3Tuple,
 } from '../../types/scene.schema';
+import { PLATFORMER_DEFAULTS } from '../../runtime/physics/constants';
+import { resolveCamera2D, resolveWorld, WORLD_LIMITS } from '../../runtime/physics/camera2d';
 
 // ----------------------------------------------------------------------------
 // Small field widgets
@@ -397,17 +403,151 @@ const Node2DProps: React.FC<{ node: Node2D }> = ({ node }) => {
             <option value="none">none / UI</option>
             <option value="player-platformer">platformer player</option>
             <option value="player-topdown">top-down player</option>
-            <option value="static-platform">solid platform</option>
+            <option value="static-platform">one-way platform (jump through from below)</option>
+            <option value="solid">solid block (blocks every side)</option>
+            <option value="hazard">hazard (spikes, lava: resets the player)</option>
+            <option value="checkpoint">checkpoint (respawn point)</option>
             <option value="collectible">collectible (+pts)</option>
             <option value="bouncing">bouncing orb</option>
           </select>
         </Row>
+        {node.physics2D === 'player-platformer' && <ControllerProps node={node} set={set} />}
+        {(node.physics2D === 'static-platform' || node.physics2D === 'solid' || node.physics2D === 'hazard') && <MoverProps node={node} set={set} />}
+        {node.physics2D !== 'none' && <ColliderProps node={node} set={set} />}
         {(node.physics2D === 'collectible' || node.scoreValue) && (
           <Row label="Score value">
             <NumField step={1} min={0} ariaLabel="Score value" value={node.scoreValue ?? 0} onChange={(scoreValue) => set({ scoreValue })} />
           </Row>
         )}
       </Section>
+    </>
+  );
+};
+
+const ControllerProps: React.FC<{ node: Node2D; set: (patch: Partial<Node2D>) => void }> = ({ node, set }) => {
+  const c = node.controller ?? {};
+  const d = PLATFORMER_DEFAULTS;
+  const patch = (p: Partial<PlatformerController2D>) => set({ controller: { ...c, ...p } });
+  return (
+    <>
+      <Row label="Run speed" title="px/s while a direction is held">
+        <NumField step={10} min={40} max={1200} ariaLabel="Run speed" value={c.runSpeed ?? d.runSpeed} onChange={(runSpeed) => patch({ runSpeed })} />
+      </Row>
+      <Row label="Jump power" title="px/s upward at jump start">
+        <NumField step={20} min={100} max={1400} ariaLabel="Jump power" value={c.jumpVelocity ?? d.jumpVelocity} onChange={(jumpVelocity) => patch({ jumpVelocity })} />
+      </Row>
+      <Row label="Jumps" title="1 = single, 2 = double jump, 3 = triple">
+        <NumField step={1} min={1} max={3} ariaLabel="Max jumps" value={c.maxJumps ?? d.maxJumps} onChange={(maxJumps) => patch({ maxJumps: Math.round(maxJumps) })} />
+      </Row>
+      <Row label="Gravity ×" title="Multiplier on the scene gravity">
+        <NumField step={0.1} min={0.2} max={3} ariaLabel="Gravity scale" value={c.gravityScale ?? 1} onChange={(gravityScale) => patch({ gravityScale })} />
+      </Row>
+      <Row label="Coyote (s)" title="A jump still works this long after leaving a ledge">
+        <NumField step={0.02} min={0} max={0.3} ariaLabel="Coyote time" value={c.coyoteTime ?? d.coyoteTime} onChange={(coyoteTime) => patch({ coyoteTime })} />
+      </Row>
+      <Row label="Jump buffer (s)" title="An early jump press is remembered this long">
+        <NumField step={0.02} min={0} max={0.3} ariaLabel="Jump buffer" value={c.jumpBuffer ?? d.jumpBuffer} onChange={(jumpBuffer) => patch({ jumpBuffer })} />
+      </Row>
+      <Row label="Air control" title="0..1 steering while airborne">
+        <NumField step={0.1} min={0} max={1} ariaLabel="Air control" value={c.airControl ?? d.airControl} onChange={(airControl) => patch({ airControl })} />
+      </Row>
+      <Check checked={c.variableJump ?? true} onChange={(variableJump) => patch({ variableJump })} label="Variable jump height (release to cut)" />
+    </>
+  );
+};
+
+const MoverProps: React.FC<{ node: Node2D; set: (patch: Partial<Node2D>) => void }> = ({ node, set }) => {
+  const m = node.mover;
+  const patch = (p: Partial<Mover2D>) => set({ mover: { axis: 'x', distance: 160, speed: 80, ...m, ...p } });
+  return (
+    <>
+      <Check checked={!!m} onChange={(on) => set({ mover: on ? { axis: 'x', distance: 160, speed: 80 } : undefined })} label="Moving platform (carries the player)" />
+      {m && (
+        <>
+          <Row label="Axis">
+            <select className="field sm" aria-label="Mover axis" value={m.axis} onChange={(e) => patch({ axis: e.target.value as Mover2D['axis'] })}>
+              <option value="x">horizontal</option>
+              <option value="y">vertical</option>
+            </select>
+          </Row>
+          <Row label="Distance (px)" title="Negative goes the other way first">
+            <NumField step={10} min={-2000} max={2000} ariaLabel="Mover distance" value={m.distance} onChange={(distance) => patch({ distance })} />
+          </Row>
+          <Row label="Speed (px/s)">
+            <NumField step={10} min={10} max={600} ariaLabel="Mover speed" value={m.speed} onChange={(speed) => patch({ speed })} />
+          </Row>
+          <Row label="Phase" title="0..1 start offset within the cycle">
+            <NumField step={0.1} min={0} max={1} ariaLabel="Mover phase" value={m.phase ?? 0} onChange={(phase) => patch({ phase })} />
+          </Row>
+        </>
+      )}
+    </>
+  );
+};
+
+const ColliderProps: React.FC<{ node: Node2D; set: (patch: Partial<Node2D>) => void }> = ({ node, set }) => {
+  const c = node.collider;
+  const patch = (p: Partial<Collider2D>) => set({ collider: { ...c, ...p } });
+  return (
+    <>
+      <Check checked={!!c} onChange={(on) => set({ collider: on ? {} : undefined })} label="Custom hit box (instead of the drawn size)" />
+      {c && (
+        <>
+          <div className="pp-row">
+            <span className="pp-label">Size</span>
+            <div className="pp-vec two">
+              <NumField label="W" step={5} min={1} ariaLabel="Hit box width" value={c.width ?? Math.abs(node.width * node.scaleX)} onChange={(width) => patch({ width })} />
+              <NumField label="H" step={5} min={1} ariaLabel="Hit box height" value={c.height ?? Math.abs(node.height * node.scaleY)} onChange={(height) => patch({ height })} />
+            </div>
+          </div>
+          <div className="pp-row">
+            <span className="pp-label">Offset</span>
+            <div className="pp-vec two">
+              <NumField label="X" step={2} ariaLabel="Hit box offset X" value={c.offsetX ?? 0} onChange={(offsetX) => patch({ offsetX })} />
+              <NumField label="Y" step={2} ariaLabel="Hit box offset Y" value={c.offsetY ?? 0} onChange={(offsetY) => patch({ offsetY })} />
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+};
+
+const World2DProps: React.FC = () => {
+  const spec = useStudioStore((s) => s.sceneSpec);
+  const updateWorld = useStudioStore((s) => s.updateWorld2D);
+  const updateCamera = useStudioStore((s) => s.updateCamera2D);
+  const world = resolveWorld(spec.world2D);
+  const cam = resolveCamera2D(spec.camera2D, world);
+  const patchCam = (p: Partial<Camera2DSpec>) => updateCamera(p);
+  return (
+    <>
+      <div className="pp-row">
+        <span className="pp-label">World (px)</span>
+        <div className="pp-vec two">
+          <NumField label="W" step={100} min={WORLD_LIMITS.min} max={WORLD_LIMITS.max} ariaLabel="World width" value={world.width} onChange={(width) => updateWorld({ width: Math.round(width) })} />
+          <NumField label="H" step={100} min={WORLD_LIMITS.min} max={WORLD_LIMITS.max} ariaLabel="World height" value={world.height} onChange={(height) => updateWorld({ height: Math.round(height) })} />
+        </div>
+      </div>
+      <Row label="Camera" title="fixed: shows the whole screen · follow: tracks the player through a bigger world">
+        <select className="field sm" aria-label="Camera mode" value={cam.mode} onChange={(e) => patchCam({ mode: e.target.value as 'fixed' | 'follow' })}>
+          <option value="fixed">fixed</option>
+          <option value="follow">follow player</option>
+        </select>
+      </Row>
+      {cam.mode === 'follow' && (
+        <>
+          <Row label="Zoom">
+            <NumField step={0.1} min={0.5} max={2} ariaLabel="Camera zoom" value={cam.zoom} onChange={(zoom) => patchCam({ zoom })} />
+          </Row>
+          <Row label="Smoothing (s)" title="Seconds to catch up with the player (0 = glued)">
+            <NumField step={0.05} min={0} max={1} ariaLabel="Camera smoothing" value={cam.smoothing} onChange={(smoothing) => patchCam({ smoothing })} />
+          </Row>
+          <Row label="Look-ahead (px)">
+            <NumField step={10} min={0} max={300} ariaLabel="Camera look-ahead" value={cam.lookAhead} onChange={(lookAhead) => patchCam({ lookAhead })} />
+          </Row>
+        </>
+      )}
     </>
   );
 };
@@ -595,6 +735,7 @@ const SceneSettings: React.FC = () => {
           ]}
         />
       </Row>
+      {engine === '2d' && <World2DProps />}
       {isGame ? (
         <>
           <Row label="Gravity" title="Player physics: gravity used by the 2D platformer and jump impulses">
