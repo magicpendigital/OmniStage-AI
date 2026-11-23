@@ -6,6 +6,7 @@ import { ASSET_REGISTRY, cloneSceneSpec } from '../../registry/assetRegistry';
 import { ActorNode, ExecutionLogEntry, Node2D, SemanticAssetEntry } from '../../types/scene.schema';
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { findUnoccupiedPosition } from '../storeHelpers';
+import { editKey, pushPast } from '../history';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
 
 export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
@@ -39,7 +40,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         ],
       };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, `xf:${actorId}`),
         futureSpecs: [],
         sceneSpec: nextSpec,
       };
@@ -52,7 +53,7 @@ export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       if (idx === -1) return state;
       nextSpec.actors[idx] = { ...nextSpec.actors[idx], ...partialProps };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey(`actor:${actorId}`, partialProps)),
         futureSpecs: [],
         sceneSpec: syncGraphWithScene(nextSpec),
       };

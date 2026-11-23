@@ -86,7 +86,9 @@ async function callAnthropic(cfg: ProviderConfig, req: GenerateRequest): Promise
       fallbacks: 'default',
       thinking: { type: 'adaptive' },
       output_config: { effort: 'medium' },
-      system: req.system,
+      // The ~7k-token system prompt is identical across the patch-loop rounds of one turn and across the scenes of a
+      // storyboard, so mark it cacheable (cache reads are billed far below normal input tokens and answer faster).
+      system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content }],
     })
     .finalMessage();

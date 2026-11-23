@@ -99,12 +99,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       id: 'msg-welcome-v5',
       role: 'assistant',
       content:
-        'Welcome to OmniStage AI (Phase 5 Visual Logic Node Graph & Execution Console). Switch between [3D/2D Viewport], [Logic Node Graph (n8n/ComfyUI)], and [Split View] at the top of the stage to wire triggers, conditions, actions, and Phygital Robot Servo I/O nodes bidirectionally with your live scene.',
+        'Describe the game or video you want in the box below and the Director will build it. You can also drag assets onto the stage, then press Play Test to try it. Ask "how do I…?" any time to get help.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      diffSummary: [
-        'Initialized Bidirectional LogicGraphSpec (8 nodes, 8 cubic Bezier wires)',
-        'Connected Real-Time Execution Console with One-Click AI Auto-Fix',
-      ],
     },
   ],
   isAgentThinking: false,

@@ -93,14 +93,17 @@ export const ExecutionConsole: React.FC = () => {
           ]}
         />
         <div className="flex-1" />
-        <button
-          type="button"
-          className="btn ghost sm"
-          onClick={handleSimulateDiagnosticFault}
-          title="Inject a test node fault to try AI Auto-Fix"
-        >
-          <Bug size={12} className="text-err" /> Test fault
-        </button>
+        {/* Debug helper for the hardware (servo) demo only: game and video makers never need to see it. */}
+        {sceneSpec.logicGraph?.nodes.some((n) => n.type === 'robot-hardware') && (
+          <button
+            type="button"
+            className="btn ghost sm"
+            onClick={handleSimulateDiagnosticFault}
+            title="Inject a test node fault to try AI Auto-Fix"
+          >
+            <Bug size={12} className="text-err" /> Test fault
+          </button>
+        )}
         <button type="button" className="ibtn sm" onClick={clearLogs} title="Clear logs" aria-label="Clear logs">
           <Trash2 size={13} />
         </button>

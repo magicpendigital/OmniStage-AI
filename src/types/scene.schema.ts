@@ -1252,4 +1252,6 @@ export interface ChatMessage {
   extensionSuggestions?: Array<{ id: string; name: string; reason: string }>;
   /** Phase 6 batch 2: this reply answers an app-usage question from the Guide (no AI call). */
   guideTopicId?: string;
+  /** Where the reply came from: a model (`ai`), the built-in keyword director (`offline`), or a failed AI call (`error`). */
+  aiSource?: { source: 'ai' | 'offline' | 'error'; reason?: string };
 }

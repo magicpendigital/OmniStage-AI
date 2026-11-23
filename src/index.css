@@ -14,7 +14,7 @@
   --line2: 47 58 71;
   --fg: 230 235 240;
   --mute: 154 167 180;
-  --dim: 108 121 133;
+  --dim: 132 145 158; /* >= 4.5:1 on bg, panel, raised and hover (was 108 121 133 = 3.3-4.3:1) */
   --accent: 90 169 255;
   --accent-ink: 6 18 31;
   --ok: 91 212 138;
@@ -164,7 +164,7 @@
   background: rgb(var(--accent) / 0.16);
   color: rgb(var(--accent));
   box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.38);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
   flex-shrink: 0;
@@ -331,7 +331,7 @@ select.field { padding-right: 4px; }
 
 .kbd {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1;
   padding: 2px 4px;
   border-radius: 4px;
@@ -400,7 +400,7 @@ select.field { padding-right: 4px; }
 .menu-i.on { color: rgb(var(--accent)); }
 .menu-h {
   padding: 6px 8px 3px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -475,7 +475,7 @@ select.field { padding-right: 4px; }
   border-radius: 999px;
   background: rgb(var(--accent));
   color: rgb(var(--accent-ink));
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   display: grid;
   place-items: center;
@@ -512,7 +512,7 @@ select.field { padding-right: 4px; }
   gap: 6px;
   width: 100%;
   padding: 2px 2px 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -621,7 +621,7 @@ select.field { padding-right: 4px; }
   border-radius: 4px;
   background: rgba(8, 11, 15, 0.78);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
   color: rgb(var(--mute));
 }
@@ -662,7 +662,7 @@ select.field { padding-right: 4px; }
   height: 22px;
   padding: 0 8px;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -958,7 +958,7 @@ select.field { padding-right: 4px; }
   height: 16px;
   padding: 0 4px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   display: inline-grid;
   place-items: center;
@@ -997,7 +997,7 @@ select.field { padding-right: 4px; }
   align-items: center;
   padding: 0 8px;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: rgb(var(--fg));
   overflow: hidden;
@@ -1057,7 +1057,7 @@ select.field { padding-right: 4px; }
 .log-r:hover { background: rgb(var(--hover) / 0.5); }
 .log-r.error { background: rgb(var(--err) / 0.07); }
 .log-r.warn { background: rgb(var(--warn) / 0.045); }
-.log-lv { font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.log-lv { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 
 .focus-exit {
   position: absolute;
@@ -1085,4 +1085,10 @@ select.field { padding-right: 4px; }
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Legibility floor: 9px and 10px utility text (hundreds of labels written as text-[9px] / text-[10px]) renders at 11px. */
+.text-\[9px\],
+.text-\[10px\] {
+  font-size: 11px;
 }

@@ -6,6 +6,7 @@ import { LIGHTING_PRESETS, SCENE_TEMPLATES, cloneSceneSpec, createBlankSceneSpec
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { Vector3Tuple } from '../../types/scene.schema';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
+import { HISTORY_CAP, resetHistoryBurst } from '../history';
 
 export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
 
@@ -175,23 +176,25 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
 
   undo: () =>
     set((state) => {
+      resetHistoryBurst();
       if (state.pastSpecs.length === 0) return state;
       const previous = state.pastSpecs[state.pastSpecs.length - 1];
       const remainingPast = state.pastSpecs.slice(0, -1);
       return {
         pastSpecs: remainingPast,
-        futureSpecs: [cloneSceneSpec(state.sceneSpec), ...state.futureSpecs.slice(0, 19)],
+        futureSpecs: [cloneSceneSpec(state.sceneSpec), ...state.futureSpecs.slice(0, HISTORY_CAP - 1)],
         sceneSpec: syncGraphWithScene(previous),
       };
     }),
 
   redo: () =>
     set((state) => {
+      resetHistoryBurst();
       if (state.futureSpecs.length === 0) return state;
       const next = state.futureSpecs[0];
       const remainingFuture = state.futureSpecs.slice(1);
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: [...state.pastSpecs.slice(-(HISTORY_CAP - 1)), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: remainingFuture,
         sceneSpec: syncGraphWithScene(next),
       };

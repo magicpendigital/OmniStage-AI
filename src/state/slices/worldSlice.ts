@@ -6,6 +6,7 @@ import { DEFAULT_WORLD_SPEC, cloneSceneSpec } from '../../registry/assetRegistry
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { applyBiomeToScene } from '../../runtime/biomes';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
+import { editKey, pushPast } from '../history';
 
 export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
 
@@ -15,7 +16,7 @@ export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.world = { ...(nextSpec.world || DEFAULT_WORLD_SPEC), ...patch };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('world', patch)),
         futureSpecs: [],
         sceneSpec: syncGraphWithScene(nextSpec),
       };
@@ -26,7 +27,7 @@ export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.world.terrain = { ...nextSpec.world.terrain, ...patch };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('terrain', patch)),
         futureSpecs: [],
         sceneSpec: syncGraphWithScene(nextSpec),
       };
@@ -37,7 +38,7 @@ export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.world.clouds = { ...nextSpec.world.clouds, ...patch };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('clouds', patch)),
         futureSpecs: [],
         sceneSpec: nextSpec,
       };
@@ -48,7 +49,7 @@ export const createWorldSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       nextSpec.world.weather = { ...nextSpec.world.weather, ...patch };
       return {
-        pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('weather', patch)),
         futureSpecs: [],
         sceneSpec: syncGraphWithScene(nextSpec),
       };

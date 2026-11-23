@@ -15,6 +15,7 @@ import {
   ScanEye,
   Sliders,
   Sparkles,
+  Square,
   X,
 } from 'lucide-react';
 import { StoryboardJobState, useStudioStore } from '../state/useStudioStore';
@@ -76,6 +77,40 @@ const INTENT_HELP: Record<AgentIntentMode, { label: string; title: string; place
 
 const now = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+/** Shows who produced a reply: a model, the built-in offline director, or a failed AI call (scene unchanged). */
+const AiSourceChip: React.FC<{ aiSource?: ChatMessage['aiSource'] }> = ({ aiSource }) => {
+  if (!aiSource) return null;
+  const meta = {
+    ai: { text: 'AI', cls: 'text-ok', title: 'Written by the AI model' },
+    offline: { text: 'OFFLINE · no AI used', cls: 'text-warn', title: 'No AI connection is set up: this used built-in templates and keyword rules. Open the AI connection menu (CPU icon) to connect a model.' },
+    error: { text: 'AI FAILED · scene unchanged', cls: 'text-err', title: aiSource.reason || 'The AI request failed' },
+  }[aiSource.source];
+  return (
+    <span title={meta.title} className={`chip font-mono text-[11px] ${meta.cls}`}>
+      {meta.text}
+    </span>
+  );
+};
+
+/** "Working…" line with elapsed time and a Stop button, shared by the bar and the drawer. */
+const ThinkingLine: React.FC<{ onStop: () => void }> = ({ onStop }) => {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return (
+    <>
+      <span>Computing SceneSpec &amp; logic graph mutations</span>
+      <span className="dots"><i /><i /><i /></span>
+      <span className="font-mono text-[11px] text-mute" aria-label={`${seconds} seconds elapsed`}>{seconds}s</span>
+      <button type="button" className="btn sm ml-auto" onClick={onStop} title="Stop this request (the scene is left unchanged)">
+        <Square size={11} /> Stop
+      </button>
+    </>
+  );
+};
+
 /** Phase 4 / 6 extras under an assistant reply: verification + Director Skills, guide links, memory and extension suggestions. */
 const MessageExtras: React.FC<{ msg: ChatMessage }> = ({ msg }) => {
   const learnedSkills = useStudioStore((s) => s.learnedSkills);
@@ -93,8 +128,9 @@ const MessageExtras: React.FC<{ msg: ChatMessage }> = ({ msg }) => {
 
   return (
     <>
-      {(msg.skillsUsed?.length || msg.verification) && (
+      {(msg.skillsUsed?.length || msg.verification || msg.aiSource) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <AiSourceChip aiSource={msg.aiSource} />
           {msg.verification && (
             <span
               title={msg.verification.issues.map((i) => `${i.code}: ${i.message}`).join(' | ') || 'No issues'}
@@ -202,6 +238,8 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
   const [dismissedReplyId, setDismissedReplyId] = useState<string | null>(null);
   const [isDirectorQARunning, setDirectorQARunning] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const stopAgent = () => abortRef.current?.abort();
 
   const aiMode = useShellStore((s) => s.aiMode);
   const setAiMode = useShellStore((s) => s.setAiMode);
@@ -398,6 +436,8 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     }
 
     setAgentThinking(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const prevSnapshot = JSON.parse(JSON.stringify(sceneSpec));
       // Replace hands the agent a blank stage that keeps this scene's identity and format.
@@ -411,7 +451,21 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
               sequence: sceneSpec.sequence,
             }
           : sceneSpec;
-      const result = await mutateSceneWithAgent(query, baseSpec);
+      const result = await mutateSceneWithAgent(query, baseSpec, controller.signal);
+
+      // The AI call failed (or timed out): keep the scene exactly as it was and say so. No history entry, no fake success.
+      if (result.aiSource?.source === 'error') {
+        addChatMessage({
+          id: `msg-a-${Date.now()}`,
+          role: 'assistant',
+          content: result.assistantMessage,
+          timestamp: now(),
+          aiSource: result.aiSource,
+          skillsUsed: result.skillsUsed,
+        });
+        appendLog({ level: 'error', message: `AI Director request failed: ${result.aiSource.reason ?? 'unknown error'}. Scene unchanged.` });
+        return;
+      }
 
       // If this was an Auto-Fix request from the Execution Console / Node Graph,
       // also repair any faulted LogicNode states in the updated SceneSpec.
@@ -449,9 +503,22 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
         sourcePrompt: isAutoFix ? undefined : query,
         skillsUsed: result.skillsUsed,
         verification: result.verification,
+        aiSource: result.aiSource,
         ...(isAutoFix ? {} : suggestionsFor(query, nextSpec.engineType, nextSpec.mode)),
       });
+    } catch (err) {
+      const stopped = controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError');
+      const detail = err instanceof Error ? err.message : String(err);
+      addChatMessage({
+        id: `msg-a-${Date.now()}`,
+        role: 'assistant',
+        content: stopped ? 'Stopped. Your scene was not changed.' : `Something went wrong while running the Director (${detail}). Your scene was not changed.`,
+        timestamp: now(),
+        aiSource: stopped ? undefined : { source: 'error', reason: detail },
+      });
+      if (!stopped) appendLog({ level: 'error', message: `AI Director failed: ${detail}` });
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setAgentThinking(false);
     }
   };
@@ -585,8 +652,9 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
         {isAgentThinking && !storyboardJob && (
           <div className="reply glass pointer-events-auto items-center">
             <Sparkles size={14} className="shrink-0 text-accent" />
-            <span className="text-[12px] text-mute">Computing SceneSpec &amp; logic graph mutations</span>
-            <span className="dots"><i /><i /><i /></span>
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-[12px] text-mute">
+              <ThinkingLine onStop={stopAgent} />
+            </div>
           </div>
         )}
 
@@ -594,6 +662,11 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           <div className="reply glass pointer-events-auto">
             <Sparkles size={14} className="mt-0.5 shrink-0 text-accent" />
             <div className="min-w-0 flex-1">
+              {lastAssistant.aiSource && lastAssistant.aiSource.source !== 'ai' && (
+                <div className="mb-1">
+                  <AiSourceChip aiSource={lastAssistant.aiSource} />
+                </div>
+              )}
               <p className="line-clamp-3 text-[12px] leading-relaxed text-fg">{lastAssistant.content}</p>
               {lastAssistant.diffSummary && lastAssistant.diffSummary.length > 0 && (
                 <p className="mt-1 truncate font-mono text-[10px] text-mute">
@@ -781,7 +854,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
             {storyboardProgress}
             {isAgentThinking && !storyboardJob && (
               <div className="msg flex items-center gap-2 font-mono text-[11px] text-accent">
-                Computing SceneSpec &amp; logic graph mutations <span className="dots"><i /><i /><i /></span>
+                <ThinkingLine onStop={stopAgent} />
               </div>
             )}
           </div>

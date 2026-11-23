@@ -49,8 +49,11 @@ export const SceneDirector: React.FC = () => {
       pressedKeysRef.current.add(key);
       if (!e.repeat) logicRuntime.emit('key-press', { key, code: e.code });
 
-      // When not in active Game Mode, W / E / R switch TransformControls Gizmo modes
-      if (!useStudioStore.getState().isPlaying && useStudioStore.getState().sceneSpec.mode !== 'game') {
+      // W / E / R switch the TransformControls gizmo whenever the gizmo is available (same rule as ActorRenderer's
+      // `showTransformGizmo`): everywhere except while a Game Mode scene is playing, where W is a movement key.
+      // (This used to also require `!isPlaying`, which is true by default, so the shortcuts were dead on first use.)
+      const st = useStudioStore.getState();
+      if (!(st.sceneSpec.mode === 'game' && st.isPlaying) && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (key === 'w') setTransformMode('translate');
         else if (key === 'e') setTransformMode('rotate');
         else if (key === 'r') setTransformMode('scale');

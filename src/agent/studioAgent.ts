@@ -50,6 +50,28 @@ export interface AgentMutationResult {
   skillsUsed?: string[];
   /** Phase 4: verification report of updatedSceneSpec after the deterministic/AI repair loop. */
   verification?: VerificationReport;
+  /**
+   * Where this result came from, so the UI never presents a canned answer as the AI's work:
+   * `ai` = a model produced it; `offline` = no AI connection, built-in keyword director; `error` = the AI call
+   * failed and the scene was left unchanged (`updatedSceneSpec` is the input spec).
+   */
+  aiSource?: { source: 'ai' | 'offline' | 'error'; reason?: string };
+}
+
+/** Why an AI call did not produce a result (503 = no connection configured; anything else is a real failure). */
+interface AiDiag {
+  unavailable: boolean;
+  failure?: string;
+}
+
+async function describeHttpFailure(res: Response): Promise<string> {
+  try {
+    const body = await res.clone().json();
+    if (body && typeof body.error === 'string' && body.error) return `HTTP ${res.status}: ${body.error.slice(0, 160)}`;
+  } catch {
+    /* body was not JSON */
+  }
+  return `HTTP ${res.status}`;
 }
 
 const AUDIO_PROMPT = /\b(sfx|sound|sounds|audio)\b|âm thanh|tiếng động|hiệu ứng âm/i;
@@ -1435,13 +1457,16 @@ async function fetchAgentMutation(
   prompt: string,
   currentSpec: SceneSpec,
   skills: DirectorSkill[] = [],
-  extraContext: string[] = []
+  extraContext: string[] = [],
+  diag?: AiDiag,
+  signal?: AbortSignal
 ): Promise<AgentMutationResult | null> {
   const settings = useStudioStore.getState().settings;
   try {
     const response = await fetch('/api/agent/mutate', {
       method: 'POST',
       headers: aiHeaders(settings),
+      signal,
       body: JSON.stringify({
         prompt,
         sceneSpec: currentSpec,
@@ -1449,7 +1474,13 @@ async function fetchAgentMutation(
         customSystemPrompt: mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext),
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (diag) {
+        if (response.status === 503) diag.unavailable = true;
+        else diag.failure = await describeHttpFailure(response);
+      }
+      return null;
+    }
     const data = await response.json();
     if (data && data.updatedSceneSpec && Array.isArray(data.updatedSceneSpec.actors)) {
       return {
@@ -1463,6 +1494,7 @@ async function fetchAgentMutation(
     }
     return null;
   } catch {
+    if (diag && !signal?.aborted) diag.failure = 'network error (is the OmniStage server running?)';
     return null;
   }
 }
@@ -1630,7 +1662,9 @@ async function runPatchEdit(
   skills: DirectorSkill[],
   extraContext: string[],
   contributions: ReturnType<typeof enabledContributions>,
-  verifyOpts: { scenes: SceneSpec[] }
+  verifyOpts: { scenes: SceneSpec[] },
+  diag: AiDiag,
+  signal?: AbortSignal
 ): Promise<Omit<AgentMutationResult, 'skillsUsed'> | 'unavailable' | null> {
   const settings = useStudioStore.getState().settings;
   const customSystemPrompt = mergeSystemPrompt(settings.customSystemPrompt, skills, extraContext);
@@ -1649,16 +1683,24 @@ async function runPatchEdit(
         const res = await fetch('/api/agent/patch', {
           method: 'POST',
           headers: aiHeaders(settings),
+          signal,
           body: JSON.stringify({ ...turn, sceneSpec: turn.spec, spec: undefined, model: settings.geminiModel, customSystemPrompt }),
         });
-        if (res.status === 503) unavailable = true;
-        if (!res.ok) return null;
+        if (res.status === 503) {
+          unavailable = true;
+          diag.unavailable = true;
+        }
+        if (!res.ok) {
+          if (res.status !== 503) diag.failure = await describeHttpFailure(res);
+          return null;
+        }
         const data = await res.json();
         if (!data || typeof data !== 'object') return null;
         if (!providerLabel && data.provider) providerLabel = `${data.provider}${data.model ? ` · ${data.model}` : ''}`;
         if (typeof data.fallbackNote === 'string' && data.fallbackNote) fallbackNotes.add(data.fallbackNote);
         return data as PatchProposal;
       } catch {
+        if (!signal?.aborted) diag.failure = 'network error (is the OmniStage server running?)';
         return null;
       }
     },
@@ -1670,6 +1712,7 @@ async function runPatchEdit(
       return autoFixSceneSpec(finalized, verifyOpts);
     },
   });
+  if (signal?.aborted) throw new DOMException('Stopped by user', 'AbortError');
   if (!loop) return unavailable ? 'unavailable' : null;
   if (!loop.changed && loop.rounds.some((r) => r.rejected)) return null; // never produced a valid patch: try a full rewrite
 
@@ -1699,7 +1742,8 @@ async function runPatchEdit(
  */
 export async function mutateSceneWithAgent(
   prompt: string,
-  currentSpec: SceneSpec
+  currentSpec: SceneSpec,
+  signal?: AbortSignal
 ): Promise<AgentMutationResult> {
   const store = useStudioStore.getState();
   const director = buildDirectorContext(prompt, { engineType: currentSpec.engineType, mode: currentSpec.mode });
@@ -1711,24 +1755,40 @@ export async function mutateSceneWithAgent(
 
   // Phase 7C: small JSON Patch edits in a verify loop (default). Falls back to a full rewrite when the model can't
   // follow the patch format, and to the offline director when no provider is configured.
+  const diag: AiDiag = { unavailable: false };
   let providerUnavailable = false;
   if ((store.settings.aiEditMode || 'patch') === 'patch') {
-    const patched = await runPatchEdit(prompt, currentSpec, skills, extraContext, contributions, verifyOpts);
+    const patched = await runPatchEdit(prompt, currentSpec, skills, extraContext, contributions, verifyOpts, diag, signal);
     if (patched === 'unavailable') providerUnavailable = true;
-    else if (patched) return { ...patched, skillsUsed };
+    else if (patched) return { ...patched, skillsUsed, aiSource: { source: 'ai' } };
   }
 
-  const result = providerUnavailable ? null : await fetchAgentMutation(prompt, currentSpec, skills, extraContext);
+  const result = providerUnavailable ? null : await fetchAgentMutation(prompt, currentSpec, skills, extraContext, diag, signal);
+  if (signal?.aborted) throw new DOMException('Stopped by user', 'AbortError');
   if (!result) {
+    // Only a missing AI connection (503) falls back to the built-in keyword director. A configured provider that
+    // failed or returned nothing usable must NOT be papered over with a canned scene: report it and keep the scene.
+    if (!diag.unavailable) {
+      const detail = diag.failure ?? 'the model returned no usable edit';
+      return {
+        assistantMessage: `The AI request failed (${detail}). Your scene was not changed. Check the AI connection (CPU icon next to the prompt) or try again.`,
+        diffSummary: [],
+        updatedSceneSpec: currentSpec,
+        skillsUsed,
+        aiSource: { source: 'error', reason: detail },
+      };
+    }
     const local = applyLocalHeuristicMutation(prompt, currentSpec);
     attachExtensionRecipes(local.updatedSceneSpec, contributions);
     const checked = autoFixSceneSpec(local.updatedSceneSpec, verifyOpts);
     return {
       ...local,
+      assistantMessage: `Offline director: no AI connection is set up, so this used built-in templates and keyword rules, not an AI model. ${local.assistantMessage}`,
       updatedSceneSpec: checked.spec,
       diffSummary: [...local.diffSummary, ...verificationNotes(checked.fixes, checked.report)],
       skillsUsed,
       verification: checked.report,
+      aiSource: { source: 'offline', reason: 'no AI connection configured' },
     };
   }
 
@@ -1750,7 +1810,7 @@ export async function mutateSceneWithAgent(
     const repairPrompt = `VERIFICATION LOOP — the SceneSpec you produced for "${prompt}" fails OmniStage's deterministic verifier.
 Fix ONLY these problems, keep everything else identical:
 ${describeIssuesForAgent(checked.report)}`;
-    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills, extraContext);
+    const repaired = await fetchAgentMutation(repairPrompt, checked.spec, skills, extraContext, undefined, signal);
     if (!repaired) break;
     const candidate = autoFixSceneSpec(finalizeLogicGraph(cloneSceneSpec(repaired.updatedSceneSpec)).spec, verifyOpts);
     if (candidate.report.errors >= checked.report.errors) break; // no progress: keep the better spec
@@ -1769,6 +1829,7 @@ ${describeIssuesForAgent(checked.report)}`;
     ],
     skillsUsed,
     verification: checked.report,
+    aiSource: { source: 'ai' },
   };
 }
 

@@ -271,6 +271,15 @@ export class RuntimeLogicGraph {
         if (distance < 0) throw new Error('Distance must be nonnegative');
         return Math.hypot(...a.map((v, i) => v - b[i])) < distance;
       }
+      case 'tap-count': {
+        // Unbox / tap-reward progress (the AI prompt and the mechanic wiring emit this): true once the actor was tapped enough times.
+        const id = String(p.actorId || actorId || '');
+        const actor = state.sceneSpec.actors.find((a) => a.id === id);
+        if (!actor) throw new Error('Tap count references a missing actor ID');
+        const required = finiteNumber(p.tapsRequired ?? actor.unboxTapsRequired ?? 3, 'Taps required');
+        if (required < 0) throw new Error('Taps required must be nonnegative');
+        return (state.unboxTapCounts?.[id] ?? 0) >= required;
+      }
       default: throw new Error(`Unsupported condition: ${p.conditionType}`);
     }
   }

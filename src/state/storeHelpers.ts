@@ -60,47 +60,8 @@ export const initialScene2D = syncGraphWithScene(
   createBlankSceneSpec('2d', 'Scene 2 · 2D Vector & Platformer Stage')
 );
 
-export const INITIAL_EXECUTION_LOGS: ExecutionLogEntry[] = [
-  {
-    id: 'log-init-1',
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    sceneTime: 0.0,
-    level: 'trigger',
-    nodeId: 'node-scene-start',
-    message: 'Fired [On Scene Start] -> Initialized 3D WebGL stage & WorldRenderer pipeline.',
-    payload: { engine: '3d', skybox: initialScene3D.world.skybox },
-  },
-  {
-    id: 'log-init-2',
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    sceneTime: 0.2,
-    level: 'action',
-    nodeId: 'node-actor-motion',
-    actorId: initialScene3D.actors[0]?.id,
-    message: `Bound skeletal rig [${initialScene3D.actors[0]?.name || 'Expressive Robot'}] to clip '${initialScene3D.actors[0]?.activeClip || 'Idle'}'.`,
-    payload: { speed: 1.0, scoreDelta: 25 },
-  },
-  {
-    id: 'log-init-3',
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    sceneTime: 0.4,
-    level: 'action',
-    nodeId: 'node-robot-servo',
-    message: 'Phygital Bridge ready: Servo Ch 1 @ 45° · OLED Eye Expression = cyber-happy.',
-    payload: { servoChannel: 'Ch 1', servoAngle: 45 },
-  },
-  {
-    id: 'log-init-warn',
-    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    sceneTime: 1.2,
-    level: 'warn',
-    nodeId: 'node-score-gate',
-    actorId: initialScene3D.actors[0]?.id,
-    message:
-      'Condition [If Score >= 100] has only 1 collectible actor on stage (25 PTS per tap). Spawn more collectibles or lower targetScore for faster playable conversion.',
-    payload: { currentTargetScore: 100, actorCount: initialScene3D.actors.length },
-  },
-];
+/** The log starts empty: it only shows what actually ran (no pretend servo/robot entries from an old demo). */
+export const INITIAL_EXECUTION_LOGS: ExecutionLogEntry[] = [];
 
 export function findUnoccupiedPosition(existingActors: ActorNode[]): Vector3Tuple {
   if (existingActors.length === 0) return [0, 0, 0];

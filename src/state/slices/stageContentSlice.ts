@@ -7,6 +7,7 @@ import { CaptionCue, Node2D, SceneSpec, VFXNode, VFXType } from '../../types/sce
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { resolveAudioSpec } from '../../audio/audioBus';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
+import { editKey, pushPast } from '../history';
 
 /** Caption cues written by the AI or imported (WebVTT/SRT) may have no id; the docking editors address cues by id. */
 export function withCaptionIds(captions: CaptionCue[] | undefined): Array<CaptionCue & { id: string }> {
@@ -62,7 +63,10 @@ export const createStageContentSlice = (set: StudioSet, get: StudioGet): StudioS
       const idx = nextSpec.nodes2D.findIndex((n) => n.id === nodeId);
       if (idx === -1 || (nextSpec.nodes2D[idx].locked && patch.locked === undefined)) return state;
       nextSpec.nodes2D[idx] = { ...nextSpec.nodes2D[idx], ...patch };
+      // 2D edits used to skip history entirely (drags and field edits could not be undone). One drag = one undo step.
       return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey(`node2d:${nodeId}`, patch)),
+        futureSpecs: [],
         sceneSpec: nextSpec,
       };
     }),

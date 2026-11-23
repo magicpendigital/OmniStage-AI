@@ -14,6 +14,9 @@ paths:
   finalized, auto-fixed and verified, and rejected patches / verifier errors go back as TOOL RESULTs (max `DEFAULT_PATCH_ROUNDS`; a round
   that makes verification worse is discarded). Full-rewrite mode keeps at most one AI repair round. Keep this order; the offline heuristic
   path must stay usable without keys (a 503 from the provider skips straight to it).
+- `mutateSceneWithAgent` returns `aiSource` (`ai` | `offline` | `error`). ONLY a 503 (no connection configured) may use the keyword director, and the
+  reply must say so; any other provider failure or unusable output returns the scene unchanged with `source: 'error'` (never a canned scene).
+  The UI shows the source chip, has a Stop button (AbortSignal threaded through the fetches) and must not push history for an `error` result.
 - Patch paths may address array items by id (`/actors/@id`), see `src/utils/jsonPatch.ts`; keep `tests/patchLoop.test.ts` green.
 - Media craft (Phase 10A): film quality hints are verifier *warnings* listed in `MEDIA_CRAFT_CODES`; the patch loop treats them as work
   through `qualityPenalty` (storyboard polish rounds), never as errors. Generated actors keep their ids (shots / lookAt reference them).

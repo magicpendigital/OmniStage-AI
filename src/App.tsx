@@ -20,6 +20,7 @@ import { WritersRoomModal } from './components/WritersRoomModal';
 import { WelcomeTour } from './components/WelcomeTour';
 import { useStudioStore } from './state/useStudioStore';
 import { useProjectAutosave } from './workspace/useProjectAutosave';
+import { useUndoShortcuts } from './state/useUndoShortcuts';
 import { StaleDraftsDialog } from './components/StaleDraftsDialog';
 
 /**
@@ -38,6 +39,7 @@ export default function App() {
     useStudioStore.getState().initWorkspace();
   }, []);
   useProjectAutosave();
+  useUndoShortcuts();
 
   return (
     <div className="flex h-screen w-screen select-none flex-col overflow-hidden bg-bg text-fg">
