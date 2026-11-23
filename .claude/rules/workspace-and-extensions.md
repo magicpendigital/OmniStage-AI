@@ -60,3 +60,11 @@ paths:
   ever removed after the user chooses Delete in `StaleDraftsDialog` (keep restarts the clock). Saved bundles carry `voiceClips`.
 - Memory is user data: only explicit commands or user-confirmed suggestions are stored; keep `selectMemories` scoped (never leak another
   project's memories) and keep `tests/extensions.test.ts` / `tests/workspace.test.ts` green.
+- Studio shell (Phase 1): selection drives ONE persistent Properties dock (`PropertiesPanel.tsx`, toggle `P`, state `propsOpen` in `useShellStore`);
+  it edits through the existing store actions (`updateActor` / `updateNode2D` / `updateVFX` / `updateCamera` / `updateEnvironment`), numeric fields
+  coalesce undo by `editKey`. Scene settings and the CTA card live in its collapsible "Scene" section, not in separate modals/drawer tabs. Add a
+  new property by extending the matching `*Props` component, never a second inspector. Play Test rebuilds live (debounced) while open and can dock
+  beside the stage (portal into `#play-dock-slot`); F5 / Space (`usePlayShortcuts`) run it. The Problems tab (`ProblemsPanel`, `useProblems`) shows
+  `verifySceneSpec` for the open scene with per-issue `fixSceneIssue`; it must stay the SAME verifier Export uses. Start templates
+  (`startTemplates.ts`) must pass `verifySceneSpec` with no errors (`tests/startTemplates.test.ts`). After touching the verifier or runtime run
+  `npm run build:player` (player.test checks the bundle hash).

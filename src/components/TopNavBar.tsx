@@ -1,7 +1,6 @@
 import React, { useRef } from 'react';
 import {
   BookOpen,
-  Box,
   Check,
   FolderKanban,
   Play,
@@ -14,20 +13,19 @@ import {
   FolderOpen,
   Gamepad2,
   GitBranch,
-  Layers,
   Monitor,
   Redo2,
   Save,
   Settings,
+  Download,
   Share2,
   Trash2,
   Undo2,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { useShellStore } from '../state/useShellStore';
 import { SCENE_TEMPLATES } from '../registry/assetRegistry';
 import {
-  AspectRatioPreset,
-  EngineType,
   SceneSpec,
   StudioMode,
   WorkspaceViewMode,
@@ -41,7 +39,8 @@ const PROJECT_FORMAT = 'omnistage-project';
 
 /**
  * 44px studio bar in four zones:
- *   1. Project & scene   2. Production mode (Game / Media)   3. Workspace view   4. Engine, settings & export
+ *   1. File, project & scene   2. Production mode (Game / Media)   3. Workspace view   4. Undo / redo, run, settings & publish
+ * Engine and aspect ratio live in Properties → Scene settings.
  */
 export const TopNavBar: React.FC = () => {
   const loadInputRef = useRef<HTMLInputElement | null>(null);
@@ -55,7 +54,6 @@ export const TopNavBar: React.FC = () => {
   const canRedo = useStudioStore((s) => s.futureSpecs.length > 0);
 
   const setProjectName = useStudioStore((s) => s.setProjectName);
-  const setEngineType = useStudioStore((s) => s.setEngineType);
   const createNewBlankScene = useStudioStore((s) => s.createNewBlankScene);
   const switchScene = useStudioStore((s) => s.switchScene);
   const duplicateScene = useStudioStore((s) => s.duplicateScene);
@@ -64,7 +62,6 @@ export const TopNavBar: React.FC = () => {
   const loadTemplate = useStudioStore((s) => s.loadTemplate);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
   const setMode = useStudioStore((s) => s.setMode);
-  const setAspectRatio = useStudioStore((s) => s.setAspectRatio);
   const setWorkspaceView = useStudioStore((s) => s.setWorkspaceView);
   const undo = useStudioStore((s) => s.undo);
   const redo = useStudioStore((s) => s.redo);
@@ -91,7 +88,6 @@ export const TopNavBar: React.FC = () => {
   const saveLabel = { saving: 'Saving…', dirty: 'Unsaved', error: 'Save failed', saved: 'Saved', idle: 'Saved' }[projectSaveState];
   const saveTone = projectSaveState === 'error' ? 'text-err' : projectSaveState === 'saved' || projectSaveState === 'idle' ? 'text-ok' : 'text-mute';
 
-  const engine: EngineType = sceneSpec.engineType || '3d';
   const activeIndex = Math.max(0, scenes.findIndex((s) => s.id === activeSceneId));
 
   const handleSaveProject = () => {
@@ -269,12 +265,42 @@ export const TopNavBar: React.FC = () => {
           )}
         </Dropdown>
 
-        <IconBtn label="Export project file (.omnistage)" onClick={handleSaveProject}>
-          <Save size={15} />
-        </IconBtn>
-        <IconBtn label="Import project file (.omnistage / .json)" onClick={() => loadInputRef.current?.click()}>
-          <FolderOpen size={15} />
-        </IconBtn>
+        <Dropdown
+          panelClass="w-64"
+          trigger={({ toggle, open }) => (
+            <button type="button" className="btn" onClick={toggle} aria-expanded={open} title="File: new, save, import, extensions">
+              File
+              <ChevronDown size={13} className="text-dim" />
+            </button>
+          )}
+        >
+          {({ close }) => (
+            <div>
+              <button type="button" className="menu-i" onClick={() => { useShellStore.getState().setStartOpen(true); close(); }}>
+                <FilePlus2 size={13} className="text-accent" /> New project…
+              </button>
+              <button type="button" className="menu-i" onClick={() => { setProjectHubOpen(true); close(); }}>
+                <FolderKanban size={13} className="text-accent" /> Projects…
+              </button>
+              {activeGameId && (
+                <button type="button" className="menu-i" onClick={() => { saveActiveGame(); close(); }}>
+                  <Save size={13} /> Save now
+                </button>
+              )}
+              <div className="my-1 h-px bg-line2" />
+              <button type="button" className="menu-i" onClick={() => { handleSaveProject(); close(); }}>
+                <Download size={13} /> Export project file (.omnistage)
+              </button>
+              <button type="button" className="menu-i" onClick={() => { loadInputRef.current?.click(); close(); }}>
+                <FolderOpen size={13} /> Import project file…
+              </button>
+              <div className="my-1 h-px bg-line2" />
+              <button type="button" className="menu-i" onClick={() => { setExtensionsOpen(true); close(); }}>
+                <Puzzle size={13} /> Extensions…
+              </button>
+            </div>
+          )}
+        </Dropdown>
         <input
           ref={loadInputRef}
           type="file"
@@ -336,28 +362,6 @@ export const TopNavBar: React.FC = () => {
 
       {/* ZONE 4 · Engine, settings & export */}
       <div className="topbar-zone shrink-0">
-        <Segmented<EngineType>
-          label="Engine"
-          small
-          value={engine}
-          onChange={setEngineType}
-          options={[
-            { value: '3d', label: '3D', title: '3D WebGL engine', icon: <Box size={13} /> },
-            { value: '2d', label: '2D', title: '2D vector / sprite engine', icon: <Layers size={13} /> },
-          ]}
-        />
-        <Segmented<AspectRatioPreset>
-          label="Aspect ratio"
-          small
-          className="hidden sm:inline-flex"
-          value={sceneSpec.aspectRatio}
-          onChange={setAspectRatio}
-          options={[
-            { value: '16:9', label: '16:9', labelClass: 'font-mono' },
-            { value: '9:16', label: '9:16', labelClass: 'font-mono' },
-            { value: '1:1', label: '1:1', labelClass: 'font-mono' },
-          ]}
-        />
         <div className="hidden items-center md:flex">
           <IconBtn label="Undo" disabled={!canUndo} onClick={undo}>
             <Undo2 size={15} />
@@ -371,19 +375,17 @@ export const TopNavBar: React.FC = () => {
           className="btn ok"
           data-tour="play"
           onClick={() => (isGameMode ? openPlayTest() : startPreview())}
-          title={isGameMode ? 'Play Test: run the exact build you publish (also on your phone)' : 'Preview: play every scene from start to end'}
+          title={isGameMode ? 'Play Test: run the exact build you publish (also on your phone)  [F5]' : 'Preview: play every scene from start to end  [F5]'}
         >
           <Play size={14} />
           <span className="hidden lg:inline">{isGameMode ? 'Play Test' : 'Preview'}</span>
+          <span className="kbd hidden xl:inline">F5</span>
         </button>
         <span data-tour="guide" className="inline-flex">
           <IconBtn label="Guide: how OmniStage works" onClick={() => openGuide()}>
             <BookOpen size={15} />
           </IconBtn>
         </span>
-        <IconBtn label="Extensions: skills, VFX/SFX packs, asset libraries and tools" onClick={() => setExtensionsOpen(true)}>
-          <Puzzle size={15} />
-        </IconBtn>
         <IconBtn
           label="Settings: AI model, asset hub API keys, CDN manifest, render quality"
           onClick={() => setSettingsModalOpen(true)}

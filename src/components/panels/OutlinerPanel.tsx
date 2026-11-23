@@ -22,6 +22,8 @@ export const OutlinerPanel: React.FC = () => {
   const spawnAsset = useStudioStore((s) => s.spawnAsset);
   const spawnVFX = useStudioStore((s) => s.spawnVFX);
   const removeVFX = useStudioStore((s) => s.removeVFX);
+  const selectVfx = useStudioStore((s) => s.selectVfx);
+  const selectedVfxId = useStudioStore((s) => s.selectedVfxId);
   const selectNode2D = useStudioStore((s) => s.selectNode2D);
   const spawnPreset2D = useStudioStore((s) => s.spawnPreset2D);
   const updateNode2D = useStudioStore((s) => s.updateNode2D);
@@ -235,14 +237,20 @@ export const OutlinerPanel: React.FC = () => {
               {sceneSpec.vfx.map((vfx) => (
                 <div
                   key={vfx.id}
-                  className="px-2.5 py-1.5 rounded-lg bg-slate-950/80 border border-slate-800 flex items-center justify-between text-xs"
+                  onClick={() => selectVfx(vfx.id)}
+                  className={`px-2.5 py-1.5 rounded-lg bg-slate-950/80 border flex items-center justify-between text-xs cursor-pointer ${
+                    selectedVfxId === vfx.id ? 'border-cyan-500/60' : 'border-slate-800'
+                  }`}
                 >
                   <div className="flex items-center gap-2 truncate">
                     <SparklesIcon className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <span className="font-mono text-slate-300 truncate">{vfx.name}</span>
                   </div>
                   <button
-                    onClick={() => removeVFX(vfx.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeVFX(vfx.id);
+                    }}
                     className="p-1 text-slate-400 hover:text-rose-400"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

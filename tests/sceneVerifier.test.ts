@@ -206,3 +206,21 @@ test('mobile target: rig cost budget (vertices, bones, textures, rigged actor co
   spec.actors = spec.actors.map((a, n) => (n ? a : { ...a, visible: false }));
   assert.equal(mobileRigBudget(spec).issues.length, 0, 'hidden actors do not count');
 });
+
+test('fixSceneIssue repairs one issue and leaves the input untouched', async () => {
+  const { fixSceneIssue } = await import('../src/verification/sceneVerifier');
+  const spec = game2D();
+  spec.nodes2D = []; // a 2D game with no player node
+  const issue = verifySceneSpec(spec).issues.find((i) => i.code === '2d.no-player');
+  assert.ok(issue, 'the missing player is reported');
+  assert.equal(issue.fixable, true);
+  const { spec: next, fix } = fixSceneIssue(spec, issue);
+  assert.ok(fix, 'a fix description is returned');
+  assert.equal(spec.nodes2D?.length, 0, 'the original spec is not mutated');
+  assert.ok((next.nodes2D || []).length > 0, 'a player node was added');
+  assert.equal(verifySceneSpec(next).issues.some((i) => i.code === '2d.no-player'), false);
+  // An issue that is not fixable is a no-op.
+  const same = fixSceneIssue(spec, { ...issue, fixable: false });
+  assert.equal(same.fix, null);
+  assert.equal(same.spec, spec);
+});

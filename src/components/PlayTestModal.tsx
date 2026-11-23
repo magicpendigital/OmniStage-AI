@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Gauge, Loader2, Maximize2, Monitor, RotateCcw, Smartphone, Tablet, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Activity, Gauge, Loader2, Maximize2, Monitor, PanelRightOpen, RotateCcw, Smartphone, Tablet, X, Zap } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
 import { buildStandalonePlayable } from '../exporter/mediaExporter';
 import { verifySceneSpec } from '../verification/sceneVerifier';
@@ -34,6 +35,18 @@ export const PlayTestModal: React.FC = () => {
   const [device, setDevice] = useState<Device>('fit');
   const [showFps, setShowFps] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  // Live: rebuild shortly after you stop editing, so the test always runs what is on the stage.
+  const [live, setLive] = useState(true);
+  const [liveTick, setLiveTick] = useState(0);
+  // Docked: sits beside the editor (stage + Properties stay usable) instead of covering it.
+  const [docked, setDocked] = useState(() => {
+    try {
+      return localStorage.getItem('omnistage-playtest-docked') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const seen = useRef<{ spec: unknown; scenes: unknown }>({ spec: null, scenes: null });
   const [html, setHtml] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +76,20 @@ export const PlayTestModal: React.FC = () => {
   }, [playTest?.startSceneId]);
 
   useEffect(() => {
+    if (playTest) seen.current = { spec: sceneSpec, scenes };
+  }, [playTest?.startSceneId]);
+
+  useEffect(() => {
+    if (!playTest || !live) return;
+    if (seen.current.spec === sceneSpec && seen.current.scenes === scenes) return;
+    const t = window.setTimeout(() => {
+      seen.current = { spec: sceneSpec, scenes };
+      setLiveTick((n) => n + 1);
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [sceneSpec, scenes, playTest, live]);
+
+  useEffect(() => {
     if (!playTest || !startId) return;
     let cancelled = false;
     setBuilding(true);
@@ -75,8 +102,8 @@ export const PlayTestModal: React.FC = () => {
     return () => {
       cancelled = true;
     };
-    // Rebuild when the start level, FPS toggle or restart key changes (not on every scene edit).
-  }, [playTest, startId, showFps, reloadKey]);
+    // Rebuild when the start level, FPS toggle, restart key or (Live) a settled scene edit changes.
+  }, [playTest, startId, showFps, reloadKey, liveTick]);
 
   useEffect(() => {
     if (!playTest || !areaRef.current) return;
@@ -88,10 +115,12 @@ export const PlayTestModal: React.FC = () => {
 
   useEffect(() => {
     if (!playTest) return;
+    // Docked beside the editor, Esc belongs to the editor (menus, panels): close with F5 or the X instead.
+    if (docked) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.fullscreenElement && closePlayTest();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [playTest]);
+  }, [playTest, docked]);
 
   if (!playTest) return null;
 
@@ -121,8 +150,15 @@ export const PlayTestModal: React.FC = () => {
 
   const failing = reports.filter((r) => !r.report.ok).length;
 
-  return (
-    <div ref={rootRef} className="fixed inset-0 z-[90] bg-[#05070D] flex flex-col text-xs" role="dialog" aria-modal="true" aria-label="Play Test">
+  const slot = docked ? document.getElementById('play-dock-slot') : null;
+  const content = (
+    <div
+      ref={rootRef}
+      className={docked && slot ? 'h-full w-[clamp(340px,36vw,560px)] bg-[#05070D] flex flex-col text-xs border-l border-slate-800' : 'fixed inset-0 z-[90] bg-[#05070D] flex flex-col text-xs'}
+      role={docked && slot ? 'complementary' : 'dialog'}
+      aria-modal={docked && slot ? undefined : true}
+      aria-label="Play Test"
+    >
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-slate-800 bg-[#090D16]">
         <span className="font-bold text-slate-100 text-sm">▶ Play Test</span>
         <span className="text-slate-500 hidden md:inline">the exact build that Export publishes</span>
@@ -155,6 +191,26 @@ export const PlayTestModal: React.FC = () => {
         <button type="button" onClick={() => setReloadKey((k) => k + 1)} title="Restart" className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-700 text-slate-300 hover:text-white">
           <RotateCcw className="w-3 h-3" /> Restart
         </button>
+        <button type="button" onClick={() => setLive((v) => !v)} aria-pressed={live} title="Live: rebuild the test a moment after you edit the scene" className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${live ? 'border-cyan-500/40 text-cyan-200' : 'border-slate-700 text-slate-400'}`}>
+          <Zap className="w-3 h-3" /> Live
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const next = !docked;
+            setDocked(next);
+            try {
+              localStorage.setItem('omnistage-playtest-docked', next ? '1' : '0');
+            } catch {
+              // ignore
+            }
+          }}
+          aria-pressed={docked}
+          title={docked ? 'Full screen' : 'Dock beside the editor so you can keep editing while it runs'}
+          className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${docked ? 'border-cyan-500/40 text-cyan-200' : 'border-slate-700 text-slate-300 hover:text-white'}`}
+        >
+          <PanelRightOpen className="w-3 h-3" /> {docked ? 'Docked' : 'Dock'}
+        </button>
         <button
           type="button"
           onClick={playOnPhone}
@@ -180,8 +236,11 @@ export const PlayTestModal: React.FC = () => {
 
       <div className="flex-1 min-h-0 flex">
         <div ref={areaRef} className="flex-1 min-w-0 relative flex items-center justify-center overflow-hidden">
-          {building && (
+          {building && !html && (
             <div className="absolute inset-0 flex items-center justify-center text-slate-400 gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Building playable…</div>
+          )}
+          {building && html && (
+            <div className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded bg-black/70 px-2 py-1 text-[11px] text-slate-200"><Loader2 className="w-3 h-3 animate-spin" /> Updating…</div>
           )}
           {error && <div className="text-rose-300 p-4">{error}</div>}
           {html && !error && (
@@ -195,7 +254,7 @@ export const PlayTestModal: React.FC = () => {
             >
               <iframe
                 ref={iframeRef}
-                key={`${reloadKey}-${startId}-${showFps}`}
+                key={`${reloadKey}-${startId}-${showFps}-${liveTick}`}
                 title="OmniStage playable"
                 srcDoc={html}
                 sandbox="allow-scripts allow-pointer-lock"
@@ -207,7 +266,7 @@ export const PlayTestModal: React.FC = () => {
           )}
         </div>
 
-        <aside className="w-64 shrink-0 border-l border-slate-800 bg-[#090D16] p-3 space-y-3 overflow-y-auto hidden md:block">
+        <aside className={`w-64 shrink-0 border-l border-slate-800 bg-[#090D16] p-3 space-y-3 overflow-y-auto ${docked ? 'hidden' : 'hidden md:block'}`}>
           <div>
             <div className="font-semibold text-slate-200 mb-1">Levels</div>
             {reports.map(({ scene, report }, i) => (
@@ -262,4 +321,5 @@ export const PlayTestModal: React.FC = () => {
       </div>
     </div>
   );
+  return docked && slot ? createPortal(content, slot) : content;
 };

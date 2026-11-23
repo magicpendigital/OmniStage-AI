@@ -12,7 +12,7 @@ import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
 export const createActorsSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
 
   // ================= 3D ACTOR & GIZMO ACTIONS =================
-  selectActor: (id) => set({ selectedActorId: id }),
+  selectActor: (id) => set((state) => ({ selectedActorId: id, selectedVfxId: id ? null : state.selectedVfxId })),
   setTransformMode: (transformMode) => set({ transformMode }),
   setIsDraggingGizmo: (isDraggingGizmo) => set({ isDraggingGizmo }),
 

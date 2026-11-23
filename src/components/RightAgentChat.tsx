@@ -13,7 +13,6 @@ import {
   PanelBottom,
   PanelRightOpen,
   ScanEye,
-  Sliders,
   Sparkles,
   Square,
   X,
@@ -36,7 +35,7 @@ import { EXTENSION_CATALOG } from '../extensions/catalog';
 import { formatGuideAnswer, guideLangFor, guideTopic, matchGuideQuestion } from '../guide/guideContent';
 import { runGuideAction } from '../guide/guideActions';
 import type { ChatMessage } from '../types/scene.schema';
-import { ActorInspectorPanel, VisionReportCard } from './panels/AgentPanels';
+import { VisionReportCard } from './panels/AgentPanels';
 import { Dropdown, IconBtn, Segmented } from './ui';
 import { AIConnectionPicker } from './AIConnectionPicker';
 import { providerInfo, providerLabel } from '../agent/aiClient';
@@ -45,7 +44,7 @@ import { createRoomSession } from '../agent/writersRoom';
 import { registerRoomProducer } from '../agent/roomBridge';
 import type { StoryBible } from '../types/scene.schema';
 
-type DrawerTab = 'chat' | 'inspector' | 'json';
+type DrawerTab = 'chat' | 'json';
 
 const QUICK_PROMPTS = [
   'Build a 3D Forest Valley with pine trees, boulders & a running Fox (.glb)',
@@ -768,7 +767,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
               <Clapperboard size={16} />
             </IconBtn>
           )}
-          <IconBtn label="Open chat drawer (history, inspector, SceneSpec)" onClick={() => setAiMode('drawer')}>
+          <IconBtn label="Open chat drawer (history, SceneSpec)" onClick={() => setAiMode('drawer')}>
             <PanelRightOpen size={16} />
           </IconBtn>
           <button type="submit" className="send" disabled={!promptInput.trim() || isAgentThinking} aria-label="Send instruction">
@@ -820,7 +819,6 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           onChange={setDrawerTab}
           options={[
             { value: 'chat', label: 'Chat', icon: <MessageSquare size={12} /> },
-            { value: 'inspector', label: 'Inspector', icon: <Sliders size={12} /> },
             { value: 'json', label: 'SceneSpec', icon: <Code2 size={12} /> },
           ]}
         />
@@ -902,12 +900,6 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
               </button>
             </div>
           </form>
-        </div>
-      )}
-
-      {drawerTab === 'inspector' && (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <ActorInspectorPanel />
         </div>
       )}
 

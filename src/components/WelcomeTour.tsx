@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { defaultGuideLang, GuideLang } from '../guide/guideContent';
 import { START_TOUR_EVENT } from '../guide/guideActions';
 import { useStudioStore } from '../state/useStudioStore';
+import { useShellStore } from '../state/useShellStore';
 
 const DONE_KEY = 'omnistage-tour-done-v1';
 
@@ -16,8 +17,8 @@ const STEPS: TourStep[] = [
     target: 'engine-mode',
     title: { vi: '1. Chọn bạn đang làm gì', en: '1. Choose what you are making' },
     body: {
-      vi: '3D hoặc 2D, rồi Game Mode (game) hoặc Cinema / Media (phim, quảng cáo, motion graphics).',
-      en: '3D or 2D, then Game Mode (games) or Cinema / Media (films, ads, motion graphics).',
+      vi: 'Game Mode cho game và quảng cáo chơi được, Media Mode cho phim, quảng cáo video, motion graphics. 3D/2D và tỉ lệ khung nằm trong Properties → Scene settings.',
+      en: 'Game Mode is for games and playable ads, Media Mode for films, video ads and motion graphics. 3D / 2D and the aspect ratio live in Properties → Scene settings.',
     },
   },
   {
@@ -32,16 +33,16 @@ const STEPS: TourStep[] = [
     target: 'viewport',
     title: { vi: '3. Xem và chỉnh trực tiếp', en: '3. See it and edit directly' },
     body: {
-      vi: 'Kéo thả nhân vật trong viewport. Cột trái có Outliner (các đối tượng), World (địa hình, âm thanh, phụ đề) và Library (asset của bạn).',
-      en: 'Drag things in the viewport. The left column has the Outliner (objects), World (terrain, sound, captions) and Library (your assets).',
+      vi: 'Kéo thả trong viewport; bảng Properties bên phải luôn hiện thuộc tính của thứ bạn chọn (phím P để ẩn/hiện). Cột trái có Outliner, World và Library.',
+      en: 'Drag things in the viewport; the Properties panel on the right always shows what you selected (press P to hide / show it). The left column has the Outliner, World and Library.',
     },
   },
   {
     target: 'play',
     title: { vi: '4. Chơi thử / Xem trước', en: '4. Play test / Preview' },
     body: {
-      vi: 'Game Mode: ▶ Play Test chạy đúng bản sẽ xuất bản, kể cả trên điện thoại qua mã QR. Media: ▶ Preview phát toàn bộ các cảnh.',
-      en: 'Game Mode: ▶ Play Test runs the exact build you publish, also on your phone via QR. Media: ▶ Preview plays every scene.',
+      vi: 'Nhấn F5. Game Mode: Play Test chạy đúng bản sẽ xuất bản (tự cập nhật khi bạn sửa, xem được cạnh editor và trên điện thoại qua QR). Media: Preview phát toàn bộ các cảnh. Phím Space phát/dừng timeline.',
+      en: 'Press F5. Game Mode: Play Test runs the exact build you publish (it refreshes as you edit, can sit beside the editor, and plays on your phone via QR). Media: Preview plays every scene. Space plays / pauses the timeline.',
     },
   },
   {
@@ -67,8 +68,11 @@ export const WelcomeTour: React.FC = () => {
   const [step, setStep] = useState<number | null>(null);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const lang = defaultGuideLang();
+  // The start screen comes first; the tour waits until it is closed.
+  const startOpen = useShellStore((s) => s.startOpen);
 
   useEffect(() => {
+    if (startOpen) return;
     let done = false;
     try {
       done = localStorage.getItem(DONE_KEY) === '1';
@@ -79,7 +83,7 @@ export const WelcomeTour: React.FC = () => {
       const t = window.setTimeout(() => setStep(0), 1200);
       return () => window.clearTimeout(t);
     }
-  }, []);
+  }, [startOpen]);
 
   useEffect(() => {
     const start = () => setStep(0);

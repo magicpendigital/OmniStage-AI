@@ -3,7 +3,7 @@
  */
 import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, MarketingOverlayConfig } from '../types/scene.schema';
 import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
-import { ActorNode, AspectRatioPreset, CameraMode, CaptionCue, ChatMessage, DirectorSkill, EngineType, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
+import { ActorNode, AspectRatioPreset, CameraMode, CameraRig, CaptionCue, ChatMessage, DirectorSkill, EngineType, EnvironmentConfig, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXNode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
 import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
@@ -188,6 +188,9 @@ export interface StudioState {
   setAspectRatio: (ratio: AspectRatioPreset) => void;
   setLightingPreset: (presetId: LightingPresetId) => void;
   setCameraMode: (mode: CameraMode) => void;
+  /** Properties dock: tweak the free camera (fov, position, target, follow target) or the lighting / environment. */
+  updateCamera: (patch: Partial<CameraRig>) => void;
+  updateEnvironment: (patch: Partial<EnvironmentConfig>) => void;
 
   // World & Environment Builder Actions
   updateWorld: (patch: Partial<WorldSpec>) => void;
@@ -231,6 +234,8 @@ export interface StudioState {
 
   // VFX Actions
   spawnVFX: (type: VFXType) => void;
+  selectVfx: (id: string | null) => void;
+  updateVFX: (vfxId: string, patch: Partial<VFXNode>) => void;
   removeVFX: (vfxId: string) => void;
 
   // Playback & Playable Game Runtime Actions

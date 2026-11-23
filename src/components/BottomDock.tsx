@@ -15,6 +15,7 @@ import {
   Play,
   Plus,
   Repeat,
+  ShieldAlert,
   Terminal,
   Trash2,
   Volume2,
@@ -23,6 +24,7 @@ import {
 import { useStudioStore, withCaptionIds } from '../state/useStudioStore';
 import { DockTabId, useShellStore } from '../state/useShellStore';
 import { ExecutionConsole, useLogIssueCounts } from './ExecutionConsole';
+import { ProblemsPanel, useProblemCounts } from './ProblemsPanel';
 import { AUDIO_KIND_COLOR, canSpeak, speakText } from './panels/AudioPanel';
 import { IconBtn, Kbd, startDrag } from './ui';
 import { coverageLabel, scriptCoverage } from '../verification/scriptCoverage';
@@ -480,11 +482,23 @@ export const BottomDock: React.FC = () => {
   const setDockTab = useShellStore((s) => s.setDockTab);
   const setDockHeight = useShellStore((s) => s.setDockHeight);
   const { errors, warnings } = useLogIssueCounts();
+  const problems = useProblemCounts();
 
   const tabs: { id: DockTabId; label: string; icon: React.ReactNode; badge?: React.ReactNode }[] = [
     { id: 'timeline', label: 'Timeline', icon: <Film size={13} /> },
     { id: 'storyboard', label: 'Storyboard', icon: <ListVideo size={13} />, badge: <span className="font-mono text-[10px] text-dim">{sceneCount}</span> },
     { id: 'captions', label: 'Captions & Audio', icon: <Captions size={13} />, badge: captionCount > 0 ? <span className="font-mono text-[10px] text-dim">{captionCount}</span> : null },
+    {
+      id: 'problems',
+      label: 'Problems',
+      icon: <ShieldAlert size={13} />,
+      badge: (
+        <>
+          {problems.errors > 0 && <span className="badge-err">{problems.errors}</span>}
+          {problems.warnings > 0 && <span className="badge-warn">{problems.warnings}</span>}
+        </>
+      ),
+    },
     {
       id: 'logs',
       label: 'Logs',
@@ -516,7 +530,7 @@ export const BottomDock: React.FC = () => {
 
       <div className="dock-head">
         {/* Transport: always reachable, even with the dock collapsed */}
-        <button type="button" className="send ml-1" style={{ width: 24, height: 24 }} onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'} title={isPlaying ? 'Pause' : 'Play'}>
+        <button type="button" className="send ml-1" style={{ width: 24, height: 24 }} onClick={togglePlay} aria-label={isPlaying ? 'Pause timeline' : 'Preview timeline'} title={isPlaying ? 'Pause timeline  [Space]' : 'Preview timeline: play the animation timeline in the editor  [Space]'}>
           {isPlaying ? <Pause size={12} /> : <Play size={12} style={{ marginLeft: 1 }} />}
         </button>
         <IconBtn small label="Loop playback" active={isLooping} onClick={toggleLoop}>
@@ -568,6 +582,7 @@ export const BottomDock: React.FC = () => {
           {dockTab === 'timeline' && <TimelineTab />}
           {dockTab === 'storyboard' && <StoryboardTab />}
           {dockTab === 'captions' && <CaptionsAudioTab />}
+          {dockTab === 'problems' && <ProblemsPanel />}
           {dockTab === 'logs' && <ExecutionConsole />}
         </div>
       )}

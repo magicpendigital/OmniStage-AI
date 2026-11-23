@@ -1110,6 +1110,17 @@ export function autoFixSceneSpec(input: SceneSpec, opts: VerifyOptions = {}): Au
   return { spec, fixes, report };
 }
 
+/** Repairs ONE fixable issue (the Problems panel's per-row "Fix"). Input is not mutated; `fix` is null when nothing changed. */
+export function fixSceneIssue(input: SceneSpec, target: VerificationIssue, opts: VerifyOptions = {}): { spec: SceneSpec; fix: string | null } {
+  if (!target.fixable) return { spec: input, fix: null };
+  const spec: SceneSpec = JSON.parse(JSON.stringify(input));
+  spec.nodes2D = spec.nodes2D || [];
+  spec.actors = spec.actors || [];
+  spec.vfx = spec.vfx || [];
+  const fix = applyFix(spec, target, opts);
+  return fix ? { spec, fix } : { spec: input, fix: null };
+}
+
 /** Compact, model-friendly description of the remaining problems (used for the AI repair round). */
 export function describeIssuesForAgent(report: VerificationReport): string {
   return report.issues

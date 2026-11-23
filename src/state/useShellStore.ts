@@ -8,7 +8,7 @@ import { create } from 'zustand';
 export type RailPanelId = 'outliner' | 'world' | 'library' | 'hub' | 'logic' | 'audio';
 export type AiDirectorMode = 'bar' | 'drawer';
 export type AgentIntentMode = 'patch' | 'replace' | 'storyboard';
-export type DockTabId = 'timeline' | 'storyboard' | 'captions' | 'logs';
+export type DockTabId = 'timeline' | 'storyboard' | 'captions' | 'problems' | 'logs';
 export type SplitOrientation = 'row' | 'column';
 /** 'all' | 'favorites' | 'local' | `col:<collectionId>` */
 export type LibraryFilter = string;
@@ -23,6 +23,8 @@ export interface PipRect {
 interface PersistedShell {
   railPanel: RailPanelId | null;
   flyoutPinned: boolean;
+  /** Right-hand Properties dock (selection + scene settings). */
+  propsOpen: boolean;
   aiMode: AiDirectorMode;
   agentIntent: AgentIntentMode;
   dockTab: DockTabId;
@@ -34,12 +36,16 @@ interface PersistedShell {
 
 interface ShellState extends PersistedShell {
   focusMode: boolean;
+  /** Start screen (template cards + Describe it) is showing. */
+  startOpen: boolean;
   libraryFilter: LibraryFilter;
 
   togglePanel: (panel: RailPanelId) => void;
   closePanel: () => void;
   setFlyoutPinned: (pinned: boolean) => void;
+  setPropsOpen: (open: boolean) => void;
   toggleFocusMode: () => void;
+  setStartOpen: (open: boolean) => void;
   setAiMode: (mode: AiDirectorMode) => void;
   setAgentIntent: (mode: AgentIntentMode) => void;
   setDockTab: (tab: DockTabId) => void;
@@ -55,6 +61,7 @@ const STORAGE_KEY = 'omnistage_shell_layout_v1';
 const DEFAULTS: PersistedShell = {
   railPanel: 'outliner',
   flyoutPinned: true,
+  propsOpen: true,
   aiMode: 'bar',
   agentIntent: 'patch',
   dockTab: 'timeline',
@@ -82,6 +89,7 @@ function persist(state: ShellState) {
     const snapshot: PersistedShell = {
       railPanel: state.railPanel,
       flyoutPinned: state.flyoutPinned,
+      propsOpen: state.propsOpen,
       aiMode: state.aiMode,
       agentIntent: state.agentIntent,
       dockTab: state.dockTab,
@@ -107,12 +115,15 @@ export const useShellStore = create<ShellState>((set, get) => {
   return {
     ...loadShell(),
     focusMode: false,
+    startOpen: false,
     libraryFilter: 'all',
 
     togglePanel: (panel) => update({ railPanel: get().railPanel === panel ? null : panel, focusMode: false }),
     closePanel: () => update({ railPanel: null }),
     setFlyoutPinned: (flyoutPinned) => update({ flyoutPinned }),
+    setPropsOpen: (propsOpen) => update({ propsOpen }),
     toggleFocusMode: () => set({ focusMode: !get().focusMode }),
+    setStartOpen: (startOpen) => set({ startOpen }),
     setAiMode: (aiMode) => update({ aiMode }),
     setAgentIntent: (agentIntent) => update({ agentIntent }),
     setDockTab: (dockTab) => update({ dockTab }),

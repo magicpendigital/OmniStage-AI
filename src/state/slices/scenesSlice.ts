@@ -6,7 +6,7 @@ import { LIGHTING_PRESETS, SCENE_TEMPLATES, cloneSceneSpec, createBlankSceneSpec
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { Vector3Tuple } from '../../types/scene.schema';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
-import { HISTORY_CAP, resetHistoryBurst } from '../history';
+import { HISTORY_CAP, editKey, pushPast, resetHistoryBurst } from '../history';
 
 export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice => ({
 
@@ -274,6 +274,28 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         pastSpecs: [...state.pastSpecs.slice(-19), cloneSceneSpec(state.sceneSpec)],
         futureSpecs: [],
         sceneSpec: syncGraphWithScene(nextSpec),
+      };
+    }),
+
+  updateCamera: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.camera = { ...nextSpec.camera, ...patch };
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('camera', patch)),
+        futureSpecs: [],
+        sceneSpec: syncGraphWithScene(nextSpec),
+      };
+    }),
+
+  updateEnvironment: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      nextSpec.environment = { ...nextSpec.environment, ...patch };
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('environment', patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
       };
     }),
 

@@ -140,6 +140,21 @@ export const createStageContentSlice = (set: StudioSet, get: StudioGet): StudioS
       };
     }),
 
+  selectVfx: (id) => set((state) => ({ selectedVfxId: id, selectedActorId: id ? null : state.selectedActorId })),
+
+  updateVFX: (vfxId, patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const idx = nextSpec.vfx.findIndex((v) => v.id === vfxId);
+      if (idx === -1) return state;
+      nextSpec.vfx[idx] = { ...nextSpec.vfx[idx], ...patch };
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey(`vfx:${vfxId}`, patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
   removeVFX: (vfxId) =>
     set((state) => {
       const nextSpec = cloneSceneSpec(state.sceneSpec);

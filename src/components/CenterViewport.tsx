@@ -25,7 +25,7 @@ import { ActorInspectorPill, CtaBanner, EndCard, Node2DInspectorPill } from './S
 import { speakText } from './panels/AudioPanel';
 import { useStudioStore } from '../state/useStudioStore';
 import { clamp, isTypingTarget, useShellStore } from '../state/useShellStore';
-import { AspectRatioPreset, CameraMode, GameRule, SettingsConfig } from '../types/scene.schema';
+import { AspectRatioPreset, CameraMode, GameRule } from '../types/scene.schema';
 import { exportCanvasSnapshotPNG, recordCanvasVideoWebM } from '../exporter/mediaExporter';
 import { IconBtn, Kbd, Segmented, startDrag, useSize } from './ui';
 
@@ -110,7 +110,6 @@ function useMediaPlayback() {
 // ----------------------------------------------------------------------------
 const ModeBar: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
-  const settings = useStudioStore((s) => s.settings);
   const workspaceView = useStudioStore((s) => s.workspaceView);
   const gameScore = useStudioStore((s) => s.gameScore);
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
@@ -119,8 +118,6 @@ const ModeBar: React.FC = () => {
   const canvasElement = useStudioStore((s) => s.canvasElement);
 
   const updateGameRules = useStudioStore((s) => s.updateGameRules);
-  const updateMarketingOverlay = useStudioStore((s) => s.updateMarketingOverlay);
-  const updateSettings = useStudioStore((s) => s.updateSettings);
   const resetGameSession = useStudioStore((s) => s.resetGameSession);
   const setCameraMode = useStudioStore((s) => s.setCameraMode);
   const setSceneDuration = useStudioStore((s) => s.setSceneDuration);
@@ -137,7 +134,6 @@ const ModeBar: React.FC = () => {
   const is2D = sceneSpec.engineType === '2d';
   const isGame = sceneSpec.mode === 'game';
   const rules = sceneSpec.gameRules;
-  const cta = sceneSpec.marketingOverlay;
 
   const getActiveCanvas = (): HTMLCanvasElement | null =>
     canvasElement && canvasElement.isConnected ? canvasElement : document.querySelector('canvas');
@@ -199,35 +195,9 @@ const ModeBar: React.FC = () => {
               <option value="unbox-reveal">unbox reveal</option>
             </select>
           </label>
-          <label className="mb-f" title="Player physics: gravity used by the 2D platformer and jump impulses">
-            Gravity
-            <input
-              type="number"
-              className="field sm w-14 text-right font-mono"
-              step={0.1}
-              value={settings.physicsGravity}
-              onChange={(e) => updateSettings({ physicsGravity: parseFloat(e.target.value) || 0 })}
-            />
-          </label>
           <span className="mb-f">
             <Kbd>WASD</Kbd> move {is2D && <><Kbd>Space</Kbd> jump</>}
           </span>
-          <span className="topbar-sep" />
-          <label className="mb-f">
-            <input
-              type="checkbox"
-              checked={cta.enabled}
-              onChange={(e) => updateMarketingOverlay({ enabled: e.target.checked })}
-              className="accent-[rgb(var(--game))]"
-            />
-            CTA
-            <input
-              className="field sm w-28"
-              aria-label="Playable CTA label"
-              value={cta.ctaText}
-              onChange={(e) => updateMarketingOverlay({ ctaText: e.target.value })}
-            />
-          </label>
           <span className="topbar-sep" />
           <span className="mb-f font-mono text-game">
             {gameScore}/{rules.targetScore} pts
@@ -298,28 +268,6 @@ const ModeBar: React.FC = () => {
           <button type="button" className="btn ghost sm" onClick={() => openDock('timeline')}>
             Sequencer
           </button>
-          <span className="topbar-sep" />
-          <label className="mb-f" title="Post-processing bloom">
-            <input
-              type="checkbox"
-              checked={settings.enableBloom}
-              onChange={(e) => updateSettings({ enableBloom: e.target.checked })}
-              className="accent-[rgb(var(--media))]"
-            />
-            Bloom
-          </label>
-          <label className="mb-f">
-            Quality
-            <select
-              className="field sm"
-              value={settings.renderQuality}
-              onChange={(e) => updateSettings({ renderQuality: e.target.value as SettingsConfig['renderQuality'] })}
-            >
-              <option value="draft">draft</option>
-              <option value="high">high</option>
-              <option value="ultra-postprocessing">ultra + post</option>
-            </select>
-          </label>
           <span className="topbar-sep" />
           <button type="button" className="btn ghost sm" onClick={() => openDock('captions')} title="Voiceover captions and audio mixer">
             <Captions size={11} /> Captions
@@ -516,13 +464,17 @@ export const CenterViewport: React.FC = () => {
 
   useMediaPlayback();
 
-  // Global shell shortcuts: [\] focus mode, [`] collapse dock.
+  // Global shell shortcuts: [\] focus mode, [P] properties, [`] collapse dock.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (isTypingTarget(e) || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === '\\') {
         e.preventDefault();
         useShellStore.getState().toggleFocusMode();
+      } else if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        const shell = useShellStore.getState();
+        shell.setPropsOpen(!shell.propsOpen);
       } else if (e.key === '`') {
         e.preventDefault();
         const s = useStudioStore.getState();
