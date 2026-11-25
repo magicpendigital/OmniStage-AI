@@ -147,6 +147,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
         'Everything is declarative SceneSpec JSON (src/types/scene.schema.ts); never write renderer code.',
         "2D stage is 1000x600 (y down). 3D player arena is x/z within ±5.5, actors grounded at y=0.",
         'Every patch is verified; fixable problems are auto-repaired and remaining errors are returned to you.',
+        'Game state (skill game-state-and-combat): sceneSpec.variables [{id,initial,min?,max?}], node.health {max,invulnerableSeconds?}, node.contactDamage, node.prefab + node.spawner {prefabId,everySeconds,max?} + node.projectile {vx,vy,damage?,lifetimeSeconds?,target?}, sceneSpec.hud [{id,kind,source,anchor,...}], gameRules.winCondition "variable-threshold" + winVariable {id,atLeast}; logic nodes variable-compare / health-check / random-chance and actions set-variable / add-variable / damage / heal / spawn / despawn / win / lose. Every variableId must be declared and every prefabId a prefab node.',
         'Game behaviour (enemies, NPCs, doors): actors[].stateMachine / nodes2D[].stateMachine = { initial, states: { name: { move?, points?, speed?, clip?, animation?, onEnter?: Action[], transitions?: [{ to, when: Condition }] } } } using only the stateMachine vocabulary below (skill behaviour-state-machines).',
       ],
       assets3D: Object.values(ASSET_REGISTRY).map((a) => ({ assetId: a.assetId, name: a.name, category: a.category, clips: a.embeddedClips || [] })),

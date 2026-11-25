@@ -6,6 +6,7 @@ import { createStore } from 'zustand/vanilla';
 import { cloneSceneSpec } from '../registry/assetRegistry';
 import { createGameRuntimeSlice } from '../runtime/gameSlice';
 import { syncGraphWithScene } from '../runtime/graphSync';
+import { freshGameState } from '../runtime/game/state';
 import type { RuntimeHostState } from '../runtime/host';
 import type { SceneSpec } from '../types/scene.schema';
 
@@ -25,6 +26,7 @@ export function createPlayerStore(scenes: SceneSpec[], startSceneId?: string) {
     gameTimeRemaining: first.gameRules?.timeLimitSeconds || 60,
     gameWon: false,
     gameEnded: false,
+    ...freshGameState(first),
     unboxTapCounts: {},
     scorePopups: [],
     burstEffects: [],
@@ -42,6 +44,7 @@ export function createPlayerStore(scenes: SceneSpec[], startSceneId?: string) {
         gameScore: 0,
         gameWon: false,
         gameEnded: false,
+        ...freshGameState(spec),
         unboxTapCounts: {},
         scorePopups: [],
         burstEffects: [],

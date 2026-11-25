@@ -30,6 +30,7 @@ import type {
 import { runtimeStore } from './host';
 import { matchClipName, resolveClipName } from './cinematics';
 import { playSceneSfx } from '../audio/audioBus';
+import { healthMax } from './game/state';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Vocabulary (closed unions, mirrored in the agent prompt and the MCP contract)
@@ -315,6 +316,8 @@ export interface MachineInputs {
   touching: ReadonlySet<string>;
   /** Signals sent since the previous step. */
   signals: ReadonlySet<string>;
+  /** Phase 3: real hit points of an entity that has `health` (the machine's own counter is used otherwise). */
+  healthOf?: (id: string) => number | undefined;
 }
 
 export interface MachineLook {
@@ -503,7 +506,7 @@ export class StateMachineRuntime {
       case 'arrived':
         return run.arrived;
       case 'health-below':
-        return run.health < c.value;
+        return (inputs.healthOf?.(entity.id) ?? run.health) < c.value;
       case 'score-at-least':
         return inputs.score >= c.value;
       case 'signal':
@@ -616,6 +619,11 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
 
   const result = machines.step(dt, entities, {
     engine, player: playerPos, score: state.gameScore, clicked: new Set(frame.clicked), touching, signals: new Set(frame.signals),
+    healthOf: (id) => {
+      const e = fresh.nodes2D.find((n) => n.id === id) ?? fresh.actors.find((a) => a.id === id);
+      const max = healthMax(e);
+      return max === undefined ? undefined : runtimeStore.getState().gameHealth[id] ?? max;
+    },
   });
   frame.clicked.clear();
   frame.signals.clear();
@@ -670,6 +678,11 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
       case 'add-score':
         now.addGameScore(action.amount, label);
         break;
+      case 'add-health':
+        // With real hit points (Phase 3) the machine's heal / damage goes through the shared health rules.
+        if (action.amount >= 0) now.healEntity(id, action.amount);
+        else now.damageEntity(id, -action.amount);
+        break;
       case 'play-sfx':
         playSceneSfx(now.sceneSpec, action.sound);
         break;
@@ -686,7 +699,7 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
         runtimeStore.setState({ gameEnded: true, gameWon: action.won });
         break;
       default:
-        break; // add-health / send-signal / set-visible are handled by the interpreter and the patch above.
+        break; // send-signal / set-visible are handled by the interpreter and the patch above.
     }
   }
 }

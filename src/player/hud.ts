@@ -8,6 +8,8 @@ import { isSfxMuted, setSfxMuted } from '../audio/audioBus';
 import type { PlayerState } from './playerStore';
 import type { InputManager } from './input';
 import { touchButtons, touchLayoutFor, TouchLayout } from '../runtime/touchLayout';
+import { GameHudView } from '../runtime/game/hudDom';
+import { resolveHud } from '../runtime/game/state';
 
 export const PLAYER_CSS = `
 .omni-root{position:fixed;inset:0;background:#05070d;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f8fafc;touch-action:none;user-select:none;-webkit-user-select:none}
@@ -58,6 +60,7 @@ export class Hud {
   private notice = el('div', 'omni-notice');
   private touch = el('div', 'omni-touch');
   private touchLayout = '';
+  private gameHud: GameHudView;
   private cardKey = '';
   private startedAt = performance.now();
 
@@ -82,6 +85,8 @@ export class Hud {
     this.card.style.display = 'none';
     this.root.append(top, this.captions, this.touch, this.cta, this.card, this.notice);
     parent.appendChild(this.root);
+    // Phase 3: the scene's declarative HUD (health bars, counters), below the score / sound row.
+    this.gameHud = new GameHudView(this.root, { top: 40 });
   }
 
   showNotice(text: string) {
@@ -115,6 +120,8 @@ export class Hud {
     this.level.textContent = sceneCount > 1 ? `${sceneIndex + 1}/${sceneCount} · ${spec.title}` : spec.title;
     this.score.style.display = game ? '' : 'none';
     if (game) this.score.textContent = `★ ${s.gameScore}/${spec.gameRules?.targetScore ?? 0} · ⏱ ${Math.max(0, Math.ceil(s.gameTimeRemaining))}s`;
+
+    this.gameHud.update(game ? resolveHud(spec, { score: s.gameScore, timeRemaining: s.gameTimeRemaining, variables: s.gameVars, health: s.gameHealth }) : []);
 
     // On-screen controls only on touch devices, for game scenes with a player.
     const layout = this.opts.touch ? touchLayoutFor(spec, s.gameEnded) : 'none';

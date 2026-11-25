@@ -6,6 +6,23 @@
 import { ASSET_REGISTRY, cloneSceneSpec, SCENE_TEMPLATES } from '../registry/assetRegistry';
 import type { ActorNode, ExecutionLogEntry, LogicNode, SceneSpec, Vector3Tuple } from '../types/scene.schema';
 import { syncGraphWithScene } from './graphSync';
+import { playSceneSfx } from '../audio/audioBus';
+import {
+  clampVariable,
+  cloneForSpawn,
+  freshGameState,
+  healthMax,
+  invulnerableFor,
+  isPlayerEntity,
+  isSpawnedId,
+  isInvulnerable,
+  resolveVariables,
+  spawnedId,
+  MAX_SPAWNED,
+} from './game/state';
+
+/** What a `damageEntity` call did: nothing to hurt, a blocked hit (immunity), a hit, or a kill. */
+export type EntityHit = 'none' | 'immune' | 'hit' | 'dead';
 
 export interface FloatingScoreFeedback {
   id: string;
@@ -38,6 +55,11 @@ export interface GameRuntimeState {
   executionLogs: ExecutionLogEntry[];
   /** Phase 9: current state per actor / node id with a stateMachine (undefined = machines restart). */
   machineStates?: Record<string, string>;
+  /** Phase 3: variables, hit points, immunity clocks and the spawn serial of the running session (see ./game/state). */
+  gameVars: Record<string, number>;
+  gameHealth: Record<string, number>;
+  gameHurtAt: Record<string, number>;
+  gameSpawnSerial: number;
   /** Provided by the host store: the studio's version also manages undo history. */
   switchScene: (sceneId: string) => void;
 
@@ -50,6 +72,17 @@ export interface GameRuntimeState {
   handlePlayerCollision: (targetActorId: string) => void;
   triggerActorInteraction: (actor: ActorNode) => void;
   addGameScore: (points: number, label: string, color?: string) => void;
+  /** Phase 3: set / add to a declared variable (clamped to its min / max); throws for an undeclared id. */
+  setGameVar: (id: string, value: number) => void;
+  addGameVar: (id: string, delta: number) => void;
+  /** Hurt an entity that has `health`. Immunity windows apply; a dead player ends the game as a loss. */
+  damageEntity: (id: string, amount: number) => EntityHit;
+  healEntity: (id: string, amount: number) => void;
+  endGame: (won: boolean) => void;
+  /** Clone a `prefab` 2D node into the running scene; returns the new id. */
+  spawnPrefab: (prefabId: string, x?: number, y?: number) => string | undefined;
+  /** Remove a spawned clone, or hide an authored node. */
+  despawnEntity: (id: string) => void;
   resetGameSession: () => void;
   dismissEndCard: () => void;
   appendLog: (entry: Omit<ExecutionLogEntry, 'id' | 'timestamp' | 'sceneTime'> & Partial<Pick<ExecutionLogEntry, 'id' | 'timestamp' | 'sceneTime'>>) => void;
@@ -155,7 +188,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
       const pts = target.scoreValue ?? 25;
       const nextScore = state.gameScore + pts;
       const targetScore = state.sceneSpec.gameRules.targetScore || 100;
-      const won = nextScore >= targetScore;
+      const won = state.sceneSpec.gameRules.winCondition !== 'variable-threshold' && nextScore >= targetScore;
 
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const idx = nextSpec.actors.findIndex((a) => a.id === targetActorId);
@@ -423,7 +456,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
     set((state) => {
       const nextScore = Math.max(0, state.gameScore + points);
       const targetScore = state.sceneSpec.gameRules.targetScore || 100;
-      const won = nextScore >= targetScore;
+      const won = state.sceneSpec.gameRules.winCondition !== 'variable-threshold' && nextScore >= targetScore;
       const popup: FloatingScoreFeedback = {
         id: `pop-2d-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
         text: `${points >= 0 ? '+' : ''}${points} PTS · ${label}`,
@@ -435,6 +468,99 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
         gameWon: state.gameWon || won,
         gameEnded: state.gameEnded || won,
         scorePopups: [...state.scorePopups.slice(-4), popup],
+      };
+    }),
+
+  setGameVar: (id, value) => {
+    const state = get();
+    const decl = resolveVariables(state.sceneSpec).find((v) => v.id === id);
+    if (!decl) throw new Error(`Unknown variable '${id}' (declare it in sceneSpec.variables)`);
+    if (!Number.isFinite(value)) throw new Error(`Variable '${id}' needs a finite number`);
+    const next = clampVariable(decl, value);
+    const win = state.sceneSpec.gameRules.winVariable;
+    const won = state.sceneSpec.gameRules.winCondition === 'variable-threshold' && !!win && win.id === id && next >= win.atLeast;
+    set((s) => ({
+      gameVars: { ...s.gameVars, [id]: next },
+      ...(won && !s.gameEnded ? { gameWon: true, gameEnded: true } : {}),
+    }));
+  },
+
+  addGameVar: (id, delta) => {
+    const state = get();
+    const current = state.gameVars[id] ?? resolveVariables(state.sceneSpec).find((v) => v.id === id)?.initial ?? 0;
+    get().setGameVar(id, current + delta);
+  },
+
+  damageEntity: (id, amount) => {
+    const state = get();
+    const spec = state.sceneSpec;
+    const entity = spec.nodes2D.find((n) => n.id === id) ?? spec.actors.find((a) => a.id === id);
+    const max = healthMax(entity);
+    if (!entity || max === undefined || !Number.isFinite(amount) || amount <= 0 || state.gameEnded) return 'none';
+    const current = state.gameHealth[id] ?? max;
+    if (current <= 0) return 'none';
+    if (isInvulnerable(state.gameHurtAt[id], state.currentTime, invulnerableFor(entity))) return 'immune';
+    const next = Math.max(0, current - amount);
+    const dead = next <= 0;
+    const player = isPlayerEntity(entity);
+    const popup: FloatingScoreFeedback = {
+      id: `pop-hp-${id}-${state.currentTime.toFixed(2)}`,
+      text: `-${amount} HP · ${entity.name}`,
+      color: '#F87171',
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      gameHealth: { ...s.gameHealth, [id]: next },
+      gameHurtAt: { ...s.gameHurtAt, [id]: s.currentTime },
+      scorePopups: [...s.scorePopups.slice(-4), popup],
+      ...(dead && player ? { gameEnded: true, gameWon: false } : {}),
+    }));
+    playSceneSfx(spec, dead && player ? 'lose' : 'hit');
+    if (dead && !player) {
+      // An enemy that dies pays its score value and leaves the stage.
+      const reward = 'scoreValue' in entity ? entity.scoreValue : undefined;
+      get().despawnEntity(id);
+      if (reward) get().addGameScore(reward, entity.name);
+    }
+    return dead ? 'dead' : 'hit';
+  },
+
+  healEntity: (id, amount) => {
+    const state = get();
+    const spec = state.sceneSpec;
+    const entity = spec.nodes2D.find((n) => n.id === id) ?? spec.actors.find((a) => a.id === id);
+    const max = healthMax(entity);
+    if (!entity || max === undefined || !Number.isFinite(amount) || amount <= 0) return;
+    const current = state.gameHealth[id] ?? max;
+    if (current <= 0) return;
+    set((s) => ({ gameHealth: { ...s.gameHealth, [id]: Math.min(max, current + amount) } }));
+  },
+
+  endGame: (won) => set((s) => (s.gameEnded ? s : { gameEnded: true, gameWon: won })),
+
+  spawnPrefab: (prefabId, x, y) => {
+    const state = get();
+    const prefab = state.sceneSpec.nodes2D.find((n) => n.id === prefabId && n.prefab);
+    if (!prefab) throw new Error(`Spawn needs a prefab node: '${prefabId}' is missing or not marked prefab`);
+    const live = state.sceneSpec.nodes2D.filter((n) => isSpawnedId(n.id)).length;
+    if (live >= MAX_SPAWNED) return undefined;
+    const id = spawnedId(prefabId, state.gameSpawnSerial);
+    const clone = cloneForSpawn(prefab, id, x ?? prefab.x, y ?? prefab.y);
+    set((s) => ({ gameSpawnSerial: s.gameSpawnSerial + 1, gameHealth: clone.health ? { ...s.gameHealth, [id]: clone.health.max } : s.gameHealth,
+      sceneSpec: { ...s.sceneSpec, nodes2D: [...s.sceneSpec.nodes2D, clone] } }));
+    return id;
+  },
+
+  despawnEntity: (id) =>
+    set((s) => {
+      const spec = s.sceneSpec;
+      if (isSpawnedId(id)) return { sceneSpec: { ...spec, nodes2D: spec.nodes2D.filter((n) => n.id !== id) } };
+      return {
+        sceneSpec: {
+          ...spec,
+          nodes2D: spec.nodes2D.map((n) => (n.id === id ? { ...n, visible: false } : n)),
+          actors: spec.actors.map((a) => (a.id === id ? { ...a, visible: false } : a)),
+        },
       };
     }),
 
@@ -455,6 +581,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
         gameScore: 0,
         gameWon: false,
         gameEnded: false,
+        ...freshGameState(restoredSpec),
         unboxTapCounts: {},
         gameTimeRemaining: restoredSpec.gameRules.timeLimitSeconds || 15,
         scorePopups: [],
@@ -520,6 +647,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
       gameEnded: false,
       gameWon: false,
       gameScore: 0,
+      ...freshGameState(target),
       unboxTapCounts: {},
       burstEffects: [],
       machineStates: undefined,

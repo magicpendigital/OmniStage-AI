@@ -33,6 +33,7 @@ import { nodeBox2D } from '../runtime/physics/nodeBox';
 import { validMover } from '../runtime/physics/mover';
 import { overlaps } from '../runtime/physics/collide2d';
 import { resolveWorld, VIEW_H, VIEW_W, WORLD_LIMITS } from '../runtime/physics/camera2d';
+import { healthMax, HUD_ANCHORS, HUD_KINDS, HUD_SOURCES, MAX_HUD, MAX_VARIABLES, resolveVariables, VARIABLE_ID, isPlayerEntity, COMPARE_OPS } from '../runtime/game/state';
 
 // --- Phase 10A: film craft (media 3D) ---
 export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-shoulder', 'low-angle', 'high-angle', 'tracking'];
@@ -125,8 +126,9 @@ function isPlayer2D(n: Node2D) {
   return n.physics2D === 'player-platformer' || n.physics2D === 'player-topdown';
 }
 
+/** Live entities: hidden ones and Phase 3 prefabs (templates that only exist while a spawner / logic action clones them) are skipped. */
 function visible<T extends { visible?: boolean }>(list: T[] | undefined): T[] {
-  return (list || []).filter((n) => n.visible !== false);
+  return (list || []).filter((n) => n.visible !== false && !(n as { prefab?: boolean }).prefab);
 }
 
 /** Platform the player lands on when dropped from its start position (highest surface below it). */
@@ -494,6 +496,8 @@ function verifyScoreGoal(spec: SceneSpec, values: number[], issues: Verification
     issues.push(issue('rules.time-limit', 'warning', `gameRules.timeLimitSeconds must be > 0 (got ${rules.timeLimitSeconds}).`, true));
   }
   if (rules.winCondition !== 'collect-all' && rules.winCondition !== 'score-threshold') return;
+  // A spawner that makes collectibles can pay out more than the scene shows.
+  if ((spec.nodes2D || []).some((n) => n.spawner && spec.nodes2D.find((p) => p.id === n.spawner!.prefabId)?.physics2D === 'collectible')) return;
   const total = values.reduce((sum, v) => sum + Math.max(0, v), 0);
   if (total === 0) {
     issues.push(issue('rules.no-collectibles', 'error', `Win condition "${rules.winCondition}" needs collectibles but the scene has none.`, false));
@@ -844,6 +848,267 @@ function machineHosts(spec: SceneSpec): Array<ActorNode | Node2D> {
   return [...(spec.actors || []), ...(spec.nodes2D || [])].filter((h) => h.stateMachine !== undefined);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3: game state (variables, health, HUD, spawners, projectiles)
+// ---------------------------------------------------------------------------
+
+const GRAPH_VARIABLE_ACTIONS = ['set-variable', 'add-variable'];
+const GRAPH_HEALTH_ACTIONS = ['damage', 'heal'];
+
+/** Every variable id the logic graph, HUD and win rule refer to. */
+function referencedVariables(spec: SceneSpec): Array<{ id: string; where: string; targetId?: string }> {
+  const out: Array<{ id: string; where: string; targetId?: string }> = [];
+  for (const n of spec.logicGraph?.nodes || []) {
+    const p = n.params || {};
+    if (p.conditionType === 'variable-compare' || GRAPH_VARIABLE_ACTIONS.includes(p.actionType)) out.push({ id: String(p.variableId ?? ''), where: `logic node "${n.title}"`, targetId: n.id });
+  }
+  for (const h of spec.hud || []) if (h?.source === 'variable') out.push({ id: String(h.variableId ?? ''), where: `HUD element "${h.id}"`, targetId: h.id });
+  return out;
+}
+
+function playerOfSpec(spec: SceneSpec) {
+  return (spec.engineType === '2d' ? spec.nodes2D : spec.actors).find((e) => isPlayerEntity(e as never) && e.visible !== false) as { id: string; name: string; health?: { max: number } } | undefined;
+}
+
+function verifyGameState(spec: SceneSpec, issues: VerificationIssue[]) {
+  const game = spec.mode === 'game';
+  // Variables
+  const seen = new Set<string>();
+  for (const v of spec.variables || []) {
+    const bad =
+      !v || typeof v.id !== 'string' || !VARIABLE_ID.test(v.id) || seen.has(v.id) || !isNum(v.initial) ||
+      (v.min !== undefined && !isNum(v.min)) || (v.max !== undefined && !isNum(v.max)) || (isNum(v.min) && isNum(v.max) && v.min > v.max);
+    if (v && typeof v.id === 'string') seen.add(v.id);
+    if (bad) issues.push(issue('state.variable-invalid', 'warning', `Variable "${(v as { id?: unknown })?.id}" is invalid (ids are letters / digits / _ up to 32 chars and unique; initial, min and max are numbers with min <= max).`, true, v?.id));
+  }
+  if ((spec.variables || []).length > MAX_VARIABLES) issues.push(issue('state.variable-invalid', 'warning', `Too many variables (max ${MAX_VARIABLES}).`, true, 'variables'));
+  const declared = new Set(resolveVariables(spec).map((v) => v.id));
+  const reported = new Set<string>();
+  for (const ref of referencedVariables(spec)) {
+    if (declared.has(ref.id) || reported.has(ref.id)) continue;
+    reported.add(ref.id);
+    issues.push(issue('state.variable-undeclared', 'error', `${ref.where} uses variable "${ref.id || '(empty)'}" which is not declared in sceneSpec.variables.`, VARIABLE_ID.test(ref.id), ref.id));
+  }
+  // Win rule
+  const rules = spec.gameRules;
+  if (game && rules?.winCondition === 'variable-threshold') {
+    const w = rules.winVariable;
+    if (!w || !declared.has(w.id) || !isNum(w.atLeast)) {
+      issues.push(issue('state.win-variable', 'error', 'winCondition "variable-threshold" needs gameRules.winVariable { id, atLeast } naming a declared variable.', true));
+    }
+  }
+  // Health
+  for (const e of [...spec.nodes2D, ...spec.actors] as Array<{ id: string; name: string; health?: { max: number; invulnerableSeconds?: number } }>) {
+    if (e.health === undefined) continue;
+    if (!isNum(e.health.max) || e.health.max <= 0 || e.health.max > 100000 || (e.health.invulnerableSeconds !== undefined && (!isNum(e.health.invulnerableSeconds) || e.health.invulnerableSeconds < 0 || e.health.invulnerableSeconds > 10))) {
+      issues.push(issue('state.health-invalid', 'warning', `"${e.name}" has invalid health (max must be 1-100000, invulnerableSeconds 0-10).`, true, e.id));
+    }
+  }
+  const player = playerOfSpec(spec);
+  if (game && player && healthMax(player) === undefined) {
+    const dealers = spec.nodes2D.filter((n) => n.contactDamage || n.projectile?.damage);
+    if (dealers.length) {
+      issues.push(issue('state.no-player-health', 'warning', `"${dealers[0].name}" deals damage but the player has no health, so the damage does nothing. Give the player health { max: 3 }.`, true, player.id));
+    }
+  }
+  for (const n of spec.logicGraph?.nodes || []) {
+    const p = n.params || {};
+    if (GRAPH_HEALTH_ACTIONS.includes(p.actionType) || p.conditionType === 'health-check') {
+      const id = String(p.actorId || player?.id || '');
+      const target = [...spec.nodes2D, ...spec.actors].find((e) => e.id === id);
+      if (id && target && healthMax(target) === undefined) {
+        issues.push(issue('state.damage-without-health', 'warning', `Logic node "${n.title}" changes or reads the health of "${target.name}", which has no health.`, true, target.id));
+      }
+    }
+    if (p.conditionType === 'variable-compare' || p.conditionType === 'health-check') {
+      if (p.op !== undefined && !(COMPARE_OPS as readonly string[]).includes(String(p.op))) {
+        issues.push(issue('state.compare-invalid', 'error', `Logic node "${n.title}" uses comparison "${String(p.op)}" (use ${COMPARE_OPS.join(' ')}).`, false, n.id));
+      }
+    }
+    if (p.actionType === 'spawn') {
+      const prefab = spec.nodes2D.find((x) => x.id === p.prefabId);
+      if (!prefab || !prefab.prefab) issues.push(issue('spawn.prefab-missing', 'error', `Logic node "${n.title}" spawns "${String(p.prefabId)}" which is not a node with prefab: true.`, !!prefab, String(p.prefabId)));
+    }
+  }
+  // HUD
+  const hud = spec.hud || [];
+  if (hud.length > MAX_HUD) issues.push(issue('state.hud-invalid', 'warning', `Too many HUD elements (max ${MAX_HUD}).`, true, hud[MAX_HUD]?.id));
+  const hudIds = new Set<string>();
+  for (const h of hud) {
+    let problem = '';
+    if (!h || typeof h.id !== 'string' || !h.id) problem = 'it has no id';
+    else if (hudIds.has(h.id)) problem = 'its id is used twice';
+    else if (!(HUD_KINDS as readonly string[]).includes(h.kind)) problem = `kind must be ${HUD_KINDS.join(' | ')}`;
+    else if (!(HUD_SOURCES as readonly string[]).includes(h.source)) problem = `source must be ${HUD_SOURCES.join(' | ')}`;
+    else if (!HUD_ANCHORS.includes(h.anchor)) problem = `anchor must be ${HUD_ANCHORS.join(' | ')}`;
+    else if (h.source === 'health') {
+      const entity = h.actorId ? [...spec.nodes2D, ...spec.actors].find((e) => e.id === h.actorId) : player;
+      if (!entity || healthMax(entity) === undefined) problem = 'it shows the health of an entity that has none';
+    }
+    if (h?.id) hudIds.add(h.id);
+    if (problem) issues.push(issue('state.hud-invalid', 'warning', `HUD element "${h?.id ?? '?'}" is invalid: ${problem}.`, true, h?.id));
+  }
+  // Spawners / projectiles
+  for (const n of spec.nodes2D) {
+    if (n.spawner) {
+      const s = n.spawner;
+      const prefab = spec.nodes2D.find((x) => x.id === s.prefabId);
+      if (s.prefabId === n.id) {
+        issues.push(issue('spawn.invalid', 'warning', `Spawner "${n.name}" spawns itself.`, true, n.id));
+      } else if (!prefab || !prefab.prefab) {
+        issues.push(issue('spawn.prefab-missing', 'error', `Spawner "${n.name}" refers to "${s.prefabId}" which is not a node with prefab: true.`, true, n.id));
+      } else if (!isNum(s.everySeconds) || s.everySeconds < 0.05 || (s.max !== undefined && (!isNum(s.max) || s.max < 1 || s.max > 64)) || (s.startDelay !== undefined && (!isNum(s.startDelay) || s.startDelay < 0))) {
+        issues.push(issue('spawn.invalid', 'warning', `Spawner "${n.name}" needs everySeconds >= 0.05, max 1-64 and a startDelay >= 0.`, true, n.id));
+      }
+    }
+    // A projectile spawned inside a solid block (typically its own turret) is removed on the first frame.
+    if (n.spawner && !n.prefab) {
+      const prefab = spec.nodes2D.find((x) => x.id === n.spawner!.prefabId && x.prefab);
+      if (prefab?.projectile && prefab.projectile.destroyOnHit !== false) {
+        const blocker = spawnBlocker(spec, n, prefab);
+        if (blocker) issues.push(issue('spawn.inside-solid', 'warning', `Spawner "${n.name}" creates "${prefab.name}" inside solid "${blocker.name}", so each projectile disappears at once. Offset the spawn point (spawner.offsetX / offsetY) in the direction it flies.`, blocker.id === n.id, n.id));
+      }
+    }
+    if (n.projectile) {
+      const p = n.projectile;
+      if (!isNum(p.vx) || !isNum(p.vy) || (p.vx === 0 && p.vy === 0 && !p.gravity) || Math.hypot(p.vx, p.vy) > 4000 || (p.lifetimeSeconds !== undefined && (!isNum(p.lifetimeSeconds) || p.lifetimeSeconds <= 0 || p.lifetimeSeconds > 60)) ||
+          (p.damage !== undefined && (!isNum(p.damage) || p.damage < 0)) || (p.target !== undefined && !['player', 'enemy', 'any'].includes(p.target))) {
+        issues.push(issue('projectile.invalid', 'warning', `"${n.name}" has an invalid projectile (needs a velocity that is not zero and under 4000 px/s, lifetimeSeconds 0-60, damage >= 0, target player | enemy | any).`, true, n.id));
+      }
+    }
+    if (n.contactDamage !== undefined && (!isNum(n.contactDamage) || n.contactDamage < 0 || n.contactDamage > 100000)) {
+      issues.push(issue('state.health-invalid', 'warning', `"${n.name}" has an invalid contactDamage.`, true, n.id));
+    }
+  }
+}
+
+function boxOf(n: { x: number; y: number; width: number; height: number; scaleX: number; scaleY: number }, x = n.x, y = n.y) {
+  const hw = Math.abs(n.width * n.scaleX) / 2, hh = Math.abs(n.height * n.scaleY) / 2;
+  return { l: x - hw, r: x + hw, t: y - hh, b: y + hh };
+}
+
+/** The first visible solid node that overlaps the spot where a spawner creates its prefab (jitter ignored), if any. */
+function spawnBlocker(spec: SceneSpec, owner: Node2D, prefab: Node2D): Node2D | undefined {
+  const s = owner.spawner!;
+  const at = boxOf(prefab, owner.x + (s.offsetX ?? 0), owner.y + (s.offsetY ?? 0));
+  return spec.nodes2D.find((n) => {
+    if (n.physics2D !== 'solid' || n.visible === false || n.prefab) return false;
+    const b = boxOf(n);
+    return at.l < b.r && at.r > b.l && at.t < b.b && at.b > b.t;
+  });
+}
+
+function fixGameState(spec: SceneSpec, i: VerificationIssue): string | null {
+  switch (i.code) {
+    case 'spawn.inside-solid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      const prefab = spec.nodes2D.find((x) => x.id === n?.spawner?.prefabId);
+      if (!n?.spawner || !prefab?.projectile) return null;
+      const horizontal = Math.abs(prefab.projectile.vx) >= Math.abs(prefab.projectile.vy);
+      const dir = Math.sign(horizontal ? prefab.projectile.vx : prefab.projectile.vy) || 1;
+      const gap = horizontal
+        ? (Math.abs(n.width * n.scaleX) + Math.abs(prefab.width * prefab.scaleX)) / 2 + 4
+        : (Math.abs(n.height * n.scaleY) + Math.abs(prefab.height * prefab.scaleY)) / 2 + 4;
+      if (horizontal) n.spawner.offsetX = dir * Math.ceil(gap);
+      else n.spawner.offsetY = dir * Math.ceil(gap);
+      return `Moved the spawn point of "${n.name}" just outside the block`;
+    }
+    case 'state.variable-invalid': {
+      const good = resolveVariables(spec).map((v) => ({ ...v, ...(isNum(v.min) ? {} : { min: undefined }), ...(isNum(v.max) ? {} : { max: undefined }) }));
+      for (const v of good) {
+        if (isNum(v.min) && isNum(v.max) && v.min > v.max) [v.min, v.max] = [v.max, v.min];
+        if (v.min === undefined) delete v.min;
+        if (v.max === undefined) delete v.max;
+      }
+      spec.variables = good;
+      return 'Dropped invalid or duplicate variables and swapped min / max where needed';
+    }
+    case 'state.variable-undeclared': {
+      const id = i.targetId || '';
+      if (!VARIABLE_ID.test(id)) return null;
+      spec.variables = [...resolveVariables(spec), { id, initial: 0 }];
+      return `Declared variable "${id}" (starts at 0)`;
+    }
+    case 'state.win-variable': {
+      const first = resolveVariables(spec)[0];
+      if (first && spec.gameRules.winVariable === undefined) {
+        spec.gameRules.winVariable = { id: first.id, atLeast: Math.max(1, first.max ?? 10) };
+        return `Win when "${first.id}" reaches ${spec.gameRules.winVariable.atLeast}`;
+      }
+      spec.gameRules.winCondition = 'score-threshold';
+      delete spec.gameRules.winVariable;
+      return 'Switched the win condition back to a score threshold';
+    }
+    case 'state.health-invalid': {
+      const e = [...spec.nodes2D, ...spec.actors].find((x) => x.id === i.targetId) as { health?: { max: number; invulnerableSeconds?: number }; contactDamage?: number } | undefined;
+      if (!e) return null;
+      if (e.health) {
+        e.health.max = isNum(e.health.max) && e.health.max > 0 ? Math.min(100000, e.health.max) : 3;
+        if (e.health.invulnerableSeconds !== undefined) e.health.invulnerableSeconds = isNum(e.health.invulnerableSeconds) ? clamp(e.health.invulnerableSeconds, 0, 10) : 0.6;
+      }
+      if (e.contactDamage !== undefined && (!isNum(e.contactDamage) || e.contactDamage < 0)) delete e.contactDamage;
+      return 'Repaired the health values';
+    }
+    case 'state.no-player-health':
+    case 'state.damage-without-health': {
+      const e = [...spec.nodes2D, ...spec.actors].find((x) => x.id === i.targetId) as { name: string; health?: { max: number } } | undefined;
+      if (!e) return null;
+      e.health = { max: 3 };
+      return `Gave "${e.name}" health { max: 3 }`;
+    }
+    case 'state.hud-invalid': {
+      const before = (spec.hud || []).length;
+      const seenIds = new Set<string>();
+      spec.hud = (spec.hud || []).filter((h) => {
+        const player = playerOfSpec(spec);
+        const entity = h?.source === 'health' ? (h.actorId ? [...spec.nodes2D, ...spec.actors].find((e) => e.id === h.actorId) : player) : undefined;
+        const ok = !!h && typeof h.id === 'string' && !!h.id && !seenIds.has(h.id) && (HUD_KINDS as readonly string[]).includes(h.kind) && (HUD_SOURCES as readonly string[]).includes(h.source) && HUD_ANCHORS.includes(h.anchor) &&
+          (h.source !== 'health' || (!!entity && healthMax(entity) !== undefined));
+        if (ok) seenIds.add(h.id);
+        return ok;
+      }).slice(0, MAX_HUD);
+      return before === spec.hud.length ? null : `Removed ${before - spec.hud.length} invalid HUD element(s)`;
+    }
+    case 'spawn.prefab-missing': {
+      const owner = spec.nodes2D.find((n) => n.id === i.targetId && n.spawner);
+      if (owner) {
+        const target = spec.nodes2D.find((n) => n.id === owner.spawner!.prefabId);
+        if (target) {
+          target.prefab = true;
+          return `Marked "${target.name}" as a prefab`;
+        }
+        delete owner.spawner;
+        return `Removed the spawner of "${owner.name}" (its prefab does not exist)`;
+      }
+      const prefab = spec.nodes2D.find((n) => n.id === i.targetId);
+      if (!prefab) return null;
+      prefab.prefab = true;
+      return `Marked "${prefab.name}" as a prefab`;
+    }
+    case 'spawn.invalid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n?.spawner) return null;
+      if (n.spawner.prefabId === n.id) {
+        delete n.spawner;
+        return `Removed the self-spawning spawner of "${n.name}"`;
+      }
+      const s = n.spawner;
+      s.everySeconds = isNum(s.everySeconds) ? Math.max(0.05, s.everySeconds) : 1;
+      if (s.max !== undefined) s.max = isNum(s.max) ? clamp(Math.round(s.max), 1, 64) : 5;
+      if (s.startDelay !== undefined && (!isNum(s.startDelay) || s.startDelay < 0)) delete s.startDelay;
+      return `Repaired the spawner of "${n.name}"`;
+    }
+    case 'projectile.invalid': {
+      const n = spec.nodes2D.find((x) => x.id === i.targetId);
+      if (!n?.projectile) return null;
+      delete n.projectile;
+      return `Removed the invalid projectile from "${n.name}"`;
+    }
+    default:
+      return null;
+  }
+}
+
 function verifyStateMachines(spec: SceneSpec, issues: VerificationIssue[]) {
   for (const host of machineHosts(spec)) {
     for (const m of stateMachineIssues(host, spec)) issues.push(issue(m.code, m.severity, `"${host.name}" ${m.message}`, m.fixable, host.id));
@@ -871,6 +1136,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifyDialogue(spec, issues);
   verifyWorldFeatures(spec, issues);
   verifyStateMachines(spec, issues);
+  verifyGameState(spec, issues);
   if (opts.target === 'mobile') verifyMobile(spec, issues, opts.deviceTier);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
@@ -1217,6 +1483,18 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case 'rules.time-limit':
       spec.gameRules.timeLimitSeconds = 60;
       return 'Set time limit to 60s';
+    case 'state.variable-invalid':
+    case 'state.variable-undeclared':
+    case 'state.win-variable':
+    case 'state.health-invalid':
+    case 'state.no-player-health':
+    case 'state.damage-without-health':
+    case 'state.hud-invalid':
+    case 'spawn.prefab-missing':
+    case 'spawn.invalid':
+    case 'spawn.inside-solid':
+    case 'projectile.invalid':
+      return fixGameState(spec, i);
     case 'rules.target-unreachable': {
       const values =
         spec.engineType === '2d'

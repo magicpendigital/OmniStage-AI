@@ -77,6 +77,30 @@ MECHANIC RECIPES (build the matching chain whenever the user asks for the mechan
 - World / atmosphere:     "On Scene Start" -> "World Stage & Skybox" (params mirror sceneSpec.world).
 Keep the graph, actors, gameRules, camera and world consistent with each other: if you change targetScore, update the gate node; if you change an actor's clip, update its Play Animation node.`;
 
+/** Phase 3: variables, health, spawners, projectiles, HUD (src/runtime/game/*), game mode only. */
+export const GAME_STATE_PROMPT_SECTION = `GAME STATE: VARIABLES, HEALTH, SPAWNERS, HUD (game mode; everything is declarative data, never code):
+- sceneSpec.variables = [{ id, label?, initial, min?, max? }]   ids: letters / digits / _ (max 32 chars, unique, max 32 variables). Use them for keys, ammo, lives, combo.
+- health: node.health / actor.health = { max, invulnerableSeconds? (default 0, use 0.6-1 for the player) }. The player at 0 health loses the game; an enemy at 0 is removed and pays its scoreValue.
+  Damage comes from: hazards (node.contactDamage ?? 1), node.contactDamage on any enemy that touches the player, projectiles (projectile.damage), logic action 'damage'.
+  A player that takes damage MUST have health (verifier: state.no-player-health); a falling player or a hazard then costs health instead of resetting the level.
+- PREFABS + SPAWNERS (2D): a node with prefab:true is a template (hidden and non-colliding while the game plays). A spawner node { spawner:{ prefabId, everySeconds (>= 0.05),
+  max? (alive at once, <= 64), startDelay?, offsetX?, offsetY?, jitterX?, jitterY? } } creates copies of the prefab; copies get ids "<prefabId>#<n>". Use it for falling coins, waves of enemies, turrets.
+- PROJECTILES (2D): node.projectile = { vx, vy (px/s), lifetimeSeconds? (default 3), damage? (default 1), destroyOnHit? (default true), gravity?, target?: 'player'|'enemy'|'any' }.
+  Typical turret: a spawner whose prefab is a hazard-looking prefab with a projectile (vx -240) aimed across the level; keep speeds <= 400 px/s so the player can dodge. A solid turret needs spawner.offsetX (or offsetY) so the bullet appears OUTSIDE it, in the direction it flies (verifier: spawn.inside-solid).
+- HUD: sceneSpec.hud = [{ id, kind:'counter'|'bar'|'text', source:'score'|'time'|'variable'|'health', variableId? (for variable), actorId? (for health, default the player), label?, anchor:'top-left'|'top-center'|'top-right'|'bottom-left'|'bottom-center'|'bottom-right', color?, max? }]
+  Typical: a health bar (top-left) when the player has health, a score counter (top-right), a counter per key / ammo variable. Max 12 elements.
+- WIN BY VARIABLE: gameRules.winCondition 'variable-threshold' + gameRules.winVariable { id, atLeast } (the variable MUST be declared). The score no longer wins in that mode.
+- LOGIC NODES (type 'condition' category 'logic-gate' unless noted; ports like "If Score >= X": in-flow(flow) -> out-true / out-false (flow)):
+  * "If Variable (compare)"  params { conditionType:'variable-compare', variableId, op:'>='|'>'|'<='|'<'|'=='|'!=', value }
+  * "If Health (compare)"    params { conditionType:'health-check', actorId? (default player), op, value }
+  * "If Random Chance"       params { conditionType:'random-chance', chance: 0..1 }   (seeded: the same run always rolls the same)
+  * ACTIONS (type 'action', category 'actor-action', inputs in-flow(flow), outputs out-flow(flow)):
+    'set-variable' / 'add-variable' { variableId, value } | 'damage' / 'heal' { actorId? (default player), amount } | 'spawn' { prefabId, x?, y? } | 'despawn' { actorId? } | 'win' | 'lose'
+  Every variableId MUST be declared in sceneSpec.variables; prefabId MUST be a node with prefab:true. Example: collecting a key (On Collision -> Add To Variable keys +1) and a door
+  that opens when If Variable keys >= 3 (-> Win The Game).
+- Behaviour state machines on 2D nodes read the real health: { type:'health-below', value } and { type:'add-health', amount } use node.health when it exists.
+- NOT available yet (do not invent): pathfinding / line-of-sight, input remapping, waves, pause or dialogue HUDs, 3D projectiles and 3D contact damage.`;
+
 /** Phase 9: behaviour state machines (actors[].stateMachine / nodes2D[].stateMachine), run by src/runtime/stateMachine.ts. */
 export const STATE_MACHINE_PROMPT_SECTION = `BEHAVIOUR STATE MACHINES (game mode only; put "stateMachine" on an actor (3D) or a Node2D (2D) that should act on its own: enemies, NPCs, doors, guards):
 stateMachine = { initial: "<state name>", health?: 100, seed?: 1, states: { "<name>": State } }   (state names: letters, digits, - or _; max 16 states)
@@ -256,6 +280,8 @@ AUTHORING & SPATIAL DESIGN RULES:
 ${LOGIC_GRAPH_PROMPT_SECTION}
 ${STATE_MACHINE_PROMPT_SECTION}
 
+${GAME_STATE_PROMPT_SECTION}
+
 ${EXECUTION_REPAIR_PROMPT_SECTION}
 ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 ${format === 'patch' ? PATCH_RESPONSE_FORMAT : FULL_RESPONSE_FORMAT}`;
@@ -340,7 +366,8 @@ STORYBOARD SCENE AUTHORING RULES (STEP 2: author ONE scene of a multi-scene stor
     keep each step-up between platform tops <= 110px and horizontal edge gaps <= 200px so every level is beatable.
   * Pits (gaps in the ground) are the obstacles; falling respawns the player at its start.
   * Collectibles use physics2D "collectible" (shapeKind "star", ~46x46) placed ~45px above platform tops, scoreValue 25-50.
-  * gameRules.winCondition "score-threshold" with targetScore <= the sum of all collectible scoreValues.
+  * gameRules.winCondition "score-threshold" with targetScore <= the sum of all collectible scoreValues. For combat / survival levels give the player node.health { max: 3, invulnerableSeconds: 0.8 },
+    declare sceneSpec.variables for keys / ammo and add sceneSpec.hud (health bar + counters); enemies and turrets use node.contactDamage, prefab + spawner and node.projectile.
   * Higher difficulty => narrower platforms, more pits, more stars, shorter timeLimitSeconds (min 15).
 - Set mode to "game" for levels and "media" for film shots.
 - MEDIA SHOTS: turn the beat's "script" into actors[].performance and camera.shots (see ACTING & SHOTS) so the scene actually happens on

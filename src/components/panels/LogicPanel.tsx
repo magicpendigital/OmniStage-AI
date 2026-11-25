@@ -370,6 +370,7 @@ export const LogicPanel: React.FC = () => {
             <option value="collect-all">collect all</option>
             <option value="survive-timer">survive timer</option>
             <option value="unbox-reveal">unbox reveal</option>
+              <option value="variable-threshold">variable reaches</option>
           </select>
         </label>
         {numberField('Target score', rules.targetScore, (n) => updateGameRules({ targetScore: Math.max(0, n) }), { min: 0, step: 5 })}

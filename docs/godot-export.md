@@ -43,6 +43,7 @@ Builder **không bỏ qua im lặng** bất cứ thứ gì. Mọi tính năng kh
 - Model procedural (thay bằng khối nguyên thuỷ), animation procedural, keyframe 2D, spritesheet động, parallax.
 - Node logic graph về phần cứng robot hoặc media pipeline (nhánh dừng tại đó, giống runtime).
 - Model `.gltf` rời hoặc tải thất bại.
+- Trạng thái game (giai đoạn 3): biến, máu, sát thương chạm, spawner, đạn, HUD khai báo và các action `set-variable` / `damage` / `spawn` / `win` ... không có tương đương Godot: cảnh báo theo từng thứ; node `prefab` (mẫu để spawn) bị bỏ khỏi scene; luật thắng `variable-threshold` xuất thành `score-threshold`.
 
 ## Bảo mật nội dung
 

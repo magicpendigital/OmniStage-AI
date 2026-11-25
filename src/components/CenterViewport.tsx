@@ -21,7 +21,7 @@ import { sceneCaptions } from '../audio/voices';
 import { NodeGraphView } from './NodeGraphView';
 import { BottomDock } from './BottomDock';
 import { RightAgentChat } from './RightAgentChat';
-import { ActorInspectorPill, CtaBanner, EndCard, Node2DInspectorPill } from './StageOverlays';
+import { ActorInspectorPill, CtaBanner, EndCard, GameHudOverlay, Node2DInspectorPill } from './StageOverlays';
 import { speakText } from './panels/AudioPanel';
 import { useStudioStore } from '../state/useStudioStore';
 import { clamp, isTypingTarget, useShellStore } from '../state/useShellStore';
@@ -193,6 +193,7 @@ const ModeBar: React.FC = () => {
               <option value="collect-all">collect all</option>
               <option value="survive-timer">survive timer</option>
               <option value="unbox-reveal">unbox reveal</option>
+              <option value="variable-threshold">variable reaches</option>
             </select>
           </label>
           <span className="mb-f">
@@ -378,6 +379,8 @@ const StageBody: React.FC<{ compact: boolean; padBottom: number }> = ({ compact,
             )}
           </div>
         )}
+
+        {isGame && !!sceneSpec.hud?.length && <GameHudOverlay />}
 
         {!compact && selectedActor && <ActorInspectorPill selectedActor={selectedActor} />}
         {!compact && selectedNode2D && <Node2DInspectorPill selectedNode2D={selectedNode2D} />}

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Copy, Lock, Maximize2, Move, RotateCw, Trash2, Trophy, Unlock } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { GameHudView } from '../runtime/game/hudDom';
+import { resolveHud } from '../runtime/game/state';
 import {
   ActorNode,
   AnimationType,
@@ -223,6 +225,30 @@ export const Node2DInspectorPill: React.FC<{ selectedNode2D: Node2D }> = ({ sele
 };
 
 /** Playable end card shown when a Game Mode session is won or times out. */
+/** Phase 3: the scene's declarative HUD (health bars, counters bound to variables), same view as the OmniStage Player. */
+export const GameHudOverlay: React.FC = () => {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const viewRef = React.useRef<GameHudView | null>(null);
+  const sceneSpec = useStudioStore((s) => s.sceneSpec);
+  const gameScore = useStudioStore((s) => s.gameScore);
+  const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
+  const gameVars = useStudioStore((s) => s.gameVars);
+  const gameHealth = useStudioStore((s) => s.gameHealth);
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const view = new GameHudView(ref.current, { top: 36 });
+    viewRef.current = view;
+    return () => {
+      view.dispose();
+      viewRef.current = null;
+    };
+  }, []);
+  React.useEffect(() => {
+    viewRef.current?.update(resolveHud(sceneSpec, { score: gameScore, timeRemaining: gameTimeRemaining, variables: gameVars, health: gameHealth }));
+  }, [sceneSpec, gameScore, gameTimeRemaining, gameVars, gameHealth]);
+  return <div ref={ref} className="pointer-events-none absolute inset-0" />;
+};
+
 export const EndCard: React.FC = () => {
   const sceneSpec = useStudioStore((s) => s.sceneSpec);
   const scenes = useStudioStore((s) => s.scenes);

@@ -1,10 +1,10 @@
 /**
  * Phase 7C — StudioState and the types shared by the store slices (src/state/slices/*).
  */
-import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, MarketingOverlayConfig } from '../types/scene.schema';
+import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, GameVariable, HudElement, MarketingOverlayConfig } from '../types/scene.schema';
 import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
 import { ActorNode, AspectRatioPreset, Camera2DSpec, World2DSpec, CameraMode, CameraRig, CaptionCue, ChatMessage, DirectorSkill, EngineType, EnvironmentConfig, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXNode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
-import type { BurstVFXInstance, FloatingScoreFeedback } from '../runtime/gameSlice';
+import type { BurstVFXInstance, EntityHit, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
 import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace/workspaceClient';
 import type { StoreApi } from 'zustand';
@@ -127,6 +127,11 @@ export interface StudioState {
   gameTimeRemaining: number;
   gameWon: boolean;
   gameEnded: boolean;
+  /** Phase 3: variables, hit points, immunity clocks and the spawn serial of the running session. */
+  gameVars: Record<string, number>;
+  gameHealth: Record<string, number>;
+  gameHurtAt: Record<string, number>;
+  gameSpawnSerial: number;
   /** Phase 9: live behaviour state per actor / node id (written by src/runtime/stateMachine.ts). */
   machineStates?: Record<string, string>;
   unboxTapCounts: Record<string, number>;
@@ -194,6 +199,9 @@ export interface StudioState {
   /** Phase 2: 2D world size and camera (Properties → Scene settings). */
   updateWorld2D: (patch: Partial<World2DSpec>) => void;
   updateCamera2D: (patch: Partial<Camera2DSpec>) => void;
+  /** Phase 3: scene variables and the declarative HUD (Properties → Scene settings). One undo step per edit. */
+  setSceneVariables: (variables: GameVariable[]) => void;
+  setSceneHud: (hud: HudElement[]) => void;
 
   // World & Environment Builder Actions
   updateWorld: (patch: Partial<WorldSpec>) => void;
@@ -251,6 +259,13 @@ export interface StudioState {
   handlePlayerCollision: (targetActorId: string) => void;
   triggerActorInteraction: (actor: ActorNode) => void;
   addGameScore: (points: number, label: string, color?: string) => void;
+  setGameVar: (id: string, value: number) => void;
+  addGameVar: (id: string, delta: number) => void;
+  damageEntity: (id: string, amount: number) => EntityHit;
+  healEntity: (id: string, amount: number) => void;
+  endGame: (won: boolean) => void;
+  spawnPrefab: (prefabId: string, x?: number, y?: number) => string | undefined;
+  despawnEntity: (id: string) => void;
   resetGameSession: () => void;
   dismissEndCard: () => void;
 

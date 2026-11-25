@@ -354,3 +354,38 @@ test('2D engine: a moving platform carries the player standing on it', async ({ 
   expect(b.x - x0).toBeLessThan(230);
   expect(p.errors).toEqual([]);
 });
+
+// ---- Phase 3: variables, health, spawners, projectiles and the declarative HUD ----
+test('game state: a turret spawns projectiles that wear the player down, the HUD shows it and 0 health loses the game', async ({ page }) => {
+  const spec = platformerLevel([
+    node2d('ground', { type: 'tile-platform', x: 500, y: 570, width: 1000, height: 40, physics2D: 'solid' }),
+    node2d('hero', { type: 'sprite-actor', x: 100, y: 510, width: 40, height: 60, physics2D: 'player-platformer', health: { max: 3, invulnerableSeconds: 0.5 } }),
+    node2d('ball', { type: 'vector-shape', x: 0, y: 0, width: 16, height: 16, physics2D: 'none', prefab: true, projectile: { vx: -400, vy: 0, damage: 1, lifetimeSeconds: 3, target: 'player' } }),
+    node2d('turret', { x: 800, y: 510, width: 40, height: 60, physics2D: 'solid', spawner: { prefabId: 'ball', everySeconds: 1, max: 2, startDelay: 0.5, offsetX: -40 } }),
+  ]);
+  spec.variables = [{ id: 'keys', label: 'Keys', initial: 2, max: 3 }];
+  spec.hud = [
+    { id: 'hp', kind: 'bar', source: 'health', anchor: 'top-left', label: 'HP' },
+    { id: 'keys', kind: 'counter', source: 'variable', variableId: 'keys', anchor: 'top-right' },
+  ];
+  const p = await openExport(page, spec);
+  await p.step(10);
+  await expect(page.locator('[data-hud-id="hp"]')).toHaveCount(1);
+  await expect(page.locator('[data-hud-id="keys"]')).toContainText('2');
+  expect(await p.state<Record<string, number>>('s.gameHealth')).toMatchObject({});
+
+  let sawClone = false;
+  for (let i = 0; i < 40; i++) {
+    await p.step(6);
+    if (await p.state<boolean>('s.sceneSpec.nodes2D.some((n) => n.id.startsWith("ball#"))')) sawClone = true;
+  }
+  expect(sawClone, 'the spawner created a projectile clone').toBe(true);
+  const hurt = await p.state<number | undefined>('s.gameHealth.hero');
+  expect(hurt, 'a projectile hit the player').toBeLessThan(3);
+  expect(await p.state<boolean>('s.sceneSpec.nodes2D.find((n) => n.id === "ball").visible !== false'), 'the prefab itself is never consumed').toBe(true);
+
+  for (let i = 0; i < 80 && !(await p.state<boolean>('s.gameEnded')); i++) await p.step(6);
+  expect(await p.state<boolean>('s.gameEnded'), 'running out of health ends the game').toBe(true);
+  expect(await p.state<boolean>('s.gameWon'), 'as a loss').toBe(false);
+  expect(p.errors).toEqual([]);
+});

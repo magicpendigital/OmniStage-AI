@@ -346,3 +346,90 @@ test('valid Phase 2 data passes without a single new issue', () => {
   spec.camera2D = { mode: 'follow', zoom: 1.2, smoothing: 0.2, deadzoneX: 80, lookAhead: 100 };
   assert.deepEqual(codes(spec).filter((c) => c.startsWith('2d.')), []);
 });
+
+// --- Phase 3: variables, health, HUD, spawners, projectiles ---------------------------------------------------------
+
+test('Phase 3: valid variables, health, HUD, spawner and projectile data raise no issue', () => {
+  const spec = level(
+    hero({ health: { max: 3, invulnerableSeconds: 0.8 } }),
+    star('gem', 300, 500),
+    { ...platform('bullet', 0, 0, 20), id: 'bullet', prefab: true, physics2D: 'hazard', projectile: { vx: 300, vy: 0, damage: 1, target: 'player' } },
+    { ...platform('turret', 700, 500, 40), physics2D: 'solid', spawner: { prefabId: 'bullet', everySeconds: 2, max: 3, offsetX: -40 } }
+  );
+  spec.variables = [{ id: 'keys', initial: 0, max: 3 }];
+  spec.hud = [
+    { id: 'hp', kind: 'bar', source: 'health', anchor: 'top-left' },
+    { id: 'keys', kind: 'counter', source: 'variable', variableId: 'keys', anchor: 'top-right' },
+  ];
+  spec.logicGraph = {
+    nodes: [
+      { id: 'c', type: 'condition', title: 'Has keys', params: { conditionType: 'variable-compare', variableId: 'keys', op: '>=', value: 3 } },
+      { id: 'a', type: 'action', title: 'Win', params: { actionType: 'win' } },
+    ],
+    edges: [{ id: 'e', from: 'c', to: 'a' }],
+  } as never;
+  const found = codes(spec).filter((c) => /^(state|spawn|projectile)\./.test(c));
+  assert.deepEqual(found, []);
+});
+
+test('Phase 3: undeclared variables are reported and the fixer declares them', () => {
+  const spec = level(hero(), star('gem', 300, 500));
+  spec.hud = [{ id: 'k', kind: 'counter', source: 'variable', variableId: 'coins', anchor: 'top-left' }];
+  assert.ok(codes(spec).includes('state.variable-undeclared'));
+  const fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(codes(fixed).includes('state.variable-undeclared'), false);
+  assert.deepEqual(fixed.variables?.map((v) => v.id), ['coins']);
+});
+
+test('Phase 3: variable-threshold needs a declared winVariable', () => {
+  const spec = level(hero(), star('gem', 300, 500));
+  spec.gameRules.winCondition = 'variable-threshold';
+  assert.ok(codes(spec).includes('state.win-variable'));
+  spec.variables = [{ id: 'keys', initial: 0, max: 3 }];
+  spec.gameRules.winVariable = { id: 'keys', atLeast: 3 };
+  assert.equal(codes(spec).includes('state.win-variable'), false);
+});
+
+test('Phase 3: invalid health, HUD, spawner and projectile data are repaired', () => {
+  const spec = level(
+    hero({ health: { max: -2 } }),
+    { ...platform('bullet', 0, 0, 20), prefab: true, physics2D: 'hazard' },
+    { ...platform('gun', 700, 500, 40), physics2D: 'solid', spawner: { prefabId: 'missing', everySeconds: 1 } },
+    { ...platform('self', 800, 500, 40), physics2D: 'solid', spawner: { prefabId: 'self', everySeconds: 1 } },
+    { ...platform('bad', 900, 500, 40), projectile: { vx: 0, vy: 0 } }
+  );
+  spec.hud = [{ id: 'x', kind: 'dial' as never, source: 'score', anchor: 'top-left' }, { id: 'ok', kind: 'counter', source: 'score', anchor: 'top-left' }];
+  const found = codes(spec);
+  for (const c of ['state.health-invalid', 'state.hud-invalid', 'spawn.prefab-missing', 'spawn.invalid', 'projectile.invalid']) {
+    assert.ok(found.includes(c), `${c} reported`);
+  }
+  const fixed = autoFixSceneSpec(spec).spec;
+  const left = codes(fixed).filter((c) => /^(state|spawn|projectile)\./.test(c));
+  assert.deepEqual(left, [], 'everything flagged was repaired');
+  assert.deepEqual(fixed.hud?.map((h) => h.id), ['ok']);
+  assert.equal(fixed.nodes2D.find((n) => n.id === 'bad')?.projectile, undefined);
+});
+
+test('Phase 3: damage with a health-less player is flagged and fixed; prefabs are not live entities', () => {
+  const spec = level(hero(), { ...platform('spikes', 600, 540, 60), physics2D: 'hazard', contactDamage: 2 });
+  assert.ok(codes(spec).includes('state.no-player-health'));
+  const fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(fixed.nodes2D.find((n) => n.id === 'hero')?.health?.max, 3);
+  // A collectible prefab is not counted as collectible on the stage.
+  const rules = level(hero(), { ...star('gem', 300, 500), prefab: true });
+  assert.equal(codes(rules).includes('2d.collectible-unreachable'), false);
+});
+
+test('Phase 3: a projectile spawned inside its own solid turret is flagged and the fixer moves the spawn point out', () => {
+  const spec = level(
+    hero({ health: { max: 3 } }),
+    { ...platform('bullet', 0, 0, 20), prefab: true, projectile: { vx: -300, vy: 0 } },
+    { ...platform('turret', 700, 500, 40), physics2D: 'solid', spawner: { prefabId: 'bullet', everySeconds: 2 } }
+  );
+  const issue = verifySceneSpec(spec).issues.find((i) => i.code === 'spawn.inside-solid');
+  assert.ok(issue, 'reported');
+  assert.equal(issue.fixable, true);
+  const fixed = autoFixSceneSpec(spec).spec;
+  assert.equal(codes(fixed).includes('spawn.inside-solid'), false);
+  assert.ok((fixed.nodes2D.find((n) => n.id === 'turret')!.spawner!.offsetX ?? 0) < 0, 'moved in the direction of flight');
+});

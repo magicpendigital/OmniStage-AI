@@ -544,6 +544,11 @@ function compileAction(
     warn('robot / hardware nodes need a connected hardware runtime and were not exported; the branch after it stops.');
     return true;
   }
+  // Phase 3 actions act on variables, health, spawning and the game result; none of that state exists in the Godot export.
+  if (PHASE3_ACTIONS.has(String(p.actionType))) {
+    warn(`"${String(p.actionType)}" changes OmniStage game state (variables, health, spawns or the game result) which is not exported; the action is skipped and the chain continues.`);
+    return false;
+  }
   if (p.actionType === 'send-signal') {
     // Runtime: queues a signal for the behaviour state machines, then the chain continues.
     warn('"send-signal" only drives behaviour state machines, which are not exported; the signal is skipped and the chain continues.');
@@ -676,7 +681,8 @@ function gameRootProps(ctx: SceneContext, script: GdRaw, extra: Props): Props {
     ['script', script],
     ['mode', scene.mode === 'media' ? 'media' : 'game'],
     ['is_2d', scene.engineType === '2d'],
-    ['win_condition', rules.winCondition || 'score-threshold'],
+    // Phase 3: "variable-threshold" has no Godot counterpart (variables are not exported); it exports as a score threshold.
+    ['win_condition', rules.winCondition === 'variable-threshold' ? 'score-threshold' : rules.winCondition || 'score-threshold'],
     ['target_score', Math.max(0, Math.round(Number(rules.targetScore) || 100))],
     ['time_limit', Number(rules.timeLimitSeconds) || 15],
     ['duration', Number(scene.durationSeconds) || 8],
@@ -828,6 +834,16 @@ function build3DScene(ctx: SceneContext): string {
 }
 
 /** Phase 9 state machines and Phase 6 shader effects have no Godot equivalent: never drop them silently. */
+const PHASE3_ACTIONS = new Set(['set-variable', 'add-variable', 'damage', 'heal', 'win', 'lose', 'spawn', 'despawn']);
+
+/** Phase 3: health, contact damage, spawners and projectiles run only inside the OmniStage runtime. */
+function warnGameState(warn: (feature: string, detail: string) => void, entity: { health?: { max: number }; contactDamage?: number; spawner?: unknown; projectile?: unknown }, label: string) {
+  if (entity.health) warn('Game state', `${label}: health (max ${entity.health.max}) is not exported; hits, healing and death are not simulated.`);
+  if (entity.contactDamage) warn('Game state', `${label}: contact damage is not exported.`);
+  if (entity.spawner) warn('Game state', `${label}: the spawner is not exported; nothing is created at run time.`);
+  if (entity.projectile) warn('Game state', `${label}: the projectile behaviour is not exported.`);
+}
+
 function warnMachineAndShader(warn: (feature: string, detail: string) => void, entity: { stateMachine?: ActorStateMachine; shaderEffect?: ShaderEffect }, label: string) {
   if (entity.stateMachine) {
     const states = Object.keys(entity.stateMachine.states || {}).length;
@@ -914,6 +930,7 @@ function build3DActor(ctx: SceneContext, actor: ActorNode, name: string) {
   if (actor.revealAssetId) warn('Gameplay', `${label}: the unbox reveal model swap ("${actor.revealAssetId}") is not exported; the box simply wins the game.`);
   if (click === 'trigger-vfx') warn('Gameplay', `${label}: click effect "trigger-vfx" is exported as a score tap without the visual effect.`);
   warnMachineAndShader(warn, actor, label);
+  warnGameState(warn, actor, label);
   if (role === 'dynamic') warn('Physics', `${label}: "dynamic" becomes a Godot RigidBody3D (real gravity), which can move differently from OmniStage.`);
 }
 
@@ -985,6 +1002,10 @@ function build2DScene(ctx: SceneContext): string {
 function build2DNode(ctx: SceneContext, node: Node2D) {
   const { tscn, warn } = ctx;
   const label = `Node "${node.name || node.id}"`;
+  if (node.prefab) {
+    warn('Game state', `${label}: a prefab is a spawn template (only the OmniStage runtime clones it), so it is left out of the Godot scene.`);
+    return;
+  }
   const name = tscn.uniqueName('.', godotNodeName(node.name || node.id, 'Node'));
   const w = Math.max(1, Number(node.width) || 1), h = Math.max(1, Number(node.height) || 1);
   const sx = Number(node.scaleX ?? 1) || 1, sy = Number(node.scaleY ?? 1) || 1;
@@ -1085,6 +1106,7 @@ function build2DNode(ctx: SceneContext, node: Node2D) {
 
   if (node.keyframeTrack?.length) warn('Animation', `${label}: ${node.keyframeTrack.length} keyframe(s) are not exported (the node stays at its start pose).`);
   warnMachineAndShader(warn, node, label);
+  warnGameState(warn, node, label);
   if (node.type === 'parallax-layer') warn('2D', `${label}: parallax scrolling is not exported (static layer).`);
   if (role === 'bouncing') warn('Physics', `${label}: the "bouncing" role is not exported (static node).`);
   if (role === 'hazard') warn('Physics', `${label}: a hazard is exported as an Area2D; sending the player back to the checkpoint is not exported.`);
@@ -1161,6 +1183,9 @@ function sceneWarnings(scene: SceneSpec, warn: (feature: string, detail: string)
     warn('Marketing overlay', `The overlay is shown on the win screen only (OmniStage trigger: "${overlay.triggerCondition}").`);
   }
   if (overlay?.enabled && (overlay.subheadline || overlay.badgeText)) warn('Marketing overlay', 'Subheadline, badge and brand colour are not exported (headline and CTA button are).');
+  if (scene.variables?.length) warn('Game state', `${scene.variables.length} game variable(s) (${scene.variables.map((v) => v.id).join(', ')}) are not exported; recreate them as GDScript variables.`);
+  if (scene.hud?.length) warn('HUD', `${scene.hud.length} HUD element(s) (health bars, counters) are not exported; the Godot project shows its default score label only.`);
+  if (scene.gameRules?.winCondition === 'variable-threshold') warn('Gameplay', 'The "variable-threshold" win rule depends on game variables, which are not exported; it is exported as a score threshold.');
   if (scene.mode === 'game' && scene.gameRules?.winCondition === 'collect-all') {
     warn('Gameplay', '"collect-all" is exported like the runtime: the level is won when the score reaches the target.');
   }

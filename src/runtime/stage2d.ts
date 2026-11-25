@@ -18,6 +18,9 @@ import { moverOffset } from './physics/mover';
 import { nodeBox2D } from './physics/nodeBox';
 import { ControllerInput, createPlatformerState, PlatformerState, stepPlatformer, stepTopDown } from './physics/platformer';
 import { resolveTuning } from './physics/constants';
+import { stepGameEntities2D } from './game/entities2d';
+import { healthMax } from './game/state';
+import type { ProjectileClock, SpawnerClock } from './game/state';
 
 export interface RuntimeBody2D {
   x: number;
@@ -37,6 +40,9 @@ export interface RuntimeBody2D {
   reached?: boolean;
   /** Phase 2: a mover's offset last frame, so the platform's per-frame travel (and its rider's carry) is exact. */
   moverPrev?: { x: number; y: number };
+  /** Phase 3: a spawner's timer and a projectile's age (see ./game/entities2d.ts). */
+  spawnClock?: SpawnerClock;
+  projClock?: ProjectileClock;
 }
 
 /** One camera per bodies map (= per stage instance / scene): the studio and Player both read it for pointer hit tests. */
@@ -85,7 +91,7 @@ function simulatePlayer2D(
 
   const solids: Solid[] = [];
   for (const n of nodes) {
-    if (n.visible === false || !isCollidable(n.physics2D)) continue;
+    if (n.visible === false || n.prefab || !isCollidable(n.physics2D)) continue;
     const off = moverOffset(n.mover, time);
     const nb = bodies[n.id];
     const prev = nb?.moverPrev ?? off;
@@ -133,12 +139,16 @@ function simulatePlayer2D(
   // Hazards and checkpoints are sensors: they never block, they react to overlap.
   const box = { x: ctl.x, y: ctl.y, w: ctl.w, h: ctl.h };
   let dead = !topDown && ctl.y - ctl.h / 2 > world.height + 100;
+  let hurt = 1;
   for (const n of nodes) {
-    if (n.visible === false || (n.physics2D !== 'hazard' && n.physics2D !== 'checkpoint')) continue;
+    if (n.visible === false || n.prefab || (n.physics2D !== 'hazard' && n.physics2D !== 'checkpoint')) continue;
     const off = moverOffset(n.mover, time);
     const sensor = nodeBox2D(n, { x: n.x + off.x, y: n.y + off.y });
     if (!overlaps(box, sensor)) continue;
-    if (n.physics2D === 'hazard') dead = true;
+    if (n.physics2D === 'hazard') {
+      dead = true;
+      hurt = Math.max(hurt, n.contactDamage ?? 1);
+    }
     else {
       const nb = bodies[n.id];
       if (nb && !nb.reached) {
@@ -151,7 +161,9 @@ function simulatePlayer2D(
     }
   }
   if (dead) {
-    playSceneSfx(spec, 'hit');
+    // Phase 3: with hit points a hazard or a fall costs health first (the death rule ends the game at 0).
+    if (healthMax(player) !== undefined) runtimeStore.getState().damageEntity(player.id, hurt);
+    else playSceneSfx(spec, 'hit');
     respawn();
   }
 
@@ -238,7 +250,12 @@ export function drawStage2D(
   }
 
   if (isPlaying) {
-    const live = nodes.filter((n) => n.visible !== false && !bodies[n.id]?.collected);
+    // Phase 3: spawners, projectiles and contact damage (game mode); clones appear in the scene this frame.
+    if (mode === 'game') {
+      stepGameEntities2D(bodies, dt);
+      nodes = runtimeStore.getState().sceneSpec.nodes2D;
+    }
+    const live = nodes.filter((n) => n.visible !== false && !n.prefab && !bodies[n.id]?.collected);
     const pairs = findLogicContacts({ ...runtimeStore.getState().sceneSpec, nodes2D: live }, logicRuntime.runtimePosition);
     const handled = logicRuntime.collisions(pairs);
     for (const [id, otherId] of pairs) {
@@ -255,6 +272,8 @@ export function drawStage2D(
 
   for (const node of nodes) {
     if (node.visible === false) continue;
+    // A prefab is only a template: visible (dimmed) while authoring, absent while the game plays.
+    if (node.prefab && isPlaying && mode === 'game') continue;
     const body = bodies[node.id];
     if (mode === 'game' && isPlaying && body?.collected) continue;
 
@@ -284,6 +303,7 @@ export function drawStage2D(
     ctx.globalAlpha = node.opacity ?? 1;
     // Phase 2: a checkpoint lights up once the player has touched it.
     if (isPlaying && mode === 'game' && node.physics2D === 'checkpoint' && !body?.reached) ctx.globalAlpha *= 0.5;
+    if (node.prefab) ctx.globalAlpha *= 0.35;
 
     const w = node.width;
     const h = node.height;

@@ -188,6 +188,22 @@ export const BUILTIN_DIRECTOR_SKILLS: DirectorSkill[] = [
 - Keep palettes consistent with the scene's art direction and keep loud sounds (vol > 0.7) for rare moments.`,
   },
   {
+    id: 'game-state-and-combat',
+    title: 'Health, hazards, spawners & HUD',
+    description: 'Hit points, damage, keys / ammo variables, turrets and enemy waves, health bars and counters.',
+    triggers: ['health', 'hp', 'lives', 'life', 'damage', 'shoot', 'shooter', 'projectile', 'bullet', 'turret', 'spawn', 'spawner', 'hud', 'key', 'keys', 'ammo', 'survive', 'survival', 'combat', 'máu', 'mạng', 'bắn', 'đạn', 'sinh', 'chìa khoá', 'sinh tồn'],
+    engine: '2d',
+    mode: 'game',
+    source: 'builtin',
+    guidance: `GAME STATE & COMBAT (2D game mode, declarative data only):
+- Give the player health { max: 3, invulnerableSeconds: 0.8 } as soon as anything can hurt them; add a health bar to sceneSpec.hud (source 'health', kind 'bar', anchor 'top-left') and a score counter (anchor 'top-right').
+- Teach damage before punishing it: the first hazard / enemy sits on a safe route, give a heal pickup (logic 'heal') or checkpoint before the hard part. Contact damage 1 for hazards, 1-2 for enemies, never more than the player's max health in one hit.
+- Turrets and waves: mark the bullet / enemy node prefab:true, then a spawner { prefabId, everySeconds 1.5-4, max 3-6, jitterY } makes the copies. Projectile speed <= 400 px/s, lifetimeSeconds <= 4, target 'player' for enemy fire and 'enemy' for the player's.
+- Collect-and-open goals: declare variables (keys, ammo), raise them with On Collision -> Add To Variable, gate doors with If Variable, and win with winCondition 'variable-threshold' + winVariable (or the Win The Game action).
+- Every variableId in the logic graph / HUD must be declared in sceneSpec.variables; every spawner prefabId must be a node with prefab:true.
+- Enemies killed pay their scoreValue; make sure targetScore stays reachable (spawners can create more collectibles than are on screen, the verifier then skips the score-reachability check).`,
+  },
+  {
     id: 'behaviour-state-machines',
     title: 'Enemy & NPC behaviour',
     description: 'Patrol / chase / attack enemies, reactive NPCs and doors as declarative state machines.',

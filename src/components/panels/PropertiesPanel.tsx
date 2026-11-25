@@ -17,13 +17,21 @@ import {
   EngineType,
   EnterEffect,
   GameRule,
+  GameVariable,
+  HealthSpec,
+  HudAnchor,
+  HudElement,
+  HudKind,
+  HudSource,
   LightingPresetId,
   Mover2D,
   Node2D,
   Physics2DRole,
   PhysicsRole,
   PlatformerController2D,
+  Projectile2D,
   SettingsConfig,
+  Spawner2D,
   VFXNode,
   Vector3Tuple,
 } from '../../types/scene.schema';
@@ -280,6 +288,7 @@ const ActorProps: React.FC<{ actor: ActorNode; duration: number }> = ({ actor, d
         <Row label="Score value">
           <NumField step={1} min={0} ariaLabel="Score value" value={actor.scoreValue ?? 0} onChange={(scoreValue) => set({ scoreValue })} />
         </Row>
+        {isGame && <HealthProps health={actor.health} set={(health) => set({ health })} />}
         {actor.onClickAction === 'unbox-tap' && (
           <Row label="Taps to open">
             <NumField step={1} min={1} max={20} ariaLabel="Taps required" value={actor.unboxTapsRequired ?? 3} onChange={(unboxTapsRequired) => set({ unboxTapsRequired: Math.round(unboxTapsRequired) })} />
@@ -419,6 +428,7 @@ const Node2DProps: React.FC<{ node: Node2D }> = ({ node }) => {
             <NumField step={1} min={0} ariaLabel="Score value" value={node.scoreValue ?? 0} onChange={(scoreValue) => set({ scoreValue })} />
           </Row>
         )}
+        {isGame && <GameStateProps node={node} set={set} />}
       </Section>
     </>
   );
@@ -509,6 +519,238 @@ const ColliderProps: React.FC<{ node: Node2D; set: (patch: Partial<Node2D>) => v
           </div>
         </>
       )}
+    </>
+  );
+};
+
+const HEALTH_DEFAULT = { max: 3, invulnerableSeconds: 0.8 };
+
+/** Phase 3: hit points on any entity (the player loses the game at 0, an enemy is removed and pays its score value). */
+const HealthProps: React.FC<{ health: HealthSpec | undefined; set: (health: HealthSpec | undefined) => void }> = ({ health, set }) => (
+  <>
+    <Check checked={!!health} onChange={(on) => set(on ? { ...HEALTH_DEFAULT } : undefined)} label="Has health (hit points)" />
+    {health && (
+      <>
+        <Row label="Max health">
+          <NumField step={1} min={1} max={1000} ariaLabel="Max health" value={health.max} onChange={(max) => set({ ...health, max: Math.max(1, Math.round(max)) })} />
+        </Row>
+        <Row label="Immune (s)" title="Seconds without damage after being hit">
+          <NumField step={0.1} min={0} max={10} ariaLabel="Invulnerable seconds" value={health.invulnerableSeconds ?? 0} onChange={(invulnerableSeconds) => set({ ...health, invulnerableSeconds })} />
+        </Row>
+      </>
+    )}
+  </>
+);
+
+/** Phase 3 on a 2D node: health, damage dealt on touch, prefab (spawn template), spawner and projectile. */
+const GameStateProps: React.FC<{ node: Node2D; set: (patch: Partial<Node2D>) => void }> = ({ node, set }) => {
+  const nodes2D = useStudioStore((s) => s.sceneSpec.nodes2D);
+  const prefabs = nodes2D.filter((n) => n.prefab && n.id !== node.id);
+  const sp = node.spawner;
+  const pr = node.projectile;
+  const patchSpawner = (p: Partial<Spawner2D>) => set({ spawner: { prefabId: prefabs[0]?.id ?? '', everySeconds: 2, max: 5, ...sp, ...p } });
+  const patchProj = (p: Partial<Projectile2D>) => set({ projectile: { vx: 300, vy: 0, damage: 1, lifetimeSeconds: 3, target: 'player', ...pr, ...p } });
+  const isPlayer = node.physics2D === 'player-platformer' || node.physics2D === 'player-topdown';
+  return (
+    <>
+      <HealthProps health={node.health} set={(health) => set({ health })} />
+      {!isPlayer && (
+        <Row label="Touch damage" title="Health taken from whoever touches it (a hazard defaults to 1)">
+          <NumField step={1} min={0} max={1000} ariaLabel="Contact damage" value={node.contactDamage ?? 0} onChange={(v) => set({ contactDamage: v > 0 ? v : undefined })} />
+        </Row>
+      )}
+      {!isPlayer && <Check checked={!!node.prefab} onChange={(prefab) => set({ prefab: prefab || undefined })} label="Prefab (spawn template: hidden while playing)" />}
+      {!isPlayer && !node.prefab && (
+        <>
+          <Check checked={!!sp} onChange={(on) => set({ spawner: on ? { prefabId: prefabs[0]?.id ?? '', everySeconds: 2, max: 5 } : undefined })} label="Spawner (creates copies of a prefab)" />
+          {sp && (
+            <>
+              <Row label="Spawns">
+                <select className="field sm" aria-label="Spawner prefab" value={sp.prefabId} onChange={(e) => patchSpawner({ prefabId: e.target.value })}>
+                  <option value="">(pick a prefab)</option>
+                  {prefabs.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                    </option>
+                  ))}
+                </select>
+              </Row>
+              <Row label="Every (s)">
+                <NumField step={0.25} min={0.05} max={600} ariaLabel="Spawn interval" value={sp.everySeconds} onChange={(everySeconds) => patchSpawner({ everySeconds })} />
+              </Row>
+              <Row label="Max alive">
+                <NumField step={1} min={1} max={64} ariaLabel="Spawn max alive" value={sp.max ?? 5} onChange={(max) => patchSpawner({ max: Math.round(max) })} />
+              </Row>
+              <Row label="Start delay (s)">
+                <NumField step={0.5} min={0} max={600} ariaLabel="Spawn start delay" value={sp.startDelay ?? 0} onChange={(startDelay) => patchSpawner({ startDelay })} />
+              </Row>
+              <div className="pp-row">
+                <span className="pp-label">Random offset</span>
+                <div className="pp-vec two">
+                  <NumField label="X" step={10} min={0} ariaLabel="Spawn jitter X" value={sp.jitterX ?? 0} onChange={(jitterX) => patchSpawner({ jitterX })} />
+                  <NumField label="Y" step={10} min={0} ariaLabel="Spawn jitter Y" value={sp.jitterY ?? 0} onChange={(jitterY) => patchSpawner({ jitterY })} />
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {!isPlayer && (
+        <>
+          <Check checked={!!pr} onChange={(on) => set({ projectile: on ? { vx: 300, vy: 0, damage: 1, lifetimeSeconds: 3, target: 'player' } : undefined })} label="Projectile (flies on its own)" />
+          {pr && (
+            <>
+              <div className="pp-row">
+                <span className="pp-label">Velocity (px/s)</span>
+                <div className="pp-vec two">
+                  <NumField label="X" step={20} min={-4000} max={4000} ariaLabel="Projectile vx" value={pr.vx} onChange={(vx) => patchProj({ vx })} />
+                  <NumField label="Y" step={20} min={-4000} max={4000} ariaLabel="Projectile vy" value={pr.vy} onChange={(vy) => patchProj({ vy })} />
+                </div>
+              </div>
+              <Row label="Damage">
+                <NumField step={1} min={0} max={1000} ariaLabel="Projectile damage" value={pr.damage ?? 1} onChange={(damage) => patchProj({ damage })} />
+              </Row>
+              <Row label="Lifetime (s)">
+                <NumField step={0.5} min={0.1} max={60} ariaLabel="Projectile lifetime" value={pr.lifetimeSeconds ?? 3} onChange={(lifetimeSeconds) => patchProj({ lifetimeSeconds })} />
+              </Row>
+              <Row label="Gravity (px/s²)">
+                <NumField step={50} min={-4000} max={4000} ariaLabel="Projectile gravity" value={pr.gravity ?? 0} onChange={(gravity) => patchProj({ gravity })} />
+              </Row>
+              <Row label="Hurts">
+                <select className="field sm" aria-label="Projectile target" value={pr.target ?? 'any'} onChange={(e) => patchProj({ target: e.target.value as Projectile2D['target'] })}>
+                  <option value="player">the player</option>
+                  <option value="enemy">enemies</option>
+                  <option value="any">anything with health</option>
+                </select>
+              </Row>
+              <Check checked={pr.destroyOnHit ?? true} onChange={(destroyOnHit) => patchProj({ destroyOnHit })} label="Disappears on hit" />
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+};
+
+const HUD_ANCHOR_LABEL: Record<HudAnchor, string> = {
+  'top-left': 'top left', 'top-center': 'top centre', 'top-right': 'top right',
+  'bottom-left': 'bottom left', 'bottom-center': 'bottom centre', 'bottom-right': 'bottom right',
+};
+
+/** Phase 3: scene variables + the on-screen HUD that shows them (Player and studio draw the same thing). */
+const GameStateSettings: React.FC = () => {
+  const spec = useStudioStore((s) => s.sceneSpec);
+  const setVariables = useStudioStore((s) => s.setSceneVariables);
+  const setHud = useStudioStore((s) => s.setSceneHud);
+  const updateGameRules = useStudioStore((s) => s.updateGameRules);
+  const variables = spec.variables || [];
+  const hud = spec.hud || [];
+  const patchVar = (i: number, p: Partial<GameVariable>) => setVariables(variables.map((v, j) => (j === i ? { ...v, ...p } : v)));
+  const patchHud = (i: number, p: Partial<HudElement>) => setHud(hud.map((h, j) => (j === i ? { ...h, ...p } : h)));
+  const freshVarId = () => {
+    let n = variables.length + 1;
+    while (variables.some((v) => v.id === 'var' + n)) n++;
+    return 'var' + n;
+  };
+  const freshHudId = () => {
+    let n = hud.length + 1;
+    while (hud.some((h) => h.id === 'hud' + n)) n++;
+    return 'hud' + n;
+  };
+  const hasHealth = [...spec.nodes2D, ...spec.actors].some((e) => (e as { health?: HealthSpec }).health);
+  return (
+    <>
+      <div className="pp-label" style={{ marginTop: 6 }}>Variables (keys, ammo, lives ...)</div>
+      {variables.map((v, i) => (
+        <div key={i} className="pp-row">
+          <input className="field sm w-20 font-mono" aria-label="Variable id" value={v.id} onChange={(e) => patchVar(i, { id: e.target.value.replace(/[^A-Za-z0-9_]/g, '').slice(0, 32) })} />
+          <div className="pp-vec">
+            <NumField label="start" step={1} ariaLabel={`${v.id} start`} value={v.initial} onChange={(initial) => patchVar(i, { initial })} />
+            <NumField label="max" step={1} ariaLabel={`${v.id} max`} value={v.max ?? 0} onChange={(max) => patchVar(i, { max: max > 0 ? max : undefined })} />
+          </div>
+          <IconBtn small danger label={`Delete variable ${v.id}`} onClick={() => setVariables(variables.filter((_, j) => j !== i))}>
+            <Trash2 size={12} />
+          </IconBtn>
+        </div>
+      ))}
+      <button type="button" className="btn sm" onClick={() => setVariables([...variables, { id: freshVarId(), initial: 0 }])}>
+        + Variable
+      </button>
+      {spec.gameRules.winCondition === 'variable-threshold' && (
+        <>
+          <Row label="Win when">
+            <select
+              className="field sm"
+              aria-label="Win variable"
+              value={spec.gameRules.winVariable?.id ?? ''}
+              onChange={(e) => updateGameRules({ winVariable: { id: e.target.value, atLeast: spec.gameRules.winVariable?.atLeast ?? 3 } })}
+            >
+              <option value="">(pick a variable)</option>
+              {variables.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.id}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="reaches">
+            <NumField step={1} ariaLabel="Win variable target" value={spec.gameRules.winVariable?.atLeast ?? 3} onChange={(atLeast) => updateGameRules({ winVariable: { id: spec.gameRules.winVariable?.id ?? variables[0]?.id ?? '', atLeast } })} />
+          </Row>
+        </>
+      )}
+      <div className="pp-label" style={{ marginTop: 6 }}>HUD (drawn over the game)</div>
+      {hud.map((h, i) => (
+        <div key={h.id} className="pp-row" style={{ flexWrap: 'wrap', gap: 4 }}>
+          <select className="field sm" aria-label={`${h.id} shows`} value={h.source} onChange={(e) => patchHud(i, { source: e.target.value as HudSource, variableId: e.target.value === 'variable' ? variables[0]?.id : undefined })}>
+            <option value="score">score</option>
+            <option value="time">time left</option>
+            <option value="health">health</option>
+            <option value="variable">variable</option>
+          </select>
+          {h.source === 'variable' && (
+            <select className="field sm" aria-label={`${h.id} variable`} value={h.variableId ?? ''} onChange={(e) => patchHud(i, { variableId: e.target.value })}>
+              {variables.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.id}
+                </option>
+              ))}
+            </select>
+          )}
+          <select className="field sm" aria-label={`${h.id} style`} value={h.kind} onChange={(e) => patchHud(i, { kind: e.target.value as HudKind })}>
+            <option value="counter">counter</option>
+            <option value="bar">bar</option>
+            <option value="text">text</option>
+          </select>
+          <select className="field sm" aria-label={`${h.id} position`} value={h.anchor} onChange={(e) => patchHud(i, { anchor: e.target.value as HudAnchor })}>
+            {(Object.keys(HUD_ANCHOR_LABEL) as HudAnchor[]).map((a) => (
+              <option key={a} value={a}>
+                {HUD_ANCHOR_LABEL[a]}
+              </option>
+            ))}
+          </select>
+          <input className="field sm w-16" aria-label={`${h.id} label`} placeholder="label" value={h.label ?? ''} onChange={(e) => patchHud(i, { label: e.target.value || undefined })} />
+          <IconBtn small danger label={`Delete HUD element ${h.id}`} onClick={() => setHud(hud.filter((_, j) => j !== i))}>
+            <Trash2 size={12} />
+          </IconBtn>
+        </div>
+      ))}
+      <div className="flex flex-wrap gap-1">
+        <button type="button" className="btn sm" onClick={() => setHud([...hud, { id: freshHudId(), kind: 'counter', source: 'score', anchor: 'top-left' }])}>
+          + Score
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={!hasHealth}
+          title={hasHealth ? 'Shows the player health' : 'Give the player health first (Behaviour → Has health)'}
+          onClick={() => setHud([...hud, { id: freshHudId(), kind: 'bar', source: 'health', anchor: 'top-left', color: '#ef4444' }])}
+        >
+          + Health bar
+        </button>
+        <button type="button" className="btn sm" onClick={() => setHud([...hud, { id: freshHudId(), kind: 'counter', source: 'time', anchor: 'top-center' }])}>
+          + Timer
+        </button>
+      </div>
     </>
   );
 };
@@ -749,6 +991,7 @@ const SceneSettings: React.FC = () => {
               onChange={(e) => updateGameRules({ instructions: e.target.value } as Partial<GameRule>)}
             />
           </Row>
+          <GameStateSettings />
         </>
       ) : (
         <Row label="Duration (s)">

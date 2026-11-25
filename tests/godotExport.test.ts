@@ -475,3 +475,35 @@ test('Phase 2 2D roles: solid blocks, hazards and checkpoints export; controller
     assert.ok(details.includes(needle), `warns about ${needle}`);
   }
 });
+
+test('Phase 3 game state is never dropped silently: variables, HUD, health, spawners, prefabs and new actions warn', () => {
+  const scene = platformer2D('Phase Three');
+  const base = { width: 40, height: 40, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, fill: '#334155', stroke: '#FFFFFF' };
+  scene.variables = [{ id: 'keys', initial: 0, max: 3 }];
+  scene.hud = [{ id: 'hp', kind: 'bar', source: 'health', anchor: 'top-left' }];
+  scene.gameRules.winCondition = 'variable-threshold';
+  scene.gameRules.winVariable = { id: 'keys', atLeast: 3 };
+  const hero = scene.nodes2D.find((n) => n.physics2D === 'player-platformer')!;
+  hero.health = { max: 3 };
+  scene.nodes2D.push(
+    { ...base, id: 'bullet', name: 'Bullet', type: 'vector-shape', x: 0, y: 0, physics2D: 'hazard', prefab: true, projectile: { vx: 200, vy: 0 } },
+    { ...base, id: 'turret', name: 'Turret', type: 'tile-platform', x: 700, y: 500, physics2D: 'solid', contactDamage: 1, spawner: { prefabId: 'bullet', everySeconds: 2 } }
+  );
+  scene.logicGraph = {
+    nodes: [
+      { id: 't', type: 'trigger', title: 'Start', params: { eventType: 'game-start' } },
+      { id: 'a', type: 'action', title: 'Add key', params: { actionType: 'add-variable', variableId: 'keys', value: 1 } },
+    ],
+    edges: [{ id: 'e', from: 't', to: 'a' }],
+  } as never;
+  const build = buildGodotProject([scene]);
+  const tscn = sceneFile(build);
+  assertBalancedQuotes(tscn);
+  assert.ok(!nodeHeaders(tscn).some((h) => h.name === 'Bullet'), 'prefab templates are not part of the Godot scene');
+  assert.ok(nodeHeaders(tscn).some((h) => h.name === 'Turret'));
+  assert.ok(!tscn.includes('variable-threshold'), 'the enum export stays valid');
+  const details = build.warnings.map((w) => `${w.feature}: ${w.detail}`).join('\n');
+  for (const needle of ['game variable(s)', 'HUD element(s)', 'variable-threshold', 'health (max 3)', 'contact damage', 'spawner is not exported', 'a prefab is a spawn template']) {
+    assert.ok(details.includes(needle), `warns about ${needle}`);
+  }
+});

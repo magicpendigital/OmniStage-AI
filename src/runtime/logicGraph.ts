@@ -6,6 +6,7 @@ import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { ActorNode, CameraMode, EngineType, LogicNode, Node2D, SceneSpec, Vector3Tuple, VFXNode, VFXType } from '../types/scene.schema';
 import { runtimeStore } from './host';
 import { runStateMachines, StateMachineRuntime } from './stateMachine';
+import { compareNumbers, hash01, healthMax, isPlayerEntity, resolveVariables } from './game/state';
 
 export const DESIGN_WIDTH = 1000;
 export const DESIGN_HEIGHT = 600;
@@ -60,6 +61,8 @@ export class RuntimeLogicGraph {
   private previousTime = -1;
   private elapsed = 0;
   private cooldowns = new Map<string, number>();
+  /** Phase 3: rolls per `random-chance` node, so the same scene replays the same dice. */
+  private rolls = new Map<string, number>();
   private contacts = new Set<string>();
   generation = 0;
   controlsCamera = false;
@@ -75,6 +78,7 @@ export class RuntimeLogicGraph {
     if (state.sceneSpec.id !== this.sceneId || state.currentTime < this.previousTime) {
       this.sceneId = state.sceneSpec.id;
       this.cooldowns.clear();
+      this.rolls.clear();
       this.contacts.clear();
       this.elapsed = 0;
       this.controlsCamera = false;
@@ -271,6 +275,26 @@ export class RuntimeLogicGraph {
         if (distance < 0) throw new Error('Distance must be nonnegative');
         return Math.hypot(...a.map((v, i) => v - b[i])) < distance;
       }
+      case 'variable-compare': {
+        const id = String(p.variableId ?? '');
+        const decl = resolveVariables(state.sceneSpec).find((v) => v.id === id);
+        if (!decl) throw new Error(`Unknown variable '${id}' (declare it in sceneSpec.variables)`);
+        return compareNumbers(String(p.op ?? '>='), state.gameVars[id] ?? decl.initial, finiteNumber(p.value ?? 0, 'Compare value'));
+      }
+      case 'health-check': {
+        const id = String(p.actorId || actorId || this.playerId() || '');
+        const entity = state.sceneSpec.nodes2D.find((n) => n.id === id) ?? state.sceneSpec.actors.find((a) => a.id === id);
+        const max = healthMax(entity);
+        if (!entity || max === undefined) throw new Error(`Health check needs an entity with health: '${id || '(unset)'}'`);
+        return compareNumbers(String(p.op ?? '<='), state.gameHealth[id] ?? max, finiteNumber(p.value ?? 0, 'Compare value'));
+      }
+      case 'random-chance': {
+        const chance = finiteNumber(p.chance ?? 0.5, 'Chance');
+        if (chance < 0 || chance > 1) throw new Error('Chance must be between 0 and 1');
+        const n = this.rolls.get(node.id) ?? 0;
+        this.rolls.set(node.id, n + 1);
+        return hash01(`${this.sceneId}:${node.id}`, n) < chance;
+      }
       case 'tap-count': {
         // Unbox / tap-reward progress (the AI prompt and the mechanic wiring emit this): true once the actor was tapped enough times.
         const id = String(p.actorId || actorId || '');
@@ -281,6 +305,58 @@ export class RuntimeLogicGraph {
         return (state.unboxTapCounts?.[id] ?? 0) >= required;
       }
       default: throw new Error(`Unsupported condition: ${p.conditionType}`);
+    }
+  }
+
+  /** The player entity of the running scene (health checks and damage default to it). */
+  private playerId(): string | undefined {
+    const scene = runtimeStore.getState().sceneSpec;
+    return (this.engine === '2d' ? scene.nodes2D : scene.actors).find((e) => isPlayerEntity(e as never) && e.visible !== false)?.id;
+  }
+
+  /** Phase 3 actions: variables, health, win / lose, spawning. Returns undefined for any other action. */
+  private stateAction(node: LogicNode, eventActorId?: string): string | undefined {
+    const state = runtimeStore.getState();
+    const p = node.params;
+    const target = () => {
+      const id = String(p.actorId || eventActorId || this.playerId() || '');
+      if (!id) throw new Error('This action needs a target entity');
+      return id;
+    };
+    switch (p.actionType) {
+      case 'set-variable':
+      case 'add-variable': {
+        const id = String(p.variableId ?? '');
+        const value = finiteNumber(p.value ?? 0, 'Variable value');
+        if (p.actionType === 'set-variable') state.setGameVar(id, value);
+        else state.addGameVar(id, value);
+        return `${id} = ${runtimeStore.getState().gameVars[id]}`;
+      }
+      case 'damage': {
+        const id = target();
+        const result = state.damageEntity(id, finiteNumber(p.amount ?? 1, 'Damage'));
+        return `Damage ${id}: ${result}`;
+      }
+      case 'heal': {
+        const id = target();
+        state.healEntity(id, finiteNumber(p.amount ?? 1, 'Heal'));
+        return `Healed ${id}`;
+      }
+      case 'win':
+      case 'lose':
+        state.endGame(p.actionType === 'win');
+        return p.actionType === 'win' ? 'Game won' : 'Game lost';
+      case 'spawn': {
+        const id = state.spawnPrefab(String(p.prefabId ?? ''), p.x === undefined ? undefined : finiteNumber(p.x, 'Spawn x'), p.y === undefined ? undefined : finiteNumber(p.y, 'Spawn y'));
+        return id ? `Spawned ${id}` : 'Spawn skipped (too many clones alive)';
+      }
+      case 'despawn': {
+        const id = target();
+        state.despawnEntity(id);
+        return `Despawned ${id}`;
+      }
+      default:
+        return undefined;
     }
   }
 
@@ -295,6 +371,8 @@ export class RuntimeLogicGraph {
       this.machineFrame.signals.add(signal);
       return `Signal "${signal}" sent to state machines`;
     }
+    const stateAction = this.stateAction(node, eventActorId);
+    if (stateAction !== undefined) return stateAction;
     const id = p.actorId || eventActorId;
     const actor = scene.actors.find((a) => a.id === id);
     const node2D = scene.nodes2D.find((a) => a.id === id);
@@ -390,7 +468,7 @@ export class RuntimeLogicGraph {
 export function findLogicContacts(scene: SceneSpec, positionFor?: (id: string) => Vector3Tuple | undefined) {
   const time = runtimeStore.getState().currentTime;
   const entities = scene.engineType === '2d' ? scene.nodes2D : scene.actors;
-  const live = entities.filter((a) => a.visible !== false && ('physics2D' in a || scene.mode === 'game' ||
+  const live = entities.filter((a) => a.visible !== false && !('prefab' in a && a.prefab) && ('physics2D' in a || scene.mode === 'game' ||
     ((a.startTime ?? 0) <= time && (a.endTime ?? Infinity) >= time)));
   const pairs: Array<[string, string]> = [];
   for (let i = 0; i < live.length; i++) {

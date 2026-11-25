@@ -17,6 +17,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useStudioStore } from '../state/useStudioStore';
+import { isStateNode, StateNodeFields } from './StateNodeFields';
 import {
   ActorClickAction,
   AnimationType,
@@ -131,6 +132,105 @@ const NODE_PALETTE_TEMPLATES: NodeTemplateItem[] = [
     inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
     outputs: [{ id: 'out-flow', label: 'Ready Flow', dataType: 'flow' }],
     defaultParams: { conditionType: 'cooldown', cooldownMs: 500 },
+  },
+
+  // Phase 3: game state (variables, health, spawning, result)
+  {
+    type: 'condition',
+    category: 'logic-gate',
+    title: 'If Variable (compare)',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [
+      { id: 'out-true', label: 'True', dataType: 'flow' },
+      { id: 'out-false', label: 'False', dataType: 'flow' },
+    ],
+    defaultParams: { conditionType: 'variable-compare', variableId: '', op: '>=', value: 1 },
+  },
+  {
+    type: 'condition',
+    category: 'logic-gate',
+    title: 'If Health (compare)',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [
+      { id: 'out-true', label: 'True', dataType: 'flow' },
+      { id: 'out-false', label: 'False', dataType: 'flow' },
+    ],
+    defaultParams: { conditionType: 'health-check', op: '<=', value: 1 },
+  },
+  {
+    type: 'condition',
+    category: 'logic-gate',
+    title: 'If Random Chance',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [
+      { id: 'out-true', label: 'True', dataType: 'flow' },
+      { id: 'out-false', label: 'False', dataType: 'flow' },
+    ],
+    defaultParams: { conditionType: 'random-chance', chance: 0.5 },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Set Variable',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'set-variable', variableId: '', value: 0 },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Add To Variable',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'add-variable', variableId: '', value: 1 },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Damage',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'damage', amount: 1 },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Heal',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'heal', amount: 1 },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Spawn Prefab',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'spawn', prefabId: '' },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Despawn',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'despawn' },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Win The Game',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'win' },
+  },
+  {
+    type: 'action',
+    category: 'actor-action',
+    title: 'Lose The Game',
+    inputs: [{ id: 'in-flow', label: 'Exec In', dataType: 'flow' }],
+    outputs: [{ id: 'out-flow', label: 'Next Action', dataType: 'flow' }],
+    defaultParams: { actionType: 'lose' },
   },
 
   // Indigo/Cyan: Actions
@@ -848,7 +948,10 @@ export const NodeGraphView: React.FC = () => {
               {/* Inline Bidirectional Parameter Controls */}
               <div className="p-2.5 space-y-2 text-[11px]">
                 {/* Actor Action Controls */}
-                {node.category === 'actor-action' && (
+                {isStateNode(node) && (
+                  <StateNodeFields node={node} spec={sceneSpec} onChange={(params) => updateLogicNode(node.id, { params })} />
+                )}
+                {node.category === 'actor-action' && !isStateNode(node) && (
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-slate-400 font-mono text-[10px]">Actor</span>
@@ -999,7 +1102,7 @@ export const NodeGraphView: React.FC = () => {
                 )}
 
                 {/* Logic Gate / Condition Controls */}
-                {node.category === 'logic-gate' && (
+                {node.category === 'logic-gate' && !isStateNode(node) && (
                   <div className="grid grid-cols-2 gap-1.5">
                     <div>
                       <span className="text-slate-400 font-mono text-[10px] block mb-0.5">

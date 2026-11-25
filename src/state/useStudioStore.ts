@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { cloneSceneSpec } from '../registry/assetRegistry';
 import { createGameRuntimeSlice } from '../runtime/gameSlice';
+import { freshGameState } from '../runtime/game/state';
 import { bindRuntimeStore } from '../runtime/host';
 import { loadLearnedSkills } from '../agent/directorSkills';
 import { INITIAL_EXECUTION_LOGS, initialScene2D, initialScene3D, loadInitialSettings } from './storeHelpers';
@@ -89,6 +90,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   gameTimeRemaining: initialScene3D.gameRules.timeLimitSeconds,
   gameWon: false,
   gameEnded: false,
+  ...freshGameState(initialScene3D),
   machineStates: undefined,
   unboxTapCounts: {},
   scorePopups: [],

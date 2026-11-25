@@ -569,6 +569,86 @@ export interface Node2D {
   collider?: Collider2D;
   /** Phase 2: moving platform (`static-platform` / `solid`). */
   mover?: Mover2D;
+  /** Phase 3: hit points. Damage and healing go through the store (`damageEntity` / `healEntity`), 0 kills the entity. */
+  health?: HealthSpec;
+  /** Phase 3: hit points taken by a player that touches this node (enemy, spikes). Needs `health` on the player. */
+  contactDamage?: number;
+  /** Phase 3: spawns clones of the `prefab` node `spawner.prefabId` while the game plays. */
+  spawner?: Spawner2D;
+  /** Phase 3: moves in a straight line and dies on a solid / after its lifetime (put it on a `prefab` node). */
+  projectile?: Projectile2D;
+  /** Phase 3: a template — hidden and non-colliding while playing, cloned by spawners / the `spawn` logic action. */
+  prefab?: boolean;
+}
+
+// ----------------------------------------------------------------------------
+// Phase 3 — game state: variables, health, spawning, declarative HUD
+// ----------------------------------------------------------------------------
+
+/** A named number the logic graph and the HUD share (a counter, a flag as 0/1, a resource). */
+export interface GameVariable {
+  id: string;
+  label?: string;
+  initial: number;
+  min?: number;
+  max?: number;
+}
+
+export interface HealthSpec {
+  max: number;
+  /** Seconds of immunity after a hit (default 0.6). */
+  invulnerableSeconds?: number;
+}
+
+export interface Spawner2D {
+  /** id of a node with `prefab: true`. */
+  prefabId: string;
+  everySeconds: number;
+  /** Most clones alive at once (default 5). */
+  max?: number;
+  /** Seconds before the first spawn (default = everySeconds). */
+  startDelay?: number;
+  offsetX?: number;
+  offsetY?: number;
+  /** Deterministic spread (px) around the offset. */
+  jitterX?: number;
+  jitterY?: number;
+}
+
+export interface Projectile2D {
+  /** px/s. */
+  vx: number;
+  vy: number;
+  /** Seconds alive (default 3). */
+  lifetimeSeconds?: number;
+  /** Hit points taken from what it hits when that has `health`. */
+  damage?: number;
+  /** Disappears on the first hit (default true). */
+  destroyOnHit?: boolean;
+  /** px/s², pulls it down (default 0). */
+  gravity?: number;
+  /** Who it can hurt: the player, enemies (other nodes with health) or both (default). */
+  target?: 'player' | 'enemy' | 'any';
+}
+
+export type HudSource = 'score' | 'time' | 'variable' | 'health';
+export type HudKind = 'counter' | 'bar' | 'text';
+export type HudAnchor = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+
+/** One piece of in-game HUD, bound to the score, the clock, a variable or an entity's health. */
+export interface HudElement {
+  id: string;
+  kind: HudKind;
+  source: HudSource;
+  /** `source: 'variable'`. */
+  variableId?: string;
+  /** `source: 'health'`: node / actor id (default: the player). */
+  actorId?: string;
+  label?: string;
+  anchor: HudAnchor;
+  color?: string;
+  /** Full-bar value for `kind: 'bar'` (variables and score; health and time use their own maximum). */
+  max?: number;
 }
 
 // ============================================================================
@@ -660,6 +740,8 @@ export interface ActorNode {
   shaderEffect?: ShaderEffect;
   /** Phase 9: behaviour state machine (game mode), run by src/runtime/stateMachine.ts. */
   stateMachine?: ActorStateMachine;
+  /** Phase 3: hit points (logic graph damage / heal, HUD health bar). */
+  health?: HealthSpec;
 }
 
 // ============================================================================
@@ -692,6 +774,7 @@ export type StateMachineCondition =
 /** Runs once when a state is entered. */
 export type StateMachineAction =
   | { type: 'add-score'; amount: number }
+  /** Changes the machine's health; with `health` on the entity it is the entity's real hit points. */
   | { type: 'add-health'; amount: number }
   | { type: 'spawn-vfx'; vfx: VFXType; color?: string }
   | { type: 'play-sfx'; sound: GameAudioEvent }
@@ -862,7 +945,9 @@ export interface MarketingOverlayConfig {
 }
 
 export interface GameRule {
-  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer' | 'unbox-reveal';
+  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer' | 'unbox-reveal' | 'variable-threshold';
+  /** Phase 3: with `winCondition: 'variable-threshold'` the game is won when this variable reaches `atLeast`. */
+  winVariable?: { id: string; atLeast: number };
   targetScore: number;
   timeLimitSeconds: number;
   instructions: string;
@@ -1063,6 +1148,10 @@ export interface SceneSpec {
   world2D?: World2DSpec;
   /** Phase 2: 2D camera (fixed / follow, zoom, dead zone, look-ahead). */
   camera2D?: Camera2DSpec;
+  /** Phase 3: variables shared by the logic graph and the HUD. */
+  variables?: GameVariable[];
+  /** Phase 3: declarative in-game HUD. */
+  hud?: HudElement[];
   vfx: VFXNode[];
   marketingOverlay: MarketingOverlayConfig;
   gameRules: GameRule;

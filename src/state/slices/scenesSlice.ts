@@ -4,6 +4,7 @@
  */
 import { LIGHTING_PRESETS, SCENE_TEMPLATES, cloneSceneSpec, createBlankSceneSpec } from '../../registry/assetRegistry';
 import { syncGraphWithScene } from '../../runtime/graphSync';
+import { freshGameState } from '../../runtime/game/state';
 import { Vector3Tuple } from '../../types/scene.schema';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
 import { HISTORY_CAP, editKey, pushPast, resetHistoryBurst } from '../history';
@@ -25,6 +26,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         gameTimeRemaining: synced.gameRules.timeLimitSeconds,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(synced),
         gameEnded: false,
         unboxTapCounts: {},
       };
@@ -69,6 +71,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         currentTime: 0,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(newScene),
         gameEnded: false,
       };
     }),
@@ -92,6 +95,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         currentTime: 0,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(cloned),
         gameEnded: false,
       };
     }),
@@ -141,6 +145,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         currentTime: 0,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(active),
         gameEnded: false,
         gameTimeRemaining: active.gameRules.timeLimitSeconds,
       };
@@ -165,6 +170,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         isPlaying: true,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(synced),
         gameEnded: false,
         unboxTapCounts: {},
         burstEffects: [],
@@ -210,6 +216,7 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
         sceneSpec: nextSpec,
         gameScore: 0,
         gameWon: false,
+        ...freshGameState(nextSpec),
         gameEnded: false,
         unboxTapCounts: {},
         gameTimeRemaining: nextSpec.gameRules.timeLimitSeconds,
@@ -305,6 +312,30 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       nextSpec.world2D = { width: 1000, height: 600, ...nextSpec.world2D, ...patch };
       return {
         pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('world2D', patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  setSceneVariables: (variables) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (variables.length) nextSpec.variables = variables;
+      else delete nextSpec.variables;
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('variables', { n: variables.length })),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  setSceneHud: (hud) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (hud.length) nextSpec.hud = hud;
+      else delete nextSpec.hud;
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('hud', { n: hud.length })),
         futureSpecs: [],
         sceneSpec: nextSpec,
       };

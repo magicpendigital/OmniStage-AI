@@ -30,6 +30,12 @@ paths:
   (`collide2d` move-and-collide, `platformer` controller with coyote / buffer / variable / multi jump, `mover`, `camera2d`, `constants`).
   Runtime (`stage2d.ts`) and verifier both read `PLATFORMER_DEFAULTS` / `platformerLimits`; never duplicate a number. Pointer code converts
   viewport → world with `designToWorld`. Keep `tests/physics2d.test.ts` green and run `npm run build:player` + `npm run test:e2e`.
+- Game state (Phase 3, `src/runtime/game/*`): variables, health and spawned clones live in the store's session state (`gameVars`, `gameHealth`,
+  `gameHurtAt`, `gameSpawnSerial`) and are reset ONLY through `freshGameState(spec)` at every session reset site (studio, Player, scene advance).
+  Logic conditions / actions (`variable-compare`, `damage`, `spawn`, ...) go through `RuntimeLogicGraph`; spawners, projectiles and contact damage
+  run in `stepGameEntities2D` (called from `stage2d.ts`). Everything is deterministic: time from the scene clock, randomness from `hash01`
+  (never `Math.random` / `Date`). Prefab nodes are templates, skipped by `visible()` in the verifier and by collisions / drawing while a game plays.
+  The HUD is `resolveHud` (pure) + `GameHudView` (plain DOM, shared by the studio overlay and the Player). Keep `tests/gameState.test.ts` green.
 - Time-based effects read `currentTime` from the store so pause/scrub stay deterministic. Keyframe interpolation goes through
   `src/animation/easing.ts` (`sampleKeyframes`, `easedSplineProgress`).
 - Sound: do not create AudioContexts in renderers; call `playSceneSfx` from `src/audio/audioBus.ts`. The film soundtrack is rendered by
