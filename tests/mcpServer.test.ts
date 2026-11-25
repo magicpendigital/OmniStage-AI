@@ -104,3 +104,56 @@ test('merge patch and JSON patch semantics', () => {
   assert.deepEqual(doc.list, [1, 2], 'input untouched');
   assert.throws(() => applyJsonPatch(doc, [{ op: 'replace', path: '/missing/x', value: 1 }]));
 });
+test('shared tools: get_scene_slice and search_assets are listed and reuse the toolbox', async () => {
+  const ctx = context();
+  const list: any = await handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ctx);
+  const byName = Object.fromEntries(list.result.tools.map((t: any) => [t.name, t]));
+  for (const n of ['omnistage_get_scene_slice', 'omnistage_search_assets']) {
+    assert.ok(byName[n], n);
+    assert.equal(byName[n].annotations.readOnlyHint, true, `${n} is read-only`);
+    assert.ok(byName[n].inputSchema.properties.sceneId, `${n} accepts sceneId`);
+  }
+
+  const created = await call(ctx, 'omnistage_create_scene', { engineType: '2d', title: 'Slice me', mode: 'game' });
+  const sceneId = created.json.created.id;
+  const slice = await call(ctx, 'omnistage_get_scene_slice', { sections: ['summary', 'nodes2D'], ids: ['node2d-hero'] });
+  assert.equal(slice.isError, false, slice.text);
+  assert.deepEqual(Object.keys(slice.json), ['summary', 'nodes2D']);
+  assert.deepEqual(slice.json.nodes2D.map((n: any) => n.id), ['node2d-hero']);
+  assert.equal(slice.json.summary.id, sceneId);
+
+  const bad = await call(ctx, 'omnistage_get_scene_slice', { sections: ['nope'] });
+  assert.equal(bad.isError, true);
+  assert.match(bad.text, /Unknown section/);
+
+  const found = await call(ctx, 'omnistage_search_assets', { query: 'robot', kind: '3d' });
+  assert.equal(found.isError, false, found.text);
+  assert.ok(found.json.some((h: any) => h.id === 'gltf-robot-expressive' && h.clips.length));
+  const noScene = await call(context(), 'omnistage_search_assets', { query: 'coin', kind: 'sfx' });
+  assert.equal(noScene.isError, false, 'search works before a project exists');
+  assert.ok(noScene.json.length);
+  assert.equal((await call(context(), 'omnistage_get_scene_slice', { sections: ['summary'] })).isError, true, 'slice needs a project');
+
+  const contract = (await call(ctx, 'omnistage_contract')).json;
+  assert.ok(contract.rules.some((r: string) => /omnistage_get_scene_slice/.test(r)));
+});
+
+test('apply_patch runs the shared check: logic graph is finalized and results keep their shape', async () => {
+  const ctx = context();
+  const created = await call(ctx, 'omnistage_create_scene', { engineType: '2d', mode: 'game' });
+  const sceneId = created.json.created.id;
+  const patched = await call(ctx, 'omnistage_apply_patch', { mergePatch: { title: 'Shared path' } });
+  assert.equal(patched.isError, false, patched.text);
+  assert.deepEqual(Object.keys(patched.json).sort(), ['autoFixes', 'sceneId', 'summary', 'verification']);
+  assert.equal(patched.json.sceneId, sceneId);
+  const scene = (await call(ctx, 'omnistage_get_scene', { sceneId })).json;
+  assert.ok(scene.logicGraph?.nodes?.length > 0, 'finalizeLogicGraph wired the mechanics (same path as the studio)');
+
+  // autoFix=false keeps the raw patch + plain verify.
+  const raw = await call(ctx, 'omnistage_apply_patch', { mergePatch: { title: 'Raw' }, autoFix: false });
+  assert.equal(raw.json.autoFixes.length, 0);
+  assert.equal(raw.json.summary.title, 'Raw');
+  // A patch that does not fit is still a tool error, not a crash.
+  const broken = await call(ctx, 'omnistage_apply_patch', { ops: [{ op: 'replace', path: '/actors/@ghost/position', value: [0, 0, 0] }] });
+  assert.equal(broken.isError, true);
+});

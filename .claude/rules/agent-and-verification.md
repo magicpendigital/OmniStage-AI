@@ -50,3 +50,17 @@ paths:
 - Film finishing (Phase 11E): script lines get ids from `scriptCoverage.ts` (`script.uncovered` / `script.unperformable` are craft warnings, never fixable);
   `soundCuts` (J/L) and the `musicCues.ts` cue sheet run per scene inside `generateStoryboard`; cut QA (`cutQA.ts`) is vision-only, notes only,
   never auto-patches. `MOOD_BPM` must match `MOODS` in `soundtrack.ts`. Keep `tests/phase11e.test.ts` green.
+- Game design (Phase 4 Director B, `src/agent/gameDesign.ts`): 2D game-level storyboards write a GDD first (draft -> sanitize -> autoFix -> lint -> one revise round -> offline design), exactly like the Story Bible;
+  the server (`POST /api/agent/game/design`) builds prompts from structured data only; the review modal (`GameDesignModal`, setting `gameDesignReview`) hands the approved design to the chat through
+  `gameDesignClient.ts`. An AI or approved design is passed to `/plan` and `/scene` and is attached to AI-authored level scenes as `sceneSpec.gameDesign`; offline levels do not carry it. The verbs are
+  ONLY what the engine runs (`GAME_VERBS`); a new gameplay verb needs engine support first. `src/verification/intentAlignment.ts` checks level against design (`intent.*` codes, craft warnings in
+      `MEDIA_CRAFT_CODES` so the patch loop treats them as work); scenes without a design produce none. Add a code + test in `tests/gameDesign.test.ts` when you add an intent rule.
+- Shared tool layer (Phase 4 Director D, `src/agent/tools/sceneTools.ts` + `src/agent/logicFinalize.ts`): ONE pure `checkScene` (recipes hook -> `finalizeLogicGraph` -> `autoFixSceneSpec` -> verify)
+  is the check for the studio patch loop, the tool loop and MCP `omnistage_apply_patch`; never add a second path. `finalizeLogicGraph` and its repair helpers live in `logicFinalize.ts` (no store, DOM or fetch;
+  `studioAgent` re-exports them). The toolbox is pure, `run` never throws (errors are "ERROR: ..." text), results are capped (`MAX_TOOL_RESULT_CHARS`), a patch that makes verification worse is reverted.
+  Tools exist only for things that exist: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `finish`. Do NOT add `generate_asset` (needs the cost-confirmation step), `playtest`, `screenshot` or
+  `add_from_kit` until their machinery exists. Skills stay prompt text; no tool runs code.
+- Tool-use edit loop (`server/ai/toolLoop.ts`, `POST /api/agent/tools` in `server/ai/toolRoute.ts`, studio `runToolEdit`): opt-in (`aiEditMode: 'tools'`, default stays `patch`) and eligible only when the PRIMARY connection is
+  `anthropic` with a key (`resolveToolLoopConnection`); everything else returns 501 / null and the studio uses the JSON patch loop. Any failure of the tool loop (including 503) also falls through to the patch loop, which
+  still owns the 503 -> offline director decision, and the result notes it. Limits: <= 12 turns, <= 40 tool calls, `client` injectable (tests use a scripted fake, never the network). It has NOT been run against a live
+  Anthropic account; do that before making it the default. Keys are never logged, echoed or put in transcripts. Keep `tests/sceneTools.test.ts`, `tests/toolLoop.test.ts` and `tests/mcpServer.test.ts` green.

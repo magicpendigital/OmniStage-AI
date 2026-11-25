@@ -20,6 +20,7 @@ import { captionsToSRT, captionsToWebVTT } from '../src/media/captions';
 import { buildStandalonePlayable, StandaloneAdNetwork } from '../src/exporter/mediaExporter';
 import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
 import { applyJsonPatch, mergePatch } from '../src/utils/jsonPatch';
+import { checkScene, mcpToolDefinition, SceneToolbox } from '../src/agent/tools/sceneTools';
 
 export interface ProjectBundle {
   projectBundleVersion: string;
@@ -132,6 +133,24 @@ function summarize(scene: SceneSpec) {
 
 const sceneIdProp = { sceneId: { type: 'string', description: 'Scene id (defaults to the active scene).' } };
 
+/** A shared toolbox tool in MCP shape, with the optional `sceneId` added to its input schema. */
+function sharedToolDefinition(name: Parameters<typeof mcpToolDefinition>[0]) {
+  const def = mcpToolDefinition(name);
+  const schema = def.inputSchema as { properties?: Record<string, unknown> };
+  return { ...def, inputSchema: { ...def.inputSchema, properties: { ...sceneIdProp, ...(schema.properties || {}) } } };
+}
+
+/** Runs a shared toolbox tool for MCP: "ERROR: ..." text becomes a tool error, JSON text is returned parsed (truncated text stays text). */
+function runSharedTool(toolbox: SceneToolbox, name: string, args: unknown): unknown {
+  const text = toolbox.run(name, args);
+  if (text.startsWith('ERROR:')) throw new ToolError(text.slice(6).trim());
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool catalogue
 // ---------------------------------------------------------------------------
@@ -147,8 +166,10 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
         'Everything is declarative SceneSpec JSON (src/types/scene.schema.ts); never write renderer code.',
         "2D stage is 1000x600 (y down). 3D player arena is x/z within ±5.5, actors grounded at y=0.",
         'Every patch is verified; fixable problems are auto-repaired and remaining errors are returned to you.',
+        'Game design (optional): sceneSpec.gameDesign {title,genre,pitch,coreLoop,goal,win,lose,mechanics[jump|collect|avoid-hazards|dodge-projectiles|unlock|survive],usesHealth,levels[{name,teaches,introduces,uses,difficulty}]} makes the verifier check the level against it (intent.* warnings: missing verbs, health, HUD bar, timer, counters). Omit it for scenes without a design.',
         'Game state (skill game-state-and-combat): sceneSpec.variables [{id,initial,min?,max?}], node.health {max,invulnerableSeconds?}, node.contactDamage, node.prefab + node.spawner {prefabId,everySeconds,max?} + node.projectile {vx,vy,damage?,lifetimeSeconds?,target?}, sceneSpec.hud [{id,kind,source,anchor,...}], gameRules.winCondition "variable-threshold" + winVariable {id,atLeast}; logic nodes variable-compare / health-check / random-chance and actions set-variable / add-variable / damage / heal / spawn / despawn / win / lose. Every variableId must be declared and every prefabId a prefab node.',
         'Game behaviour (enemies, NPCs, doors): actors[].stateMachine / nodes2D[].stateMachine = { initial, states: { name: { move?, points?, speed?, clip?, animation?, onEnter?: Action[], transitions?: [{ to, when: Condition }] } } } using only the stateMachine vocabulary below (skill behaviour-state-machines).',
+        'Read before you patch: omnistage_get_scene_slice returns only the sections you ask for (summary, actors, nodes2D, logic, world, rules, hud, variables, audio, camera, vfx); omnistage_search_assets finds real asset / preset ids. omnistage_apply_patch runs the same shared check as the studio (logic graph repair, auto-fix, verifier).',
       ],
       assets3D: Object.values(ASSET_REGISTRY).map((a) => ({ assetId: a.assetId, name: a.name, category: a.category, clips: a.embeddedClips || [] })),
       presets2D: PRESET_2D_ASSETS.map((p) => ({ id: p.id, name: p.name, type: p.nodeTemplate.type, role: p.nodeTemplate.physics2D })),
@@ -193,6 +214,21 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
     description: 'Returns the full SceneSpec JSON of one scene.',
     inputSchema: { type: 'object', properties: sceneIdProp },
     run: async (args, ctx) => pickScene(await requireProject(ctx), args.sceneId),
+  },
+  {
+    ...sharedToolDefinition('get_scene_slice'),
+    run: async (args, ctx) => {
+      const scene = pickScene(await requireProject(ctx), args.sceneId);
+      return runSharedTool(new SceneToolbox(scene), 'get_scene_slice', args);
+    },
+  },
+  {
+    ...sharedToolDefinition('search_assets'),
+    run: async (args, ctx) => {
+      const bundle = await loadProject(ctx);
+      const scene = bundle ? pickScene(bundle, args.sceneId) : createBlankSceneSpec('3d');
+      return runSharedTool(new SceneToolbox(scene), 'search_assets', args);
+    },
   },
   {
     name: 'omnistage_create_scene',
@@ -248,10 +284,11 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
       let fixes: string[] = [];
       let report = verifySceneSpec(next, { scenes: bundle.scenes });
       if (args.autoFix !== false) {
-        const fixed = autoFixSceneSpec(next, { scenes: bundle.scenes });
-        next = fixed.spec;
-        fixes = fixed.fixes;
-        report = fixed.report;
+        // The single check path shared with the studio and the tool loop: logic graph repair + auto-fix + verify.
+        const checked = checkScene(next, { scenes: bundle.scenes });
+        next = checked.spec;
+        fixes = [...checked.notes, ...checked.fixes];
+        report = checked.report;
       }
       replaceScene(bundle, next);
       await saveProject(ctx, bundle);

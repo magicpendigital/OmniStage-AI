@@ -14,7 +14,7 @@ export const DEFAULT_MODELS: Record<ApiProviderId, string> = {
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
-function keyFor(cfg: ProviderConfig): string | undefined {
+export function keyFor(cfg: ProviderConfig): string | undefined {
   const fromHeader = cfg.apiKey?.trim();
   if (fromHeader) return fromHeader;
   switch (cfg.provider) {

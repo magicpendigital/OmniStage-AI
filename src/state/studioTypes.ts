@@ -10,6 +10,7 @@ import { DraftSummary, MemoryEntry, MemoryKind, ProjectMeta } from '../workspace
 import type { StoreApi } from 'zustand';
 import { voiceClipAssets } from '../audio/voices';
 import type { WritersRoomSession } from '../agent/writersRoom';
+import type { GameDesignSession } from '../agent/gameDesign';
 
 export interface FullPreviewState {
   order: string[];
@@ -275,6 +276,9 @@ export interface StudioState {
   /** Phase 11B: the open Writers' Room session (null = closed). Updated by the room modal as desks finish. */
   writersRoom: WritersRoomSession | null;
   setWritersRoom: (session: WritersRoomSession | null | ((current: WritersRoomSession | null) => WritersRoomSession | null)) => void;
+  /** Phase 4: the open game-design review (null = closed). */
+  gameDesignSession: GameDesignSession | null;
+  setGameDesignSession: (session: GameDesignSession | null | ((current: GameDesignSession | null) => GameDesignSession | null)) => void;
   appendStoryboardScene: (spec: SceneSpec, activate?: boolean) => void;
   linkStoryboardScenes: (storyboardId: string, activateFirst?: boolean) => void;
   advanceToNextScene: () => boolean;

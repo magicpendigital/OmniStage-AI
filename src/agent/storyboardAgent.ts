@@ -16,6 +16,7 @@ import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
 import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
 import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
+import { describeGameDesign, formatGameDesignSummary, lintGameDesign, writeGameDesign } from './gameDesign';
 import {
   ASSET_REGISTRY,
   createBlankSceneSpec,
@@ -28,6 +29,7 @@ import {
   DialogueLine,
   CameraMode,
   EngineType,
+  GameDesign,
   LightingPresetId,
   Node2D,
   SceneSpec,
@@ -74,6 +76,8 @@ export interface StoryboardGenerationCallbacks {
   onPlan?: (plan: StoryboardPlan, source: 'gemini' | 'local') => void;
   /** Phase 11A: the story editor finished (AI bible only; the offline generator has no bible). */
   onBible?: (bible: StoryBible, score: number) => void;
+  /** Phase 4: the game designer finished (AI design or one you approved; 2D game levels only). */
+  onDesign?: (design: GameDesign, score: number) => void;
   onProgress?: (progress: StoryboardProgress) => void;
   /** Called as soon as each scene is ready, in order, so the UI can show scenes appearing live. */
   onScene?: (scene: SceneSpec, index: number, source: 'gemini' | 'local') => void;
@@ -86,6 +90,9 @@ export interface StoryboardGenerationResult {
   /** Phase 11A: the bible every scene was written against (undefined offline and for game levels). */
   bible?: StoryBible;
   bibleScore?: number;
+  /** Phase 4: the game design every level was authored against (2D game levels with an AI or approved design). */
+  design?: GameDesign;
+  designScore?: number;
   assistantMessage: string;
   diffSummary: string[];
   source: 'gemini' | 'local' | 'mixed';
@@ -1068,12 +1075,20 @@ async function polishFilmShot(
   prompt: string,
   beat: StoryboardBeat,
   settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'aiFallbackEnabled' | 'aiFallbackOrder'>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** Phase 4: with a game design the round fixes intent-alignment findings of a game level instead of film craft. */
+  design?: GameDesign
 ): Promise<SceneSpec> {
   const check = (s: SceneSpec) => autoFixSceneSpec(s);
   const first = check(spec);
   if (mediaQualityPenalty(first.report) === 0 && first.report.ok) return spec;
-  const ask = `Polish this film shot so it plays like a real scene (do not change the story).
+  const ask = design
+    ? `Fix this game level so it contains what its game design promises (keep everything else; do not change the level's identity).
+Level: "${beat.title}" — ${beat.beat}
+${describeGameDesign(design, spec.sequence?.index)}
+Original request: "${prompt.slice(0, 400)}"
+${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`
+    : `Polish this film shot so it plays like a real scene (do not change the story).
 Shot: "${beat.title}" — ${beat.beat}${beat.script ? `\nScript:\n${beat.script}` : ''}
 Original request: "${prompt.slice(0, 400)}"
 ${describeReportForModel(first.report, 8, MEDIA_CRAFT_CODES)}`;
@@ -1108,8 +1123,9 @@ export async function generateStoryboardWithAgent(
   settings: Pick<SettingsConfig, 'geminiModel' | 'customSystemPrompt' | 'aiProvider' | 'aiModels' | 'aiApiKeys' | 'aiBaseUrl' | 'aiFallbackEnabled' | 'aiFallbackOrder' | 'directorQA' | 'directorQAThreshold'>,
   callbacks: StoryboardGenerationCallbacks = {},
   signal?: AbortSignal,
-  /** Phase 11B: a bible the Writers' Room already wrote and you approved: used as is, the story editor step is skipped. */
-  options: { bible?: StoryBible; bibleScore?: number } = {}
+  /** Phase 11B: a bible the Writers' Room already wrote and you approved: used as is, the story editor step is skipped.
+   *  Phase 4: a game design you approved (2D game levels): used as is, the game designer step is skipped. */
+  options: { bible?: StoryBible; bibleScore?: number; design?: GameDesign; designScore?: number } = {}
 ): Promise<StoryboardGenerationResult> {
   const storyboardId = uid('storyboard');
   const localPlan = buildLocalStoryboardPlan(prompt, intent);
@@ -1145,6 +1161,39 @@ export async function generateStoryboardWithAgent(
     }
   }
 
+  // STEP 0.6 (Phase 4): the game designer writes the game design (2D game levels). Only an AI or approved design is kept: an
+  // offline placeholder would not describe what the offline levels contain.
+  let design: GameDesign | undefined;
+  let designScore: number | undefined;
+  const designNotes: string[] = [];
+  if (intent.kind === 'game-levels' && intent.engineType === '2d') {
+    if (options.design) {
+      design = options.design;
+      designScore = options.designScore ?? lintGameDesign(design, intent.sceneCount).score;
+      designNotes.push('game design approved by you');
+      callbacks.onDesign?.(design, designScore);
+    } else {
+      callbacks.onProgress?.({ phase: 'planning', completed: 0, total: intent.sceneCount, label: 'Designing the game' });
+      const written = await writeGameDesign({
+        prompt,
+        intent,
+        ask: (req) =>
+          postJSON(
+            '/api/agent/game/design',
+            { prompt, intent, ...req, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+            signal,
+            aiHeaders(settings)
+          ),
+      });
+      designNotes.push(...written.notes);
+      if (written.source === 'ai') {
+        design = written.design;
+        designScore = written.lint.score;
+        callbacks.onDesign?.(design, designScore);
+      }
+    }
+  }
+
   // STEP 1: Plan
   callbacks.onProgress?.({ phase: 'planning', completed: 0, total: intent.sceneCount, label: 'Planning storyboard beats' });
   let plan = localPlan;
@@ -1152,7 +1201,7 @@ export async function generateStoryboardWithAgent(
   try {
     const data = await postJSON(
       '/api/agent/storyboard/plan',
-      { prompt, intent, bible, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
+      { prompt, intent, bible, design, model: settings.geminiModel, customSystemPrompt: settings.customSystemPrompt },
       signal,
       aiHeaders(settings)
     );
@@ -1195,6 +1244,7 @@ export async function generateStoryboardWithAgent(
             beat,
             previousScenes: scenes.map(summarizeSceneForContinuity),
             bible,
+            design,
             model: settings.geminiModel,
             customSystemPrompt: settings.customSystemPrompt,
           },
@@ -1230,6 +1280,18 @@ export async function generateStoryboardWithAgent(
       ...(beat.script ? { script: beat.script } : {}),
       ...(bible ? { bible } : {}),
     };
+    // Phase 4: an AI-authored level carries its game design; auto-fix repairs what is mechanical (health, HUD bar, timer, counters)
+    // and a patch round fixes what the design promised but the level lacks (intent-alignment findings). Offline levels do not
+    // carry it: the offline generator cannot honour a design, so every level would only collect warnings it cannot fix.
+    if (design && source === 'gemini' && spec.engineType === '2d' && spec.mode === 'game') {
+      spec.gameDesign = design;
+      spec = autoFixSceneSpec(spec).spec;
+      if (!signal?.aborted) {
+        callbacks.onProgress?.({ phase: 'generating', completed: i, total: plan.beats.length, label: `Checking ${beat.title} against the design` });
+        spec = await polishFilmShot(spec, prompt, beat, settings, signal, design);
+        spec.gameDesign = design;
+      }
+    }
     // Phase 11D: a scene at a bible location already built by an earlier scene reuses that set (only the camera changes).
     if (i > 0 && spec.engineType === '3d' && spec.mode === 'media') {
       const shared = shareLocationWorld(scenes, spec, bible);
@@ -1288,6 +1350,7 @@ export async function generateStoryboardWithAgent(
     plan,
     scenes,
     ...(bible ? { bible, bibleScore } : {}),
+    ...(design ? { design, designScore } : {}),
     source,
     assistantMessage: `${bible ? `Story: ${bible.logline}
 
@@ -1298,6 +1361,6 @@ export async function generateStoryboardWithAgent(
         ? 'Reaching each level\'s target score unlocks a "Next Level" button on the end-card.'
         : 'Scenes are linked in order — open the Scenes tab to review each shot.'
     }`,
-    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...bibleNotes.map((n) => `Story editor: ${n}`), ...editorNotes, ...cutNotes, ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
+    diffSummary: [...(bible ? formatBibleSummary(bible, bibleScore ?? 0) : []), ...(design ? formatGameDesignSummary(design, designScore ?? 0) : []), ...designNotes.map((n) => `Game designer: ${n}`), ...bibleNotes.map((n) => `Story editor: ${n}`), ...editorNotes, ...cutNotes, ...scenes.map((s, i) => `#${i + 1} ${s.title} (${s.engineType.toUpperCase()} · ${s.mode})`), ...directorNotes],
   };
 }

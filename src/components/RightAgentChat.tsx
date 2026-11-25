@@ -42,7 +42,9 @@ import { providerInfo, providerLabel } from '../agent/aiClient';
 import { describeDirectorReview, pickDirectorKeyframes } from '../agent/directorQA';
 import { createRoomSession } from '../agent/writersRoom';
 import { registerRoomProducer } from '../agent/roomBridge';
-import type { StoryBible } from '../types/scene.schema';
+import { createGameDesignSession } from '../agent/gameDesign';
+import { registerGameDesignProducer } from '../agent/gameDesignClient';
+import type { GameDesign, StoryBible } from '../types/scene.schema';
 
 type DrawerTab = 'chat' | 'json';
 
@@ -256,6 +258,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
 
   const setStoryboardJob = useStudioStore((s) => s.setStoryboardJob);
   const setWritersRoom = useStudioStore((s) => s.setWritersRoom);
+  const setGameDesignSession = useStudioStore((s) => s.setGameDesignSession);
   const appendStoryboardScene = useStudioStore((s) => s.appendStoryboardScene);
   const linkStoryboardScenes = useStudioStore((s) => s.linkStoryboardScenes);
   const setSceneSpec = useStudioStore((s) => s.setSceneSpec);
@@ -289,7 +292,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
     };
   };
 
-  const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent, approved?: { bible: StoryBible; score?: number }) => {
+  const runStoryboardGeneration = async (query: string, storyboardIntent: StoryboardIntent, approved?: { bible?: StoryBible; score?: number; design?: GameDesign; designScore?: number }) => {
     setAgentThinking(true);
     let job: StoryboardJobState = {
       storyboardId: 'pending',
@@ -325,7 +328,7 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           appendStoryboardScene(scene, true);
           patchJob({ completed: index + 1 });
         },
-      }, undefined, approved ? { bible: approved.bible, bibleScore: approved.score } : {});
+      }, undefined, approved ? { bible: approved.bible, bibleScore: approved.score, design: approved.design, designScore: approved.designScore } : {});
       linkStoryboardScenes(result.storyboardId, true);
       patchJob({ status: 'done', completed: result.scenes.length, currentLabel: 'Storyboard ready' });
       addChatMessage({
@@ -361,6 +364,13 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
       void produceRef.current(session.prompt, intent, bible ? { bible, score: session.score } : undefined);
     });
     return () => registerRoomProducer(null);
+  }, []);
+  useEffect(() => {
+    registerGameDesignProducer((session, design) => {
+      const intent: StoryboardIntent = { sceneCount: session.intent.sceneCount, kind: session.intent.kind, engineType: session.intent.engineType };
+      void produceRef.current(session.prompt, intent, { design, designScore: session.score });
+    });
+    return () => registerGameDesignProducer(null);
   }, []);
 
   const handleSendPrompt = async (textToUse?: string) => {
@@ -426,6 +436,17 @@ export const RightAgentChat: React.FC<{ hidden?: boolean }> = ({ hidden }) => {
           id: `msg-a-${Date.now()}`,
           role: 'assistant',
           content: 'The Writers’ Room is open: your story team will draft the film, the quality team will check it, and you can edit anything before the scenes are produced.',
+          timestamp: now(),
+        });
+        return;
+      }
+      // Phase 4: 2D game levels open the game-design review first so the design is read, edited and approved before any level is made.
+      if (storyboardIntent.kind === 'game-levels' && storyboardIntent.engineType === '2d' && settings.gameDesignReview !== false) {
+        setGameDesignSession(createGameDesignSession({ prompt: query, intent: storyboardIntent }));
+        addChatMessage({
+          id: `msg-a-${Date.now()}`,
+          role: 'assistant',
+          content: 'The game designer is writing the design first (genre, core loop, win / lose, what each level teaches). Review and edit it, then press Build the game.',
           timestamp: now(),
         });
         return;

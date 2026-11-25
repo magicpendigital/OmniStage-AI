@@ -29,13 +29,23 @@ claude mcp add omnistage -- npx tsx mcp/server.ts --project projects/omnistage.s
 | `omnistage_director_skills` | Returns the Director Skill rules matching a brief (same skills the in-app director uses). |
 | `omnistage_list_scenes` / `omnistage_get_scene` | Read the project. |
 | `omnistage_create_scene` | Blank `2d` / `3d` scene, `game` or `media`. |
-| `omnistage_apply_patch` | JSON Merge Patch and/or JSON Patch ops → verify → deterministic auto-fix → save. Returns remaining issues. |
+| `omnistage_get_scene_slice` | Reads only the sections you ask for (`summary`, `actors`, `nodes2D`, `logic`, `world`, `rules`, `hud`, `variables`, `audio`, `camera`, `vfx`, `other`), optionally narrowed by `ids`. Capped at ~6000 characters; use `omnistage_get_scene` for the whole scene. |
+| `omnistage_search_assets` | Finds real asset ids: 3D models with their clips, 2D presets, particle and SFX presets (`kind` filter). |
+| `omnistage_apply_patch` | JSON Merge Patch and/or JSON Patch ops → shared check (logic graph repair + auto-fix + verify, the same path as the studio) → save. Returns remaining issues. |
 | `omnistage_verify` | Verifier only (no changes). |
 | `omnistage_set_active_scene`, `omnistage_link_scenes` | Storyboard order and level progression (`sequence.nextSceneId`). |
 | `omnistage_export_playable` | Offline single-file HTML (Three.js inlined) + size budget report for `meta` / `tiktok` / `universal` / `telegram` / `itch`. |
 | `omnistage_export_captions` | WebVTT / SRT for a scene's captions. |
 
 Calls are serialised, and project writes are atomic (temp file + rename). Scene ids can't be changed through a patch.
+
+### Shared tool layer
+
+`omnistage_get_scene_slice`, `omnistage_search_assets` and the check behind `omnistage_apply_patch` come from the same pure module the studio uses (`src/agent/tools/sceneTools.ts`): `checkScene` = recipes hook → `finalizeLogicGraph` → `autoFixSceneSpec` → verifier. The studio's native tool-use edit mode (Settings → AI → "Tool use", Anthropic API only, opt-in, falls back to JSON patches) exposes the same tools to the model: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `finish`.
+
+Differences: over MCP a patch is always saved and its report returned (the calling agent decides what to do); in the studio tool loop a patch that makes verification worse is reverted.
+
+Deferred (they need machinery that does not exist yet, so there are no stub tools): `generate_asset` (needs the creator's cost confirmation, as in the Meshy panel), `playtest` (deterministic bot, roadmap E), `screenshot`, `add_from_kit` (genre kits, roadmap C).
 
 ## Example agent loop
 

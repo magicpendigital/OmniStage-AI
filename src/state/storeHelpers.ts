@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: SettingsConfig = {
   generationKeys: {},
   directorQA: true,
   writersRoomReview: true,
+  gameDesignReview: true,
   directorQAThreshold: 70,
   elevenLabsApiKey: '',
   elevenLabsModel: '',

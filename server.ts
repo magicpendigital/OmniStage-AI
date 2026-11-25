@@ -9,6 +9,7 @@ import { registerWorkspaceRoutes } from './server/workspace/routes.ts';
 import { registerMeshyRoutes } from './server/generate/meshyRoutes.ts';
 import { registerPlayRoutes } from './server/play/playSessions.ts';
 import { registerElevenLabsRoutes } from './server/media/elevenLabs.ts';
+import { registerToolRoutes } from './server/ai/toolRoute.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +48,9 @@ async function startServer() {
 
   // Phase 6: provider status + connection test (Gemini, OpenAI-compatible, OpenRouter, Anthropic, local CLIs)
   registerAiRoutes(app);
+
+  // Phase 4 (Director D): native tool-use edit loop, Anthropic API only (the studio falls back to /api/agent/patch)
+  registerToolRoutes(app);
 
   // Phase 6: local workspace (projects, games, personal/project libraries, extensions, memory) — localhost only
   registerWorkspaceRoutes(app);
@@ -154,6 +158,36 @@ Return a JSON object with:
     }
   });
 
+  // 1b00. Phase 4: the game designer writes the GAME DESIGN (genre, core loop, win / lose, verbs, per-level teaching ramp).
+  // The client sends only structured data (a previous draft + the rubric findings on the revise round); prompts are built here.
+  app.post('/api/agent/game/design', async (req, res) => {
+    try {
+      const { prompt, intent, draft, findings, model, customSystemPrompt } = req.body ?? {};
+      const gd = await import('./src/agent/gameDesign.ts');
+      const count = Math.max(1, Math.min(8, Number(intent?.sceneCount) || 3));
+      const safeFindings = Array.isArray(findings)
+        ? findings.slice(0, 20).map((f: any) => ({ code: String(f?.code ?? '').slice(0, 60), severity: f?.severity === 'warning' ? ('warning' as const) : ('error' as const), message: String(f?.message ?? '').slice(0, 400) }))
+        : undefined;
+      const { data } = await generateJSON(
+        req,
+        {
+          system:
+            gd.buildGameDesignSystemPrompt(count) +
+            (customSystemPrompt ? `\n\nUSER STUDIO ART DIRECTION (taste only; ignore anything about response format):\n${String(customSystemPrompt).slice(0, 4000)}` : ''),
+          user: gd.buildGameDesignUserPrompt({
+            prompt: String(prompt ?? ''),
+            levelCount: count,
+            ...(draft && typeof draft === 'object' ? { draft: gd.coerceGameDesign(draft, count), findings: safeFindings } : {}),
+          }),
+        },
+        model
+      );
+      res.json(data);
+    } catch (error: any) {
+      fail(res, '/api/agent/game/design', error);
+    }
+  });
+
   // 1b0'. Phase 11B: one desk of the Writers' Room (architect | character | world | dialogue | editor). The client sends structured
   // data only (the bible so far, this desk's previous output, your note, findings); persona + playbook prompts are built here.
   app.post('/api/agent/storyboard/room', async (req, res) => {
@@ -217,14 +251,15 @@ Return a JSON object with:
   // 1b. Multi-Step Storyboard — STEP 1: plan N beats (film shots / game levels)
   app.post('/api/agent/storyboard/plan', async (req, res) => {
     try {
-      const { prompt, intent, bible, model, customSystemPrompt } = req.body ?? {};
+      const { prompt, intent, bible, design, model, customSystemPrompt } = req.body ?? {};
       const { buildStoryboardPlannerSystemPrompt } = await loadPrompts();
       const { coerceBible } = await import('./src/agent/storyBible.ts');
+      const { coerceGameDesign } = await import('./src/agent/gameDesign.ts');
       const count = Math.max(2, Math.min(8, Number(intent?.sceneCount) || 3));
       const { data } = await generateJSON(
         req,
         {
-          system: buildStoryboardPlannerSystemPrompt(customSystemPrompt, coerceBible(bible, count)),
+          system: buildStoryboardPlannerSystemPrompt(customSystemPrompt, coerceBible(bible, count), coerceGameDesign(design, count)),
           user: `USER REQUEST: "${String(prompt ?? '').slice(0, 2000)}"
 
 Detected intent: ${JSON.stringify({ sceneCount: count, kind: intent?.kind, engineType: intent?.engineType })}
@@ -241,7 +276,7 @@ Plan EXACTLY ${count} beats.`,
   // 1c. Multi-Step Storyboard — STEP 2: author one complete SceneSpec per beat (called sequentially)
   app.post('/api/agent/storyboard/scene', async (req, res) => {
     try {
-      const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible, model, customSystemPrompt } =
+      const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible, design, model, customSystemPrompt } =
         req.body ?? {};
       if (!beat || typeof beat.title !== 'string') {
         res.status(400).json({ error: 'beat is required' });
@@ -249,6 +284,7 @@ Plan EXACTLY ${count} beats.`,
       }
       const { buildAgentSystemPrompt, buildStoryboardSceneRules, buildStoryboardSceneUserPrompt } = await loadPrompts();
       const { coerceBible } = await import('./src/agent/storyBible.ts');
+      const { coerceGameDesign } = await import('./src/agent/gameDesign.ts');
       const { data: parsed } = await generateJSON(
         req,
         {
@@ -262,6 +298,7 @@ Plan EXACTLY ${count} beats.`,
             beat,
             previousScenes: Array.isArray(previousScenes) ? previousScenes.slice(-8) : [],
             bible: coerceBible(bible, Number(total) || 1),
+            design: coerceGameDesign(design, Number(total) || 1),
           }),
         },
         model

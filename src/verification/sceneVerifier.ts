@@ -33,6 +33,7 @@ import { nodeBox2D } from '../runtime/physics/nodeBox';
 import { validMover } from '../runtime/physics/mover';
 import { overlaps } from '../runtime/physics/collide2d';
 import { resolveWorld, VIEW_H, VIEW_W, WORLD_LIMITS } from '../runtime/physics/camera2d';
+import { fixIntent, INTENT_CODES, intentIssues } from './intentAlignment';
 import { healthMax, HUD_ANCHORS, HUD_KINDS, HUD_SOURCES, MAX_HUD, MAX_VARIABLES, resolveVariables, VARIABLE_ID, isPlayerEntity, COMPARE_OPS } from '../runtime/game/state';
 
 // --- Phase 10A: film craft (media 3D) ---
@@ -40,7 +41,7 @@ export const SHOT_TYPES = ['establishing', 'wide', 'medium', 'close-up', 'over-s
 export const SCENE_TRANSITIONS = ['cut', 'fade', 'crossfade', 'fade-white', 'wipe', 'whip-pan', 'iris'];
 const STAGE_3D = 12; // performances stay within ±12 m
 /** Media craft hints: warnings the AI patch loop also tries to resolve (see `mediaQualityPenalty`). */
-export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage', 'media.silent', 'script.uncovered', 'script.unperformable'];
+export const MEDIA_CRAFT_CODES = ['media.hero-static', 'media.single-shot', 'media.bare-stage', 'media.silent', 'script.uncovered', 'script.unperformable', ...INTENT_CODES];
 export const WORLD_FEATURE_TYPES = ['waterfall', 'river', 'pond'];
 /** Water landmarks must leave the acting area (and the cameras around it) free. */
 export const FEATURE_STAGE_CLEARANCE = 6;
@@ -1137,6 +1138,7 @@ export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): Veri
   verifyWorldFeatures(spec, issues);
   verifyStateMachines(spec, issues);
   verifyGameState(spec, issues);
+  for (const i of intentIssues(spec)) issues.push(issue(i.code, i.severity, i.message, i.fixable, i.targetId));
   if (opts.target === 'mobile') verifyMobile(spec, issues, opts.deviceTier);
   const errors = issues.filter((i) => i.severity === 'error').length;
   return { ok: errors === 0, errors, warnings: issues.length - errors, issues };
@@ -1495,6 +1497,11 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case 'spawn.inside-solid':
     case 'projectile.invalid':
       return fixGameState(spec, i);
+    case 'intent.health-missing':
+    case 'intent.hud-health-missing':
+    case 'intent.timer-missing':
+    case 'intent.variable-missing':
+      return fixIntent(spec, i);
     case 'rules.target-unreachable': {
       const values =
         spec.engineType === '2d'

@@ -89,6 +89,8 @@ export const createAgentSlice = (set: StudioSet, get: StudioGet): StudioSlice =>
 
   setWritersRoom: (next) => set((state) => ({ writersRoom: typeof next === 'function' ? next(state.writersRoom) : next })),
 
+  setGameDesignSession: (next) => set((state) => ({ gameDesignSession: typeof next === 'function' ? next(state.gameDesignSession) : next })),
+
   appendStoryboardScene: (spec, activate = true) => {
     const cloned = cloneSceneSpec(spec);
     set((state) => {

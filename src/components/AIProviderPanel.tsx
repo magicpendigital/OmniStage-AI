@@ -214,6 +214,20 @@ export const AIProviderPanel: React.FC = () => {
         </div>
       </div>
 
+      <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2" data-testid="game-design-toggle">
+        <div className="flex items-center justify-between">
+          <label className="font-semibold text-slate-200">Game design</label>
+          <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300">
+            <input type="checkbox" checked={settings.gameDesignReview !== false} onChange={(e) => updateSettings({ gameDesignReview: e.target.checked })} />
+            Review the design first
+          </label>
+        </div>
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          For multi-level 2D games, a game designer writes the design (genre, core loop, win / lose, one new verb per level) before any level exists.
+          Every level is then written and checked against it. Turn this off to build levels straight away.
+        </p>
+      </div>
+
       <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2" data-testid="writers-room-toggle">
         <div className="flex items-center justify-between">
           <label className="font-semibold text-slate-200">Writers’ Room</label>

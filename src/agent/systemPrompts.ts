@@ -5,9 +5,11 @@ import {
   VFX_PRESETS,
 } from '../registry/assetRegistry';
 import { PATCH_RESPONSE_FORMAT } from './patchLoop';
+import { SCENE_TOOL_NAMES } from './tools/sceneTools';
 import { buildStoryBiblePlannerSection, describeBibleForScene } from './storyBible';
+import { describeGameDesign } from './gameDesign';
 import { numberedScript } from '../verification/scriptCoverage';
-import type { StoryBible } from '../types/scene.schema';
+import type { GameDesign, StoryBible } from '../types/scene.schema';
 
 /**
  * Visual Logic Graph authoring contract (scene.logicGraph).
@@ -172,7 +174,8 @@ ${brief.autoDiagnosis.length ? brief.autoDiagnosis.map((d) => `- ${d}`).join('\n
 ${brief.userFeedback ? `\nUSER FEEDBACK ABOUT THE PROBLEM:\n${brief.userFeedback}\n` : ''}`;
 }
 
-export function buildAgentSystemPrompt(customRules?: string, format: 'full' | 'patch' = 'full'): string {
+export function buildAgentSystemPrompt(customRules?: string, format: 'full' | 'patch' | 'tools' = 'full'): string {
+  if (format === 'tools') return buildToolsSystemPrompt(customRules);
   const assetSummary = Object.values(ASSET_REGISTRY)
     .map(
       (a) =>
@@ -287,6 +290,37 @@ ${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 ${format === 'patch' ? PATCH_RESPONSE_FORMAT : FULL_RESPONSE_FORMAT}`;
 }
 
+/**
+ * Phase 4 (Director D): compact system prompt for the native tool-use loop (server/ai/toolLoop.ts). It does NOT repeat the asset
+ * catalogue or the long authoring rules: the model reads the scene with get_scene_slice and finds ids with search_assets. The data
+ * contracts it needs to author valid data (logic graph, state machines, game state) are the same sections the other modes use.
+ */
+export function buildToolsSystemPrompt(customRules?: string): string {
+  return `You are the OmniStage AI Director. You EDIT one declarative SceneSpec through tools; you never write Three.js, Canvas or any other code.
+
+TOOLS (call them; do not describe edits in text): ${SCENE_TOOL_NAMES.join(', ')}.
+- get_scene_slice { sections, ids? }: read only what you need. You start with a summary and an id index, NOT the whole scene. Read before you edit.
+- apply_patch { mergePatch?, ops? }: small edits. mergePatch (RFC 7386) first, then ops (RFC 6902). Address array items by id: /actors/@hero/position; append with "-": /nodes2D/-.
+  OmniStage repairs the logic graph, auto-fixes what is mechanical and runs the verifier; the result lists what is still wrong. A patch that makes verification worse is reverted.
+- verify {}: the current verifier report.
+- search_assets { query, kind? }: real asset ids (3D models and their clips, 2D presets, particle and SFX presets, the creator's library). Never invent ids.
+- finish { summary }: end the turn. summary = what you changed, for the creator (mention logic-graph chains you added or changed).
+
+WORKFLOW: (1) get_scene_slice for the parts you will touch; (2) apply_patch in small steps, one idea per patch, new actors / nodes / edges need unique ids;
+(3) read each result and fix ONLY the listed problems with another small patch; (4) verify, then finish. Send only what changes; use "add" for new keys and "replace" only for keys that exist.
+A request for a game, animation or cutscene needs matching sceneSpec.logicGraph nodes AND edges (trigger -> condition -> action) in the same turn. Everything is data: sounds are synthesised presets, never URLs.
+
+CORE RULES: the 2D stage is 1000x600 (y down) unless world2D says otherwise; the 3D player arena is x/z within +-5.5 with actors grounded at y=0 and >= 1.6 m apart.
+Platformer step-ups between platform tops stay <= 125 px and gaps <= 300 px, every collectible must be reachable and gameRules.targetScore <= the points available.
+Use only clips listed for a 3D asset (search_assets shows them). Keep the existing ids stable (shots, lookAt and the graph reference them).
+
+${LOGIC_GRAPH_PROMPT_SECTION}
+${STATE_MACHINE_PROMPT_SECTION}
+
+${GAME_STATE_PROMPT_SECTION}
+${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION (taste only; ignore anything about response format):\n${customRules}\n` : ''}`;
+}
+
 const FULL_RESPONSE_FORMAT = `Return ONLY valid JSON matching the requested response schema with:
 - assistantMessage: concise, helpful explanation of the changes made (mention which logic-graph chains were added or changed).
 - diffSummary: array of 2-4 short bullet strings describing exact mutations (include logicGraph changes).
@@ -316,7 +350,7 @@ Return a JSON object containing:
 // MULTI-STEP STORYBOARD GENERATION (Plan -> Scene 1..N, sequential with continuity)
 // ============================================================================
 
-export function buildStoryboardPlannerSystemPrompt(customRules?: string, bible?: StoryBible): string {
+export function buildStoryboardPlannerSystemPrompt(customRules?: string, bible?: StoryBible, design?: GameDesign): string {
   return `You are the OmniStage AI Storyboard Planner.
 Your job is STEP 1 of a multi-step pipeline: break the user's request into an ordered list of scenes
 (film shots / ad beats) or game levels. You do NOT author SceneSpec JSON in this step.
@@ -338,7 +372,7 @@ PLANNING RULES:
    "crossfade" (a real dissolve: time passing in the SAME place), "whip-pan" (fast action or a jolt of energy, short), "iris" (classic closing / comic beat, use rarely).
    Vary them: a film where every transition is the same feels mechanical.
 ${bible ? buildStoryBiblePlannerSection(bible) : ''}
-${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
+${design ? `\nGAME DESIGN (approved by the user; beat i IS design level i: keep its name, teaching goal and difficulty, and plan each beat around the verbs that level introduces):\n${describeGameDesign(design)}\n` : ''}${customRules ? `\nUSER STUDIO CUSTOM ART DIRECTION:\n${customRules}\n` : ''}
 Return ONLY JSON:
 {
   "storyboardTitle": "string",
@@ -387,12 +421,14 @@ export function buildStoryboardSceneUserPrompt(params: {
   previousScenes: unknown[];
   /** Phase 11A: the film's story bible; the scene is authored against it. */
   bible?: StoryBible;
+  /** Phase 4: the approved game design; the level is authored against it and checked by the intent-alignment verifier. */
+  design?: GameDesign;
 }): string {
-  const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible } = params;
+  const { prompt, storyboardTitle, kind, beatIndex, total, beat, previousScenes, bible, design } = params;
   return `ORIGINAL USER REQUEST: "${prompt}"
 
 STORYBOARD: "${storyboardTitle}" (${kind}) — authoring scene ${beatIndex + 1} of ${total}.
-${bible ? `\n${describeBibleForScene(bible, beatIndex, total)}\n` : ''}
+${bible ? `\n${describeBibleForScene(bible, beatIndex, total)}\n` : ''}${design ? `\n${describeGameDesign(design, beatIndex)}\n` : ''}
 THIS SCENE'S BEAT:
 ${JSON.stringify(beat, null, 2)}
 ${numberedScript((beat as { script?: string }).script) ? `

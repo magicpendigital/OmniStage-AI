@@ -953,6 +953,49 @@ export interface GameRule {
   instructions: string;
 }
 
+// ----------------------------------------------------------------------------
+// Phase 4 — Game design document (GDD): the "game designer" step that runs BEFORE the level planner
+// ----------------------------------------------------------------------------
+
+/** Game shapes the 2D engine can really run (see GAME_GENRES in src/agent/gameDesign.ts). */
+export type GameGenre = 'platformer' | 'survival' | 'turret-dodge' | 'key-hunt';
+
+/** Player verbs the engine supports today (no player shooting yet). */
+export type GameVerb = 'jump' | 'collect' | 'avoid-hazards' | 'dodge-projectiles' | 'unlock' | 'survive';
+
+export interface GameDesignLevel {
+  name: string;
+  /** The one new thing this level teaches the player. */
+  teaches: string;
+  /** Verbs this level introduces (teach one at a time). */
+  introduces: GameVerb[];
+  /** Verbs present in this level (cumulative: once taught, a verb stays). */
+  uses: GameVerb[];
+  /** 1 (easy) .. 5 (hard). */
+  difficulty: number;
+}
+
+/** The structured design a game is built against; attached to every level scene as `sceneSpec.gameDesign`. */
+export interface GameDesign {
+  title: string;
+  genre: GameGenre;
+  /** One sentence: what the player does and why it is fun. */
+  pitch: string;
+  /** What the player repeats every few seconds. */
+  coreLoop: string;
+  /** Player-facing goal. */
+  goal: string;
+  win: 'collect-all' | 'score-threshold' | 'survive-timer' | 'variable-threshold';
+  lose: 'health' | 'hazard-reset' | 'timer';
+  mechanics: GameVerb[];
+  usesHealth: boolean;
+  /** Needed for `survive-timer` / `lose: 'timer'`. */
+  timeLimitSeconds?: number;
+  /** Counters the design needs (keys, ammo); declared as `sceneSpec.variables`. */
+  variables?: { id: string; label: string }[];
+  levels: GameDesignLevel[];
+}
+
 export interface TimelineTrack {
   id: string;
   label: string;
@@ -1152,6 +1195,8 @@ export interface SceneSpec {
   variables?: GameVariable[];
   /** Phase 3: declarative in-game HUD. */
   hud?: HudElement[];
+  /** Phase 4: the game design this scene was authored against (intent-alignment verifier + director context). */
+  gameDesign?: GameDesign;
   vfx: VFXNode[];
   marketingOverlay: MarketingOverlayConfig;
   gameRules: GameRule;
@@ -1326,8 +1371,9 @@ export interface SettingsConfig {
   /**
    * Phase 7C: how the AI director edits scenes. 'patch' (default) = small JSON Patch edits in a verify loop;
    * 'full' = the model rewrites the whole SceneSpec (for models that cannot follow the patch format).
+   * 'tools' = native tool use (Anthropic API only, opt-in; falls back to 'patch' for every other connection or on failure).
    */
-  aiEditMode?: 'patch' | 'full';
+  aiEditMode?: 'patch' | 'full' | 'tools';
   /** Phase 6: built-in director skills the user switched off. */
   disabledSkills: string[];
   geminiModel: 'gemini-3.8-flash' | 'gemini-3.1-flash-lite' | 'gemini-flash-latest';
@@ -1342,6 +1388,8 @@ export interface SettingsConfig {
   directorQA?: boolean;
   /** Phase 11B: open the Writers' Room (read, edit and approve the story) before a film or ad is produced. Default on. */
   writersRoomReview?: boolean;
+  /** Phase 4: open the game-design review (read, edit and approve the design) before 2D game levels are produced. Default on. */
+  gameDesignReview?: boolean;
   directorQAThreshold?: number;
   /**
    * Phase 10D: paid production tools, bring your own key. Kept in this browser's localStorage, sent only to the local

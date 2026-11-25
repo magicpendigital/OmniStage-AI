@@ -119,11 +119,14 @@ export const SettingsModal: React.FC = () => {
                 <label className="block font-semibold text-slate-200">How the AI edits your scene</label>
                 <select
                   value={settings.aiEditMode || 'patch'}
-                  onChange={(e) => updateSettings({ aiEditMode: e.target.value as 'patch' | 'full' })}
+                  onChange={(e) => updateSettings({ aiEditMode: e.target.value as 'patch' | 'full' | 'tools' })}
                   className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 focus:outline-none focus:border-cyan-500"
                 >
                   <option value="patch">Small edits, checked in a loop (recommended)</option>
                   <option value="full">Rewrite the whole scene each time</option>
+                  <option value="tools" title="Experimental, opt-in. The AI reads and edits your scene with tools instead of returning JSON patches. Needs the Anthropic API as the main AI connection; every other connection (and any failure) uses small edits instead. Not yet checked against a live Anthropic account.">
+                    Tool use (Anthropic API only; falls back to patches)
+                  </option>
                 </select>
                 <p className="text-[11px] text-slate-400">
                   Small edits are faster and never drop parts of your scene. OmniStage checks each edit and asks the AI to fix

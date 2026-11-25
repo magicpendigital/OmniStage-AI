@@ -184,7 +184,7 @@ Prompt ─► Intake (làm rõ, ≤2 câu) ─► GameDesign (GDD-lite có kiể
 | **1 — Không gian làm việc** | Properties dock; Play Test live; gom menu thanh trên; màn hình bắt đầu + template; Problems panel | M | Giải quyết cảm giác "khó dùng" |
 | **2 — Engine E1** | Bộ giải vật lý tất định, camera 2D/3D, tile/platform, character controller | L | Mở khoá mọi thể loại |
 | **3 — Engine E2** | Biến, máu, spawn, HUD khai báo, input, pathfinding | L | Đã làm (2D): biến, máu/sát thương, spawner/đạn/prefab, HUD khai báo, node logic mới, luật thắng theo biến. Chưa làm: pathfinding/LOS, input remap/joystick ảo, wave, menu/pause/hội thoại HUD, đạn & sát thương chạm 3D |
-| **4 — Director B + D** | GameDesign + tầng tool dùng chung + vòng tool-use | L | Song song được với 3 |
+| **4 — Director B + D** | GameDesign + tầng tool dùng chung + vòng tool-use | L | Đã làm: GameDesign (lint/revise/offline, màn review, verifier intent-alignment, nối vào planner + từng màn + context chỉnh sửa); tầng tool dùng chung cho app + MCP (`checkScene`, 5 tool), vòng tool-use Anthropic (opt-in `aiEditMode: 'tools'`, chưa chạy thật với API, fallback patch loop). Chưa làm: playtest bot, vision/eval cho game, genre kit (`add_from_kit`), tool `generate_asset` / `screenshot` / `playtest`, role profile, log lỗi→sửa thành memory, tách prompt thành module, quyền Ask/Plan/Agent |
 | **5 — Director C + E + F** | Bộ khung thể loại, playtest bot, eval game/ad | L | Cần 2–3 |
 | **6 — Video E3, timeline** | NLE đa track, grading, DOF, lip-sync | L | Độc lập với game |
 
