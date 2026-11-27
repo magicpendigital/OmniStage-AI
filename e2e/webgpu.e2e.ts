@@ -5,6 +5,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { openExport, shaderFxScene, template } from './exportFixture';
+import type { SceneSpec } from '../src/types/scene.schema';
 import { applyBiomeToScene } from '../src/runtime/biomes';
 import { PLAYER_RUNTIME_WEBGPU } from '../src/exporter/generated/playerRuntimeWebgpu';
 
@@ -62,6 +63,35 @@ test('WebGPU Player: ultra quality (node bloom) renders and actors animate', asy
   expect(px.std).toBeGreaterThan(8);
   expect((await p.view3d()).backend).toBe('webgpu');
   expect(p.errors).toEqual([]);
+});
+
+test('WebGPU Player: depth of field really blurs (out of focus loses detail, the focal plane keeps it)', async ({ page }) => {
+  const shoot = async (grade?: SceneSpec['grade']) => {
+    const spec = shaderFxScene();
+    for (const a of spec.actors) delete a.shaderEffect;
+    if (grade) spec.grade = grade;
+    const pg = await page.context().newPage();
+    const p = await openExport(pg, spec, { quality: 'high', renderer: 'webgpu', playerRuntimeSource: PLAYER_RUNTIME_WEBGPU });
+    if ((await p.backend()) !== 'webgpu') {
+      await pg.close();
+      return null;
+    }
+    await pg.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
+    await p.waitAssets();
+    await p.step(10, 0.05);
+    const e = await p.edgeEnergy([0.12, 0.28, 0.4, 0.72]);
+    expect(p.errors).toEqual([]);
+    await pg.close();
+    return e;
+  };
+  const plain = await shoot();
+  test.skip(plain === null, 'no WebGPU adapter');
+  const blurred = await shoot({ dof: 1, focusDistance: 0.6 });
+  expect(blurred!, 'focusing 0.6 m from the lens blurs the box').toBeLessThan(plain! * 0.5);
+  const focused = await shoot({ dof: 1 });
+  // (the GPU reading wobbles between runs, ~190..275 of a plain 350; the broken pipeline read 40, so 0.4 still separates them)
+  expect(focused!, 'auto focus keeps what is in the focal plane of the shot sharp').toBeGreaterThan(plain! * 0.4);
+  expect(focused!, '... and sharper than the blurred frame').toBeGreaterThan(blurred! * 1.5);
 });
 
 test('WebGPU Player: the colour grade really applies (noir is black and white, a vignette darkens the corners)', async ({ page }) => {

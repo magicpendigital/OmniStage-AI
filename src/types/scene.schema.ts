@@ -1005,7 +1005,7 @@ export interface GameDesign {
 // ----------------------------------------------------------------------------
 
 /** Named looks (see GRADE_PRESETS in src/runtime/colorGrade.ts); the numeric fields below override the preset. */
-export type GradePreset = 'neutral' | 'warm' | 'cool' | 'noir' | 'vivid' | 'faded' | 'teal-orange' | 'sepia';
+export type GradePreset = 'neutral' | 'warm' | 'cool' | 'noir' | 'vivid' | 'faded' | 'teal-orange' | 'sepia' | 'portrait';
 
 export interface ColorGrade {
   preset?: GradePreset;
@@ -1031,6 +1031,10 @@ export interface ColorGrade {
   shadows?: string;
   /** #rrggbb */
   highlights?: string;
+  /** Phase 6B depth of field: 0 (everything sharp) .. 1 (very shallow). Out-of-focus areas blur with a bokeh disc; the focal plane follows the shot. */
+  dof?: number;
+  /** Metres from the camera that stay sharp. 0 / omitted = automatic: the point the camera looks at (the shot's subject). */
+  focusDistance?: number;
 }
 
 export interface TimelineTrack {

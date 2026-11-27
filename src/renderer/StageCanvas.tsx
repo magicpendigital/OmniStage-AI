@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { configureRenderer } from '../render3d/stage3d';
 import { createBloom } from '../render3d/postfx';
 import { grainSeed, resolveGrade } from '../runtime/colorGrade';
+import { focusDistanceFor } from '../runtime/lens';
 import { useStudioStore } from '../state/useStudioStore';
 import { SceneDirector } from './SceneDirector';
 
@@ -27,7 +28,7 @@ const isSoftwareGl = (() => {
  * colour grade (Phase 6, any quality except draft) — the same passes the Player runs.
  */
 function StudioPost({ bloom }: { bloom: boolean }) {
-  const { gl, scene, camera, size, viewport } = useThree();
+  const { gl, scene, camera, size, viewport, controls } = useThree();
   const fx = React.useMemo(() => createBloom(gl, scene, camera, { enabled: bloom }), [gl, scene, bloom]); // eslint-disable-line react-hooks/exhaustive-deps
   const gradeSpec = useStudioStore((s) => s.sceneSpec.grade);
   const grade = React.useMemo(() => resolveGrade(gradeSpec), [gradeSpec]);
@@ -35,7 +36,15 @@ function StudioPost({ bloom }: { bloom: boolean }) {
   React.useEffect(() => fx.setSize(size.width, size.height, viewport.dpr), [fx, size.width, size.height, viewport.dpr]);
   useFrame((_, delta) => {
     fx.setCamera(camera);
-    fx.setGrade(grade, grainSeed(useStudioStore.getState().currentTime));
+    const state = useStudioStore.getState();
+    fx.setGrade(grade, grainSeed(state.currentTime));
+    if (grade && grade.dof > 0) {
+      // Phase 6B: focus where the camera is aimed (the orbit target in the editor, the shot's subject while previewing).
+      const aim = (controls as { target?: { x: number; y: number; z: number } } | null)?.target;
+      // (SceneDirector only drives the camera from the shot while playing or in the full preview; paused, the orbit camera rules.)
+      const shotCamera = state.isPlaying || !!state.fullPreview;
+      fx.setFocus(focusDistanceFor(state.sceneSpec, state.currentTime, camera.position.toArray() as [number, number, number], aim ? [aim.x, aim.y, aim.z] : undefined, shotCamera));
+    }
     fx.render(delta);
   }, 1);
   return null;

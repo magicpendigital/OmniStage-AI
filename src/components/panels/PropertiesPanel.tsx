@@ -930,6 +930,8 @@ const GradeProps: React.FC = () => {
               fade: undefined,
               vignette: undefined,
               grain: undefined,
+              dof: undefined,
+              focusDistance: undefined,
               split: undefined,
               shadows: undefined,
               highlights: undefined,
@@ -950,6 +952,8 @@ const GradeProps: React.FC = () => {
       {num('fade', 'Fade', 0.02)}
       {num('vignette', 'Vignette', 0.05)}
       {num('grain', 'Film grain', 0.05)}
+      {num('dof', 'Depth of field', 0.05)}
+      {(grade?.dof ?? base.dof) > 0 && num('focusDistance', 'Focus (m, 0 = auto)', 0.5)}
       {grade && (
         <Row label="Reset">
           <button className="btn sm" aria-label="Remove colour grade" onClick={() => update(null)}>

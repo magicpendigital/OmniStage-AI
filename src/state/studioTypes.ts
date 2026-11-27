@@ -3,6 +3,7 @@
  */
 import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, GameVariable, HudElement, MarketingOverlayConfig } from '../types/scene.schema';
 import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
+import type { ClipSource } from '../runtime/timelineLanes';
 import { ActorNode, AspectRatioPreset, Camera2DSpec, ColorGrade, World2DSpec, CameraMode, CameraRig, CaptionCue, ChatMessage, DirectorSkill, EngineType, EnvironmentConfig, ExecutionLogEntry, LightingPresetId, LogicEdge, LogicNode, Node2D, Particle2DPreset, ScatterObjectType, SceneAudioSpec, SceneSpec, SemanticAssetEntry, SettingsConfig, StudioMode, TransformMode, VFXNode, VFXType, Vector3Tuple, VisionQAReport, WorkspaceViewMode, WorldSpec } from '../types/scene.schema';
 import type { BurstVFXInstance, EntityHit, FloatingScoreFeedback } from '../runtime/gameSlice';
 import type { ExtensionManifest, InstalledExtension, ParticleRecipe, SfxRecipe } from '../extensions/types';
@@ -199,6 +200,8 @@ export interface StudioState {
   updateEnvironment: (patch: Partial<EnvironmentConfig>) => void;
   /** Phase 6: colour grade + lens look of a 3D scene (merged and clamped; null removes it). */
   updateGrade: (patch: Partial<ColorGrade> | null) => void;
+  /** Phase 6B: write a dragged / resized / nudged timeline clip back to the field it is derived from (one undo step per drag). */
+  editTimelineClip: (source: ClipSource, win: { start: number; end: number }, mode?: 'move' | 'start' | 'end') => void;
   /** Phase 2: 2D world size and camera (Properties → Scene settings). */
   updateWorld2D: (patch: Partial<World2DSpec>) => void;
   updateCamera2D: (patch: Partial<Camera2DSpec>) => void;

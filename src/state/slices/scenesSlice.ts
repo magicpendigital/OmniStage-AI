@@ -5,6 +5,7 @@
 import { LIGHTING_PRESETS, SCENE_TEMPLATES, cloneSceneSpec, createBlankSceneSpec } from '../../registry/assetRegistry';
 import { syncGraphWithScene } from '../../runtime/graphSync';
 import { sanitizeGrade } from '../../runtime/colorGrade';
+import { applyClipEdit, clipSourceId } from '../../runtime/timelineEdit';
 import { freshGameState } from '../../runtime/game/state';
 import { Vector3Tuple } from '../../types/scene.schema';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
@@ -315,6 +316,18 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       else delete nextSpec.grade;
       return {
         pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('grade', patch ?? { cleared: true })),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  editTimelineClip: (source, win, mode) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      if (!applyClipEdit(nextSpec, source, win, mode)) return {};
+      return {
+        // One drag (many pointer moves) is one undo step: same key within the coalescing window.
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('timeline', { [clipSourceId(source)]: true })),
         futureSpecs: [],
         sceneSpec: nextSpec,
       };

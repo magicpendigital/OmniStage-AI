@@ -280,9 +280,11 @@ AUTHORING & SPATIAL DESIGN RULES:
    'forcefield'|'lava'|'rainbow', color?: '#rrggbb', intensity?: 0..3 (1), speed?: 0..5 (1), progress?: 0..1 (dissolve only),
    progressTween?: { from, to, start, duration } (seconds; dissolve-in = from 1 to 0, dissolve-out = from 0 to 1) }.
    Use sparingly (a ghost / AI projection = hologram, a shield = forcefield, a magic vanish = dissolve, a stylised hero = toon).
-15. COLOUR GRADE (3D scenes; data only): sceneSpec.grade = { preset?: 'neutral'|'warm'|'cool'|'noir'|'vivid'|'faded'|'teal-orange'|'sepia',
+15. COLOUR GRADE (3D scenes; data only): sceneSpec.grade = { preset?: 'neutral'|'warm'|'cool'|'noir'|'vivid'|'faded'|'teal-orange'|'sepia'|'portrait',
    exposure?: -2..2 stops, contrast?: 0.5..1.6 (1), saturation?: 0..2 (1), temperature?: -1 cool..1 warm, tint?: -1 green..1 magenta,
-   fade?: 0..0.4 (lifted blacks), vignette?: 0..1, grain?: 0..1, split?: 0..1 with shadows?/highlights?: '#rrggbb' (split toning) }.
+   fade?: 0..0.4 (lifted blacks), vignette?: 0..1, grain?: 0..1, split?: 0..1 with shadows?/highlights?: '#rrggbb' (split toning),
+   dof?: 0..1 depth of field (background / foreground blur; 0.3 subtle, 0.6 portrait, 1 very shallow) with focusDistance?: metres (omit = automatic:
+   the focus follows the shot's subject, so use dof on close-ups and over-the-shoulder shots, not on wide establishing shots) }.
    The numbers override the preset. Pick ONE look per film and give every scene of it the same grade; keep it subtle for ads and games
    (vignette <= 0.25, grain <= 0.15) so the scene stays readable. 2D scenes ignore it.
 

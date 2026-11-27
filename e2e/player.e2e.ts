@@ -391,6 +391,34 @@ test('game state: a turret spawns projectiles that wear the player down, the HUD
   expect(p.errors).toEqual([]);
 });
 
+test('3D depth of field (Phase 6B): out-of-focus detail blurs, the focal plane keeps it, the frame repeats exactly', async ({ page }) => {
+  const shoot = async (grade?: SceneSpec['grade']) => {
+    const spec = shaderFxScene();
+    for (const a of spec.actors) delete a.shaderEffect;
+    if (grade) spec.grade = grade;
+    const pg = await page.context().newPage();
+    const p = await openExport(pg, spec, { quality: 'ultra' });
+    await pg.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
+    await p.waitAssets();
+    await p.step(10, 0.05);
+    const e = await p.edgeEnergy([0.12, 0.28, 0.4, 0.72]); // the gift box: in the focal plane of the shot on the car
+    if (grade) await pg.screenshot({ path: test.info().outputPath(`dof-${grade.focusDistance ?? 'auto'}.png`) });
+    expect(p.errors).toEqual([]);
+    await pg.close();
+    return e;
+  };
+  const plain = await shoot();
+  const noGrade = await shoot({ dof: 0, vignette: 0.01 });
+  expect(Math.abs(noGrade - plain), 'dof 0 changes nothing').toBeLessThan(plain * 0.3); // (ambient particles move with the wall clock, so two renders differ - up to ~15% under load; a real blur would drop it below 50%)
+  const blurred = await shoot({ dof: 1, focusDistance: 0.6 });
+  expect(blurred, 'focusing 0.6 m from the lens blurs the box').toBeLessThan(plain * 0.5);
+  const blurredAgain = await shoot({ dof: 1, focusDistance: 0.6 });
+  expect(Math.abs(blurred - blurredAgain), 'blurred frames agree').toBeLessThan(plain * 0.1);
+  const focused = await shoot({ dof: 1 });
+  expect(focused, 'auto focus keeps what is in the focal plane of the shot sharp').toBeGreaterThan(plain * 0.5); // (part of the region is the blurred glow behind the box)
+  expect(focused, '... and sharper than the blurred frame').toBeGreaterThan(blurred * 1.5);
+});
+
 test('3D colour grade (Phase 6): noir is black and white, a vignette darkens the corners, no grade changes nothing', async ({ page }) => {
   const make = (grade?: SceneSpec['grade']) => {
     const spec = shaderFxScene();

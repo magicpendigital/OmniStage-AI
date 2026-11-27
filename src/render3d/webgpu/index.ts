@@ -12,7 +12,7 @@ import {
 } from 'three/webgpu';
 import {
   abs, cameraPosition, clamp, cos, dot, float, fract, Fn, fwidth, instancedBufferAttribute, length, max, min, mix, mod,
-  normalize, pass, positionLocal, positionWorld, pow, reflect, reflector, renderOutput, sin, smoothstep, uniform, uv, vec2, vec3, vec4,
+  normalize, pass, perspectiveDepthToViewZ, positionLocal, positionWorld, pow, reflect, reflector, renderOutput, sin, smoothstep, uniform, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { bloom as bloomNode } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -23,6 +23,7 @@ import type { GpuParticleOptions } from '../gpuParticles';
 import { PARTICLE_KINDS } from '../gpuParticles';
 import { DEFAULT_BLOOM } from '../postfx';
 import type { ResolvedGrade } from '../../runtime/colorGrade';
+import { DOF_FALLOFF, DOF_MAX_RADIUS, DOF_TAPS } from '../../runtime/lens';
 import { shaderFx } from './shaderEffects';
 
 const TAU = 6.283185;
@@ -277,26 +278,80 @@ function gradeNode(rgb: any, uvNode: any, u: Record<string, any>) {
   return clamp(c, 0, 1);
 }
 
+/**
+ * Phase 6B: the TSL twin of DOF_GLSL (src/runtime/lens.ts): the same fixed Vogel disc, circle of confusion and "a tap only counts when
+ * its own blur reaches the pixel" rule, on linear HDR colour. `depthTex` is the scene pass's depth texture.
+ */
+function dofNode(color: any, depthTex: any, u: { texel: any; focus: any; amount: any; near: any; far: any }) {
+  // near / far are OUR uniforms: the cameraNear / cameraFar nodes would read the full-screen quad's camera in this graph, not the scene's.
+  const dist = (uvNode: any) => perspectiveDepthToViewZ(depthTex.sample(uvNode).r, u.near, u.far).negate();
+  const radius = (z: any) => {
+    const zz = max(z, 0.01);
+    return clamp(abs(zz.sub(u.focus)).mul(DOF_FALLOFF).div(zz), 0, 1).mul(u.amount).mul(DOF_MAX_RADIUS).div(u.texel.y);
+  };
+  const base: any = color.sample(uv());
+  const rCenter: any = radius(dist(uv()));
+  let acc: any = base.rgb;
+  let wsum: any = float(1);
+  // The disc is turned by a hash of the pixel position (same as the GLSL pass), so the taps read as noise, not ghost copies.
+  const rot = fract(sin(dot(uv().div(u.texel), vec2(12.9898, 78.233))).mul(43758.5453)).mul(6.2831853);
+  for (let i = 0; i < DOF_TAPS; i++) {
+    const r = Math.sqrt((i + 0.5) / DOF_TAPS);
+    const a = rot.add(i * 2.39996323);
+    const reach = rCenter.mul(r);
+    const tapUv = uv().add(vec2(cos(a), sin(a)).mul(reach).mul(u.texel));
+    const w = clamp(radius(dist(tapUv)).sub(reach).add(1), 0, 1);
+    acc = acc.add(color.sample(tapUv).rgb.mul(w));
+    wsum = wsum.add(w);
+  }
+  return vec4(acc.div(wsum), base.a);
+}
+
 function bloom(renderer: unknown, scene: THREE.Scene, camera: THREE.Camera, opts: Parameters<NodeBackend['bloom']>[3] = {}) {
   const o = { ...DEFAULT_BLOOM, ...opts };
   const post = new RenderPipeline(renderer as WebGPURenderer);
   post.outputColorTransform = false;
   const scenePass = pass(scene, camera);
   const color = scenePass.getTextureNode('output');
-  const lit = o.enabled === false ? color : color.add(bloomNode(color, o.strength, o.radius, o.threshold));
+  const depthTex = scenePass.getTextureNode('depth');
+  const lens = { texel: uniform(new THREE.Vector2(1 / 1024, 1 / 1024)), focus: uniform(6), amount: uniform(0), near: uniform(0.1), far: uniform(1000) };
   const u: Record<string, any> = {};
   for (const key of ['exposure', 'contrast', 'saturation', 'temperature', 'tint', 'fade', 'vignette', 'grain', 'split', 'seed']) u[key] = uniform(key === 'contrast' || key === 'saturation' ? 1 : 0);
   u.shadowTint = uniform(new THREE.Vector3(1, 1, 1));
   u.highlightTint = uniform(new THREE.Vector3(1, 1, 1));
   const active = uniform(0);
-  const display: any = renderOutput(lit as any);
-  post.outputNode = mix(display as any, vec4(gradeNode(display.rgb, uv(), u), display.a) as any, active as any) as any;
+  // Two graphs share everything but the lens: the depth of field taps are only compiled in while a scene asks for them.
+  const build = (withDof: boolean) => {
+    const source: any = withDof ? dofNode(color, depthTex, lens) : color;
+    const lit = o.enabled === false ? source : source.add(bloomNode(source, o.strength, o.radius, o.threshold));
+    const display: any = renderOutput(lit as any);
+    return mix(display as any, vec4(gradeNode(display.rgb, uv(), u), display.a) as any, active as any) as any;
+  };
+  let withDof = false;
+  // Each graph (with / without the lens) is built ONCE, on first use, and swapped by output node: no per-toggle leak or rebuild of the bloom targets.
+  const graphs: Array<any | undefined> = [];
+  const graph = (dof: boolean) => (graphs[dof ? 1 : 0] ??= build(dof));
+  post.outputNode = graph(false);
   return {
-    render: () => post.render(),
+    render: () => {
+      const size = (renderer as WebGPURenderer).getDrawingBufferSize(new THREE.Vector2());
+      lens.texel.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y));
+      const cam = scenePass.camera as THREE.PerspectiveCamera;
+      lens.near.value = cam.near;
+      lens.far.value = cam.far;
+      post.render();
+    },
+    setFocus: (distance: number) => { lens.focus.value = distance; },
     setSize: () => undefined, // follows the renderer size
     setCamera: (c: THREE.Camera) => { scenePass.camera = c; },
     setGrade: (g: ResolvedGrade | null, seed = 0) => {
       active.value = g ? 1 : 0;
+      lens.amount.value = g?.dof ?? 0;
+      if ((g?.dof ?? 0) > 0 !== withDof) {
+        withDof = (g?.dof ?? 0) > 0;
+        post.outputNode = graph(withDof);
+        post.needsUpdate = true;
+      }
       if (!g) return;
       for (const key of ['exposure', 'contrast', 'saturation', 'temperature', 'tint', 'fade', 'vignette', 'grain', 'split'] as const) u[key].value = g[key];
       u.seed.value = seed;

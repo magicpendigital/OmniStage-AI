@@ -982,6 +982,14 @@ select.field { padding-right: 4px; }
   white-space: nowrap;
 }
 .tl-name.sel { color: rgb(var(--accent)); }
+/* Phase 6B: names stay in view when the timeline is zoomed and scrolled sideways. */
+.tl-row > .tl-name { position: sticky; left: 0; z-index: 7; background: rgb(var(--panel)); }
+.clip-edit:hover { filter: brightness(1.12); }
+.clip-edit:active { cursor: grabbing; }
+.clip-h { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; touch-action: none; z-index: 2; }
+.clip-h.l { left: 0; border-radius: 6px 0 0 6px; }
+.clip-h.r { right: 0; border-radius: 0 6px 6px 0; }
+.clip-h:hover { background: color-mix(in srgb, var(--c) 70%, transparent); }
 .lane {
   position: relative;
   flex: 1;

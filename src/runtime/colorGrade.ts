@@ -11,7 +11,7 @@
  */
 import type { ColorGrade, GradePreset } from '../types/scene.schema';
 
-export const GRADE_PRESET_IDS: GradePreset[] = ['neutral', 'warm', 'cool', 'noir', 'vivid', 'faded', 'teal-orange', 'sepia'];
+export const GRADE_PRESET_IDS: GradePreset[] = ['neutral', 'warm', 'cool', 'noir', 'vivid', 'faded', 'teal-orange', 'sepia', 'portrait'];
 
 export interface ResolvedGrade {
   /** Stops (2^x), -2..2. */
@@ -32,6 +32,9 @@ export interface ResolvedGrade {
   grain: number;
   /** Split-toning strength 0..1 and the two tint colours (already normalised to equal luma, so they colour without darkening). */
   split: number;
+  /** Phase 6B depth of field 0..1 (the blur itself is the lens pass in src/runtime/lens.ts) and the manual focus distance in metres (0 = automatic). */
+  dof: number;
+  focusDistance: number;
   shadowTint: [number, number, number];
   highlightTint: [number, number, number];
 }
@@ -39,7 +42,7 @@ export interface ResolvedGrade {
 export type GradeNumbers = Omit<ColorGrade, 'preset' | 'shadows' | 'highlights'> & { shadows: string; highlights: string };
 
 const NEUTRAL = {
-  exposure: 0, contrast: 1, saturation: 1, temperature: 0, tint: 0, fade: 0, vignette: 0, grain: 0, split: 0, shadows: '#808080', highlights: '#808080',
+  exposure: 0, contrast: 1, saturation: 1, temperature: 0, tint: 0, fade: 0, vignette: 0, grain: 0, split: 0, dof: 0, focusDistance: 0, shadows: '#808080', highlights: '#808080',
 };
 
 /** Looks the AI (and the Properties panel) can pick by name; explicit fields on `grade` override them. */
@@ -51,11 +54,12 @@ export const GRADE_PRESETS: Record<GradePreset, typeof NEUTRAL> = {
   vivid: { ...NEUTRAL, saturation: 1.35, contrast: 1.12, vignette: 0.1 },
   faded: { ...NEUTRAL, saturation: 0.78, contrast: 0.9, fade: 0.12, grain: 0.12, temperature: 0.1 },
   'teal-orange': { ...NEUTRAL, contrast: 1.12, saturation: 1.08, vignette: 0.2, split: 0.55, shadows: '#1c7f8c', highlights: '#f0a15a' },
+  portrait: { ...NEUTRAL, contrast: 1.05, saturation: 1.05, vignette: 0.22, dof: 0.6 },
   sepia: { ...NEUTRAL, saturation: 0.35, contrast: 1.08, temperature: 0.55, fade: 0.06, vignette: 0.35, grain: 0.2, split: 0.5, shadows: '#4a3320', highlights: '#f2d9a8' },
 };
 
 /** Allowed ranges of every number (the verifier and the sanitizer use the same table). */
-export const GRADE_RANGES: Record<'exposure' | 'contrast' | 'saturation' | 'temperature' | 'tint' | 'fade' | 'vignette' | 'grain' | 'split', [number, number]> = {
+export const GRADE_RANGES: Record<'exposure' | 'contrast' | 'saturation' | 'temperature' | 'tint' | 'fade' | 'vignette' | 'grain' | 'split' | 'dof' | 'focusDistance', [number, number]> = {
   exposure: [-2, 2],
   contrast: [0.5, 1.6],
   saturation: [0, 2],
@@ -65,6 +69,8 @@ export const GRADE_RANGES: Record<'exposure' | 'contrast' | 'saturation' | 'temp
   vignette: [0, 1],
   grain: [0, 1],
   split: [0, 1],
+  dof: [0, 1],
+  focusDistance: [0, 200],
 };
 
 export const isGradePreset = (v: unknown): v is GradePreset => typeof v === 'string' && Object.prototype.hasOwnProperty.call(GRADE_PRESETS, v);
@@ -128,7 +134,7 @@ export function resolveGrade(grade: ColorGrade | undefined | null): ResolvedGrad
   const highlights = isHexColor(grade.highlights) ? grade.highlights : base.highlights;
   const resolved: ResolvedGrade = {
     exposure: num('exposure'), contrast: num('contrast'), saturation: num('saturation'), temperature: num('temperature'), tint: num('tint'),
-    fade: num('fade'), vignette: num('vignette'), grain: num('grain'), split: num('split'),
+    fade: num('fade'), vignette: num('vignette'), grain: num('grain'), split: num('split'), dof: num('dof'), focusDistance: num('focusDistance'),
     shadowTint: equalLuma(hexToRgb(shadows)), highlightTint: equalLuma(hexToRgb(highlights)),
   };
   return isNeutralGrade(resolved) ? null : resolved;
@@ -137,7 +143,7 @@ export function resolveGrade(grade: ColorGrade | undefined | null): ResolvedGrad
 export function isNeutralGrade(g: ResolvedGrade): boolean {
   return (
     Math.abs(g.exposure) < 1e-3 && Math.abs(g.contrast - 1) < 1e-3 && Math.abs(g.saturation - 1) < 1e-3 && Math.abs(g.temperature) < 1e-3 &&
-    Math.abs(g.tint) < 1e-3 && g.fade < 1e-3 && g.vignette < 1e-3 && g.grain < 1e-3 && g.split < 1e-3
+    Math.abs(g.tint) < 1e-3 && g.fade < 1e-3 && g.vignette < 1e-3 && g.grain < 1e-3 && g.split < 1e-3 && g.dof < 1e-3
   );
 }
 

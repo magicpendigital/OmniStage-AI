@@ -41,7 +41,7 @@ test('every timed thing of a film scene becomes a lane with clips inside the sce
   assert.equal(shots[1].label, 'close-up · push-in');
   const perf = byId.get(`actor-${spec.actors[0].id}`)!.clips;
   assert.deepEqual(perf.map((c) => c.label), ['waits', 'walk', 'wave']);
-  assert.deepEqual(perf.map((c) => [c.start, c.end]), [[0, 2], [2, 6], [6, 10]]);
+  assert.deepEqual(perf.map((c) => [c.start, c.end]), [[0, 2], [2, 5], [6, 10]], 'a walk lasts its duration; holds last until the next step');
   assert.ok(byId.get('captions')!.clips[0].label.length <= 28 && byId.get('captions')!.clips[0].label.endsWith('…'));
   assert.equal(byId.get('music')!.clips[0].label, 'calm · 80 BPM');
   assert.equal(byId.get('look')!.clips[0].label, 'teal-orange');

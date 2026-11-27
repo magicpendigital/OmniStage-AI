@@ -777,7 +777,7 @@ function build3DScene(ctx: SceneContext): string {
   const grade = resolveGrade(scene.grade);
   if (grade) {
     envProps.push(['adjustment_enabled', true], ['adjustment_brightness', Number(Math.pow(2, grade.exposure).toFixed(3))], ['adjustment_contrast', Number(grade.contrast.toFixed(3))], ['adjustment_saturation', Number(grade.saturation.toFixed(3))]);
-    const dropped = [grade.temperature || grade.tint ? 'warmth / tint' : '', grade.fade ? 'fade' : '', grade.vignette ? 'vignette' : '', grade.grain ? 'film grain' : '', grade.split ? 'split toning' : ''].filter(Boolean);
+    const dropped = [grade.temperature || grade.tint ? 'warmth / tint' : '', grade.fade ? 'fade' : '', grade.vignette ? 'vignette' : '', grade.grain ? 'film grain' : '', grade.split ? 'split toning' : '', grade.dof ? 'depth of field' : ''].filter(Boolean);
     if (dropped.length) warn('Colour grade', `Exposure, contrast and saturation are exported as Environment adjustments; ${dropped.join(', ')} are not.`);
   }
   if (Number(env.fogFar) > 0) {

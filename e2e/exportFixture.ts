@@ -119,6 +119,47 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
         const corners = [lum(0, 0, 4, 4), lum(60, 0, 4, 4), lum(0, 32, 4, 4), lum(60, 32, 4, 4)];
         return { r: r / n, g: gr / n, b: b / n, spread: spreadSum / n, center: lum(30, 16, 4, 4), corner: corners.reduce((a, v) => a + v, 0) / 4 };
       }),
+    /**
+     * Phase 6B: how much detail the frame has — the mean SQUARED luminance step between neighbouring 4 x 4 pixel blocks (a blurred edge is
+     * the same total step spread thin, so only the squared step drops; centre 70% of
+     * the frame, or `region` = [x0, y0, x1, y1] as fractions of the frame). Averaging blocks ignores the per-pixel noise of a blur
+     * kernel, so a real blur lowers it and nothing else does.
+     */
+    edgeEnergy: (region: [number, number, number, number] = [0.15, 0.15, 0.85, 0.85]) =>
+      page.evaluate((r) => {
+        // dt 0: render the frame again WITHOUT moving time, so the reading is a pure function of the spec (the scene itself moves with time).
+        (window as any).__omniPlayer.step(0);
+        const src = document.querySelector('canvas.omni-stage') as HTMLCanvasElement;
+        const w = src.width;
+        const h = src.height;
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const g = c.getContext('2d', { willReadFrequently: true })!;
+        g.drawImage(src, 0, 0);
+        const x0 = Math.floor(w * r[0]), x1 = Math.floor(w * r[2]), y0 = Math.floor(h * r[1]), y1 = Math.floor(h * r[3]);
+        const d = g.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+        const cw = x1 - x0;
+        const bw = Math.floor(cw / 4);
+        const bh = Math.floor((y1 - y0) / 4);
+        const blocks = new Float32Array(bw * bh);
+        for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+          let s = 0;
+          for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
+            const i = ((by * 4 + y) * cw + bx * 4 + x) * 4;
+            s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+          }
+          blocks[by * bw + bx] = s / 16;
+        }
+        let sum = 0;
+        let n = 0;
+        for (let y = 0; y < bh - 1; y++) for (let x = 0; x < bw - 1; x++) {
+          const i = y * bw + x;
+          sum += (blocks[i] - blocks[i + 1]) ** 2 + (blocks[i] - blocks[i + bw]) ** 2;
+          n += 2;
+        }
+        return sum / n;
+      }, region),
     /** Like pixelStats, but returns the 64 x 36 luminance grid (to compare two frames pixel by pixel). */
     pixelGrid: () =>
       page.evaluate(() => {

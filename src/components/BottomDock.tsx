@@ -20,6 +20,8 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { useStudioStore, withCaptionIds } from '../state/useStudioStore';
 import { DockTabId, useShellStore } from '../state/useShellStore';
@@ -28,7 +30,8 @@ import { ProblemsPanel, useProblemCounts } from './ProblemsPanel';
 import { AUDIO_KIND_COLOR, canSpeak, speakText } from './panels/AudioPanel';
 import { IconBtn, Kbd, startDrag } from './ui';
 import { coverageLabel, scriptCoverage } from '../verification/scriptCoverage';
-import { deriveTimeline, overlappingClips, type TimelineLane } from '../runtime/timelineLanes';
+import { deriveTimeline, overlappingClips, type TimelineClip, type TimelineLane } from '../runtime/timelineLanes';
+import { clipSourceId, dragWindow, GRID_SECONDS, MIN_CLIP_SECONDS, nudgeWindow, snapTargets, type DragMode } from '../runtime/timelineEdit';
 
 const HEAD_HEIGHT = 34;
 
@@ -64,27 +67,85 @@ const Lane: React.FC<{ duration: number; children?: React.ReactNode }> = ({ dura
   );
 };
 
-/** Phase 6: the clips of a derived lane (shots, performance steps, captions, sound, look). Click a clip to jump to its start. */
+/** The derived lanes + scene length, so a dragged clip can snap to the edges of every other clip. */
+const TimelineContext = React.createContext<{ lanes: TimelineLane[]; duration: number }>({ lanes: [], duration: 8 });
+
+/** How close (screen pixels) an edge has to be to a snap point to jump onto it. */
+const SNAP_PX = 7;
+
+/**
+ * Phase 6 / 6B: the clips of a derived lane (shots, performance steps, captions, sound, VFX, look). Click a clip to jump to its start;
+ * drag it to move, pull an edge to resize (snaps to other clips, the playhead and the grid; hold Shift for free), arrow keys nudge
+ * (Shift = 1 s). Every edit goes through editTimelineClip, so it writes the same SceneSpec field the clip is derived from.
+ */
 const ClipBars: React.FC<{ lane: TimelineLane; duration: number }> = ({ lane, duration }) => {
   const setCurrentTime = useStudioStore((s) => s.setCurrentTime);
+  const editClip = useStudioStore((s) => s.editTimelineClip);
+  const { lanes } = React.useContext(TimelineContext);
+  const justDragged = useRef(false);
+
+  const begin = (e: React.PointerEvent<HTMLElement>, clip: TimelineClip, mode: DragMode) => {
+    e.stopPropagation();
+    const source = clip.source;
+    if (!source || !clip.edit || e.button !== 0) return;
+    const laneWidth = (e.currentTarget.closest('.lane') as HTMLElement | null)?.getBoundingClientRect().width || 1;
+    const secondsPerPx = duration / laneWidth;
+    // A clip that cannot be resized has no length of its own (a hold lasts "until the next step"): drag it as a point, so it is not
+    // boxed in by a derived length it does not own.
+    const orig = clip.edit.end ? { start: clip.start, end: clip.end } : { start: clip.start, end: clip.start + MIN_CLIP_SECONDS };
+    const targets = snapTargets(lanes, clip.id, useStudioStore.getState().currentTime, duration);
+    const free = e.shiftKey;
+    let moved = false;
+    startDrag(
+      e,
+      (dx) => {
+        if (!moved && Math.abs(dx) < 3) return;
+        moved = true;
+        const snap = free ? undefined : { targets, threshold: SNAP_PX * secondsPerPx, grid: GRID_SECONDS };
+        editClip(source, dragWindow(orig, mode, dx * secondsPerPx, duration, snap), mode);
+      },
+      () => {
+        justDragged.current = moved;
+      }
+    );
+  };
+
   return (
     <>
-      {lane.clips.map((c) => (
-        <div
-          key={c.id}
-          className="clip"
-          role="button"
-          tabIndex={0}
-          title={`${c.label} · ${c.start.toFixed(1)}–${c.end.toFixed(1)}s`}
-          aria-label={`${lane.label}: ${c.label} from ${c.start.toFixed(1)} seconds`}
-          style={{ left: `${(c.start / duration) * 100}%`, width: `${Math.max(1.5, ((c.end - c.start) / duration) * 100)}%`, ['--c' as any]: lane.color }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => setCurrentTime(c.start)}
-          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setCurrentTime(c.start)}
-        >
-          {c.label}
-        </div>
-      ))}
+      {lane.clips.map((c) => {
+        const can = c.edit;
+        const nudge = (seconds: number) => c.source && can?.move && editClip(c.source, nudgeWindow(c.edit?.end ? c : { start: c.start, end: c.start + MIN_CLIP_SECONDS }, seconds, duration), 'move');
+        return (
+          <div
+            key={c.source ? clipSourceId(c.source) : c.id}
+            className={`clip ${can?.move ? 'clip-edit' : ''}`}
+            role="button"
+            tabIndex={0}
+            title={`${c.label} · ${c.start.toFixed(1)}–${c.end.toFixed(1)}s${can?.move ? ' · drag to move, pull an edge to resize, arrows nudge' : ''}`}
+            aria-label={`${lane.label}: ${c.label} from ${c.start.toFixed(1)} seconds`}
+            style={{ left: `${(c.start / duration) * 100}%`, width: `${Math.max(1.5, ((c.end - c.start) / duration) * 100)}%`, ['--c' as any]: lane.color, cursor: can?.move ? 'grab' : undefined }}
+            onPointerDown={(e) => (can?.move ? begin(e, c, 'move') : e.stopPropagation())}
+            onClick={() => {
+              if (justDragged.current) {
+                justDragged.current = false;
+                return;
+              }
+              setCurrentTime(c.start);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') setCurrentTime(c.start);
+              else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                nudge((e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1 : 0.1));
+              }
+            }}
+          >
+            {can?.start && <span className="clip-h l" aria-hidden onPointerDown={(e) => begin(e, c, 'start')} />}
+            <span className="truncate">{c.label}</span>
+            {can?.end && <span className="clip-h r" aria-hidden onPointerDown={(e) => begin(e, c, 'end')} />}
+          </div>
+        );
+      })}
     </>
   );
 };
@@ -122,18 +183,30 @@ const TimelineTab: React.FC = () => {
   const duration = Math.max(2, sceneSpec.durationSeconds || 8);
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / duration) * 100))}%`;
   const keyframes = sceneSpec.camera.keyframes || [];
-  const ticks = Array.from({ length: 11 }, (_, i) => (duration / 10) * i);
+  const [zoom, setZoom] = useState(1);
+  const tickCount = 10 * Math.max(1, Math.round(zoom));
+  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => (duration / tickCount) * i);
   // Phase 6: shots, performance steps, captions, sound and the look, derived from the scene (never stored).
   const lanes = React.useMemo(() => deriveTimeline(sceneSpec), [sceneSpec]);
+  const ctx = React.useMemo(() => ({ lanes, duration }), [lanes, duration]);
   const shotsLane = lanes.find((l) => l.kind === 'shots');
   const extraLanes = lanes.filter((l) => ['captions', 'music', 'ambience', 'sfx', 'look'].includes(l.kind));
 
   return (
     <div className="h-full overflow-auto">
-      <div className="min-w-[560px]">
+      <TimelineContext.Provider value={ctx}>
+      <div style={{ minWidth: 560 * zoom }}>
         {/* Ruler */}
         <div className="tl-row sticky top-0 z-10 bg-panel" style={{ height: 22 }}>
-          <div className="tl-name font-mono text-[10px]">{duration.toFixed(1)}s total</div>
+          <div className="tl-name font-mono text-[10px]">
+            <span className="min-w-0 flex-1 truncate">{duration.toFixed(1)}s total</span>
+            <button type="button" className="orow-b keep" title="Zoom out the timeline" aria-label="Zoom out timeline" disabled={zoom <= 1} onClick={() => setZoom((z) => Math.max(1, z / 2))}>
+              <ZoomOut size={11} />
+            </button>
+            <button type="button" className="orow-b keep" title="Zoom in the timeline" aria-label="Zoom in timeline" disabled={zoom >= 8} onClick={() => setZoom((z) => Math.min(8, z * 2))}>
+              <ZoomIn size={11} />
+            </button>
+          </div>
           <Lane duration={duration}>
             {ticks.map((t, i) => (
               <span
@@ -235,6 +308,7 @@ const TimelineTab: React.FC = () => {
           sceneSpec.vfx.map((vfx) => {
             const st = vfx.startTime ?? 0;
             const et = vfx.endTime ?? duration;
+            const timed = lanes.find((l) => l.id === `vfx-${vfx.id}`);
             return (
               <div key={vfx.id} className="tl-row">
                 <div className="tl-name">
@@ -242,9 +316,13 @@ const TimelineTab: React.FC = () => {
                   <span className="truncate">{vfx.name}</span>
                 </div>
                 <Lane duration={duration}>
-                  <div className="clip" style={{ left: pct(st), width: `${Math.max(3, ((et - st) / duration) * 100)}%`, ['--c' as any]: vfx.color || '#f2b441' }}>
-                    {vfx.type}
-                  </div>
+                  {timed ? (
+                    <ClipBars lane={timed} duration={duration} />
+                  ) : (
+                    <div className="clip" style={{ left: pct(st), width: `${Math.max(3, ((et - st) / duration) * 100)}%`, ['--c' as any]: vfx.color || '#f2b441' }}>
+                      {vfx.type}
+                    </div>
+                  )}
                 </Lane>
               </div>
             );
@@ -258,6 +336,7 @@ const TimelineTab: React.FC = () => {
           <p className="p-4 text-center text-[11px] text-dim">Nothing on stage yet. Tracks appear here as you add actors and layers.</p>
         )}
       </div>
+      </TimelineContext.Provider>
     </div>
   );
 };

@@ -26,10 +26,11 @@ import { matchClipName, performedActor, resolveShot } from '../runtime/cinematic
 import { createContactShadows } from '../render3d/contactShadows';
 import { createBloom, PostFx } from '../render3d/postfx';
 import { grainSeed, resolveGrade } from '../runtime/colorGrade';
+import { focusDistanceFor } from '../runtime/lens';
 import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
 import { createActorBadge, createBurst, createVfx } from '../render3d/vfx3d';
 import type { Built3D, FrameContext } from '../render3d/types';
-import type { ActorNode, SceneSpec, VFXNode } from '../types/scene.schema';
+import type { ActorNode, SceneSpec, VFXNode, Vector3Tuple } from '../types/scene.schema';
 import type { InputManager } from './input';
 import { effectivePixelRatio, QualitySettings } from '../runtime/deviceProfiles';
 
@@ -578,12 +579,16 @@ export class View3D {
     // Phase 6: the scene's colour grade is the last pass; grain is seeded by the timeline frame, so frame-stepped exports repeat exactly.
     const grade = resolveGrade(state.sceneSpec.grade);
     const seed = grainSeed(state.currentTime);
+    // Phase 6B: the focal plane is where the camera is aimed (the shot's subject) unless the grade fixes a distance.
+    const focus = grade && grade.dof > 0 ? focusDistanceFor(state.sceneSpec, state.currentTime, this.camera.position.toArray() as Vector3Tuple, this.camTarget.toArray() as Vector3Tuple) : 0;
     if (this.bloom && (this.settings?.postFx ?? true)) {
       this.bloom.setGrade(grade, seed);
+      this.bloom.setFocus(focus);
       this.bloom.render(dt);
     } else if (grade) {
       const fx = this.gradeStack();
       fx.setGrade(grade, seed);
+      fx.setFocus(focus);
       fx.render(dt);
     } else this.renderer.render(this.scene, this.camera);
   }
