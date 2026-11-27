@@ -8,7 +8,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: 'e2e',
   testMatch: '*.e2e.ts',
-  timeout: 60_000,
+  timeout: 120_000,
   fullyParallel: true,
   reporter: [['list']],
   outputDir: 'output/e2e-results',

@@ -17,6 +17,18 @@ export const NAV_AGENT_RADIUS = 12;
 /** Cell count cap, so a huge world never makes a frame slow. */
 export const NAV_MAX_CELLS = 6000;
 
+/**
+ * A wall that moves (a `mover` platform) blocks everything it can ever reach: its box at the start united with its box at the far end of
+ * its travel. Conservative on purpose — the grid stays static (cached), and a walker never plans through a wall that is about to arrive.
+ */
+export function sweptBox(box: Box, mover: { axis: 'x' | 'y'; distance: number } | undefined): Box {
+  if (!mover || !Number.isFinite(mover.distance) || mover.distance === 0) return box;
+  const d = mover.distance;
+  return mover.axis === 'x'
+    ? { ...box, x: box.x + d / 2, w: box.w + Math.abs(d) }
+    : { ...box, y: box.y + d / 2, h: box.h + Math.abs(d) };
+}
+
 export interface NavWorld {
   width: number;
   height: number;

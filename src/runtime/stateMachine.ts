@@ -33,7 +33,8 @@ import { playSceneSfx } from '../audio/audioBus';
 import { healthMax } from './game/state';
 import { cleanMessage } from './game/messages';
 import { nodeBox2D } from './physics/nodeBox';
-import { findPath, lineOfSight, NAV_CELL, NavGrid, navSignature, type NavInput } from './nav2d';
+import { findPath, lineOfSight, NAV_CELL, NavGrid, navSignature, sweptBox, type NavInput } from './nav2d';
+import { validMover } from './physics/mover';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Vocabulary (closed unions, mirrored in the agent prompt and the MCP contract)
@@ -705,7 +706,7 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
   // Phase 7A: the walls (solid nodes, current positions) for pathfinding and line of sight.
   const nav: NavInput | undefined = engine === '2d'
     ? (() => {
-        const blockers = fresh.nodes2D.filter((n) => n.physics2D === 'solid' && n.visible !== false && !n.prefab).map((n) => nodeBox2D(n, { x: n.x, y: n.y }));
+        const blockers = fresh.nodes2D.filter((n) => n.physics2D === 'solid' && n.visible !== false && !n.prefab).map((n) => sweptBox(nodeBox2D(n, { x: n.x, y: n.y }), validMover(n.mover) ? n.mover : undefined));
         return blockers.length ? { blockers, world: { width: fresh.world2D?.width ?? 1000, height: fresh.world2D?.height ?? 600 } } : undefined;
       })()
     : undefined;

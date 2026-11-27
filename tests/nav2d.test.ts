@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPath, lineOfSight, NAV_AGENT_RADIUS, NavGrid, navSignature, segmentHitsBox, type NavInput } from '../src/runtime/nav2d';
+import { findPath, lineOfSight, NAV_AGENT_RADIUS, NavGrid, navSignature, NAV_MAX_CELLS, segmentHitsBox, sweptBox, type NavInput } from '../src/runtime/nav2d';
 import { sanitizeStateMachine, stateMachineIssues, StateMachineRuntime, type MachineEntity, type MachineInputs } from '../src/runtime/stateMachine';
 import { createBlankSceneSpec } from '../src/registry/assetRegistry';
 import type { ActorStateMachine } from '../src/types/scene.schema';
@@ -124,4 +124,20 @@ test('the contract carries the new fields: sanitised, repaired, and the verifier
   const hero = spec.actors[0];
   hero.stateMachine = { initial: 'a', states: { a: { move: 'chase-player', pathfind: true } } };
   assert.ok(stateMachineIssues(hero, spec).some((i) => i.code === 'machine.pathfind-3d'));
+});
+
+test('a moving wall blocks its whole travel; a huge or broken world never makes a huge grid', () => {
+  const box = { x: 100, y: 100, w: 40, h: 20 };
+  assert.deepEqual(sweptBox(box, undefined), box);
+  assert.deepEqual(sweptBox(box, { axis: 'x', distance: 200 }), { x: 200, y: 100, w: 240, h: 20 });
+  assert.deepEqual(sweptBox(box, { axis: 'y', distance: -80 }), { x: 100, y: 60, w: 40, h: 100 });
+  assert.deepEqual(sweptBox(box, { axis: 'x', distance: NaN }), box);
+  // A walker that plans around the swept area never meets the wall wherever it currently is.
+  const nav: NavInput = { blockers: [sweptBox({ x: 300, y: 300, w: 20, h: 100 }, { axis: 'x', distance: 200 })], world: { width: 1000, height: 600 } };
+  const route = findPath(new NavGrid(nav), [100, 300], [700, 300]);
+  assert.ok(route && route.length > 1, 'it goes around the whole sweep');
+  for (const world of [{ width: 1e7, height: 600 }, { width: 1e9, height: 1e9 }, { width: NaN, height: Infinity }, { width: -5, height: 0 }]) {
+    const grid = new NavGrid({ blockers: [], world });
+    assert.ok(grid.cols * grid.rows <= NAV_MAX_CELLS * 4, `grid stays small (${grid.cols}x${grid.rows})`);
+  }
 });
