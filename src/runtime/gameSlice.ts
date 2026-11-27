@@ -131,11 +131,16 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
       let nextTime = state.currentTime + deltaSeconds;
       let nextPlaying: boolean = state.isPlaying;
 
-      if (nextTime >= duration) {
+      // Phase 5: a game round is bounded by its own clock (`gameTimeRemaining`), not by the timeline length. The playtest bot found that a
+      // level with durationSeconds 10 and a 31 s limit froze at 10 s (physics and spawners stopped, the round could never end).
+      // (Without a finite round clock the timeline still bounds the scene, as before.)
+      const roundRunning = state.sceneSpec.mode === 'game' && !state.gameEnded && Number.isFinite(state.gameTimeRemaining);
+      if (nextTime >= duration && !(roundRunning && !state.isLooping)) {
         if (state.isLooping) {
           nextTime = nextTime % duration;
         } else {
-          nextTime = duration;
+          // A round that ended after the timeline length stays on the clock it ended at (no jump back on the win / lose card).
+          nextTime = state.currentTime > duration ? state.currentTime : duration;
           nextPlaying = false;
         }
       }

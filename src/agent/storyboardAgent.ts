@@ -16,7 +16,8 @@ import { AMBIENCE_IDS, MUSIC_MOODS } from '../audio/soundtrack';
 import { DIALOGUE_EMOTIONS, lineLanguage } from '../audio/voices';
 import { describeReportForModel, PatchProposal, runPatchLoop } from './patchLoop';
 import { MEDIA_CRAFT_CODES, mediaQualityPenalty } from '../verification/sceneVerifier';
-import { describeGameDesign, formatGameDesignSummary, lintGameDesign, writeGameDesign } from './gameDesign';
+import { describeGameDesign, detectGameGenre, formatGameDesignSummary, lintGameDesign, writeGameDesign } from './gameDesign';
+import { buildGenreKit, kitForGenre, LEVEL_PALETTES } from './genreKits';
 import {
   ASSET_REGISTRY,
   createBlankSceneSpec,
@@ -503,15 +504,6 @@ export function buildLocalStoryboardPlan(prompt: string, intent: StoryboardInten
   };
 }
 
-const LEVEL_PALETTES = [
-  { accent: '#06B6D4', platform: '#1E293B', star: '#FBBF24', bg: 'Cyan' },
-  { accent: '#EC4899', platform: '#2A1636', star: '#FDE047', bg: 'Magenta' },
-  { accent: '#F59E0B', platform: '#2B1D0E', star: '#FEF08A', bg: 'Amber' },
-  { accent: '#10B981', platform: '#0F2A22', star: '#FCD34D', bg: 'Emerald' },
-  { accent: '#8B5CF6', platform: '#1F1838', star: '#FBBF24', bg: 'Violet' },
-  { accent: '#F43F5E', platform: '#2B1018', star: '#FDE68A', bg: 'Rose' },
-];
-
 function makeNode(partial: Partial<Node2D> & Pick<Node2D, 'name' | 'type' | 'x' | 'y' | 'width' | 'height' | 'physics2D'>): Node2D {
   return {
     id: uid('node2d'),
@@ -526,141 +518,19 @@ function makeNode(partial: Partial<Node2D> & Pick<Node2D, 'name' | 'type' | 'x' 
   };
 }
 
-/** Builds a guaranteed-beatable 2D platformer level whose difficulty scales with `difficulty`. */
-function buildLocal2DLevel(beat: StoryboardBeat, index: number, total: number): SceneSpec {
-  const spec = createBlankSceneSpec('2d', beat.title);
-  const d = Math.max(1, beat.difficulty ?? index + 1);
-  const pal = LEVEL_PALETTES[index % LEVEL_PALETTES.length];
-  const GROUND_Y = 540;
-  const GROUND_H = 36;
-  const groundTop = GROUND_Y - GROUND_H / 2;
-  const nodes: Node2D[] = [];
-
-  // Ground split into segments separated by pits (obstacles). Pit width stays <= 170px (reach ~350px).
-  const pitCount = Math.min(3, d - 1);
-  const pitWidth = Math.min(170, 110 + d * 15);
-  const segCount = pitCount + 1;
-  const usable = 1000 - pitCount * pitWidth;
-  const segWidth = usable / segCount;
-  for (let s = 0; s < segCount; s++) {
-    const left = s * (segWidth + pitWidth);
-    nodes.push(
-      makeNode({
-        name: segCount === 1 ? 'Ground Floor' : `Ground Segment ${s + 1}`,
-        type: 'tile-platform',
-        x: left + segWidth / 2,
-        y: GROUND_Y,
-        width: segWidth,
-        height: GROUND_H,
-        fill: pal.platform,
-        stroke: pal.accent,
-        shapeKind: 'rect',
-        physics2D: 'static-platform',
-      })
-    );
-  }
-
-  // Floating ledge staircase: rises then falls, step-up <= 100px, edge gap <= 180px.
-  const ledgeCount = Math.min(7, 2 + d);
-  const ledgeWidth = Math.max(100, 220 - d * 22);
-  const stepUp = Math.min(100, 70 + d * 8);
-  const spanStart = 150;
-  const spanEnd = 880;
-  const stepX = ledgeCount > 1 ? (spanEnd - spanStart) / (ledgeCount - 1) : 0;
-  const peak = Math.floor((ledgeCount - 1) / 2);
-  let starTotal = 0;
-  for (let i = 0; i < ledgeCount; i++) {
-    const tier = i <= peak ? i + 1 : Math.max(1, ledgeCount - i);
-    const topY = Math.max(150, groundTop - stepUp * tier);
-    const x = spanStart + stepX * i;
-    nodes.push(
-      makeNode({
-        name: `Ledge ${i + 1}`,
-        type: 'tile-platform',
-        x,
-        y: topY + 14,
-        width: ledgeWidth,
-        height: 28,
-        fill: pal.platform,
-        stroke: pal.accent,
-        shapeKind: 'rect',
-        physics2D: 'static-platform',
-      })
-    );
-    const isBonus = i === peak;
-    const value = isBonus ? 50 : 25;
-    starTotal += value;
-    nodes.push(
-      makeNode({
-        name: isBonus ? 'Summit Bonus Star' : `Star ${i + 1}`,
-        type: 'vector-shape',
-        x,
-        y: topY - 45,
-        width: isBonus ? 52 : 44,
-        height: isBonus ? 52 : 44,
-        fill: pal.star,
-        stroke: '#FEF9C3',
-        shapeKind: 'star',
-        physics2D: 'collectible',
-        scoreValue: value,
-      })
-    );
-  }
-
-  // Player spawns on the first ground segment.
-  nodes.push(
-    makeNode({
-      name: 'Hero Runner',
-      type: 'sprite-actor',
-      x: 60,
-      y: groundTop - 29,
-      width: 58,
-      height: 58,
-      fill: pal.accent,
-      stroke: '#F8FAFC',
-      strokeWidth: 3,
-      shapeKind: 'capsule',
-      physics2D: 'player-platformer',
-    })
-  );
-
-  nodes.push(
-    makeNode({
-      name: 'Level Title',
-      type: 'text-kinetic',
-      x: 500,
-      y: 60,
-      width: 600,
-      height: 60,
-      fill: '#F8FAFC',
-      stroke: pal.accent,
-      text: `LEVEL ${index + 1} / ${total}`,
-      fontSize: 36,
-      physics2D: 'none',
-    })
-  );
-
-  const target = Math.max(25, Math.floor((starTotal * Math.min(0.9, 0.6 + d * 0.08)) / 25) * 25);
-  spec.mode = 'game';
-  spec.description = beat.description;
-  spec.nodes2D = nodes;
-  spec.durationSeconds = 10;
-  spec.gameRules = {
-    winCondition: 'score-threshold',
-    targetScore: target,
-    timeLimitSeconds: Math.max(15, 34 - d * 3),
-    instructions: `${beat.beat} Collect ${target} PTS — A/D to run, W/Space to jump, avoid the pits!`,
-  };
-  spec.marketingOverlay = {
-    ...spec.marketingOverlay,
-    enabled: false,
-    headline: index === total - 1 ? 'RUN COMPLETE!' : `LEVEL ${index + 1} CLEARED`,
-    subheadline: index === total - 1 ? 'You conquered every level.' : `Next up: level ${index + 2}`,
-    ctaText: index === total - 1 ? 'Play Again' : 'Next Level',
-    brandColor: pal.accent,
-    badgeText: `LEVEL ${index + 1}`,
-  };
-  return spec;
+/**
+ * Phase 5: an offline 2D game level comes from a genre kit (`genreKits.ts`), chosen by what the prompt asks for. Every kit is verified and won by the
+ * playtest bot at every difficulty, so the offline director still ships levels that can be beaten.
+ */
+function buildLocal2DLevel(prompt: string, beat: StoryboardBeat, index: number, total: number): SceneSpec {
+  return buildGenreKit(kitForGenre(detectGameGenre(prompt)), {
+    index,
+    total,
+    difficulty: Math.max(1, beat.difficulty ?? index + 1),
+    title: beat.title,
+    description: beat.description,
+    beat: beat.beat,
+  });
 }
 
 interface FilmTheme {
@@ -956,7 +826,7 @@ export function buildLocalSceneForBeat(prompt: string, plan: StoryboardPlan, ind
   const beat = plan.beats[index];
   const total = plan.beats.length;
   if (beat.mode === 'game' || plan.kind === 'game-levels') {
-    return beat.engineType === '2d' ? buildLocal2DLevel(beat, index, total) : buildLocal3DGameLevel(beat, index, total);
+    return beat.engineType === '2d' ? buildLocal2DLevel(prompt, beat, index, total) : buildLocal3DGameLevel(beat, index, total);
   }
   if (beat.engineType === '2d') {
     // 2D motion-graphics shot: reuse the blank 2D stage with a kinetic title card per beat.

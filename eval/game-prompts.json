@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "note": "Golden prompts for npm run eval:game. Each asks for a multi-level 2D game; the offline director must ship levels that verify clean and that a bot can win.",
+  "prompts": [
+    { "id": "platformer-3", "shape": "platformer", "prompt": "Make a 3-level 2D platformer where I jump between floating platforms and collect coins" },
+    { "id": "platformer-vi", "shape": "platformer", "prompt": "Làm game platformer 2D 4 màn nhảy qua các bệ để nhặt xu" },
+    { "id": "key-hunt-3", "shape": "key-hunt", "prompt": "Make a 3-level 2D game where I find every key to open the door, with spikes in the way" },
+    { "id": "key-hunt-vi", "shape": "key-hunt", "prompt": "Làm game 3 màn 2D tìm chìa khoá mở cửa, có bẫy gai" },
+    { "id": "turret-3", "shape": "turret-dodge", "prompt": "Make a 3-level 2D game with turrets shooting bullets; I dodge and collect coins" },
+    { "id": "turret-vi", "shape": "turret-dodge", "prompt": "Làm game 2D 3 màn né đạn của tháp pháo và nhặt xu" },
+    { "id": "survival-3", "shape": "survival", "prompt": "Make a 3-level 2D survival game: stay alive until the timer ends while hazards fall" },
+    { "id": "survival-vi", "shape": "survival", "prompt": "Làm game 2D 3 màn sinh tồn, sống sót đến khi hết giờ" },
+    { "id": "long-run-6", "shape": "platformer", "prompt": "Make a 6-level 2D platformer with growing difficulty" }
+  ]
+}

@@ -58,9 +58,15 @@ paths:
 - Shared tool layer (Phase 4 Director D, `src/agent/tools/sceneTools.ts` + `src/agent/logicFinalize.ts`): ONE pure `checkScene` (recipes hook -> `finalizeLogicGraph` -> `autoFixSceneSpec` -> verify)
   is the check for the studio patch loop, the tool loop and MCP `omnistage_apply_patch`; never add a second path. `finalizeLogicGraph` and its repair helpers live in `logicFinalize.ts` (no store, DOM or fetch;
   `studioAgent` re-exports them). The toolbox is pure, `run` never throws (errors are "ERROR: ..." text), results are capped (`MAX_TOOL_RESULT_CHARS`), a patch that makes verification worse is reverted.
-  Tools exist only for things that exist: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `finish`. Do NOT add `generate_asset` (needs the cost-confirmation step), `playtest`, `screenshot` or
-  `add_from_kit` until their machinery exists. Skills stay prompt text; no tool runs code.
+  Tools exist only for things that exist: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `finish`, plus the host tools `add_from_kit` and `playtest` (Phase 5; a toolbox lists them only when the host passes `extraTools: GAME_TOOL_HANDLERS` from `tools/gameTools.ts`, so `sceneTools.ts` stays light for the client). Do NOT add `generate_asset` (needs the cost-confirmation step) or `screenshot`
+  until their machinery exists. Skills stay prompt text; no tool runs code.
 - Tool-use edit loop (`server/ai/toolLoop.ts`, `POST /api/agent/tools` in `server/ai/toolRoute.ts`, studio `runToolEdit`): opt-in (`aiEditMode: 'tools'`, default stays `patch`) and eligible only when the PRIMARY connection is
   `anthropic` with a key (`resolveToolLoopConnection`); everything else returns 501 / null and the studio uses the JSON patch loop. Any failure of the tool loop (including 503) also falls through to the patch loop, which
   still owns the 503 -> offline director decision, and the result notes it. Limits: <= 12 turns, <= 40 tool calls, `client` injectable (tests use a scripted fake, never the network). It has NOT been run against a live
   Anthropic account; do that before making it the default. Keys are never logged, echoed or put in transcripts. Keep `tests/sceneTools.test.ts`, `tests/toolLoop.test.ts` and `tests/mcpServer.test.ts` green.
+- Genre kits and playtest (Phase 5, `src/agent/genreKits.ts`, `src/playtest/*`): a kit must verify with no errors AND be won by the bot at every difficulty, also after `checkScene`
+  (the shipped state), and `detectGameGenre` / `kitForGenre` choose it. The bot runs the REAL runtime headlessly (`headless2d.ts`: `stepStage2D`, the Player store, `RuntimeLogicGraph`); never fork
+  game rules into the bot. "won" is proof (`replayTape` reproduces it); "not-won" is only a warning with evidence, never a verifier error. The bot is deterministic (no `Date`/`Math.random`).
+  A change to the runtime, a kit or the finalizer needs `tests/playtest.test.ts`, `tests/genreKits.test.ts` and `npm run eval:game` (offline baseline; live with `--server`; keep `tests/gameEval.test.ts`
+  green; add a golden prompt to `eval/game-prompts.json` when you add a kit). 2D pickups are collected by the runtime itself: the finalizer must not wire a collection chain for them, and 2D action
+  nodes must not carry 3D-only params (`animation`, `activeClip`, `speed`).

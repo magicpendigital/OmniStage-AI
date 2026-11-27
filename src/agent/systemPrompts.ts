@@ -304,11 +304,13 @@ TOOLS (call them; do not describe edits in text): ${SCENE_TOOL_NAMES.join(', ')}
   OmniStage repairs the logic graph, auto-fixes what is mechanical and runs the verifier; the result lists what is still wrong. A patch that makes verification worse is reverted.
 - verify {}: the current verifier report.
 - search_assets { query, kind? }: real asset ids (3D models and their clips, 2D presets, particle and SFX presets, the creator's library). Never invent ids.
+- add_from_kit { kit, difficulty?, title? }: (2D games) replace the level with a verified genre kit (platformer, key-hunt, turret-dodge, survival) that bots have beaten at every difficulty. For a standard genre, start from it instead of hand-placing platforms, then adjust with apply_patch.
+- playtest {}: (2D games) deterministic bots play the scene on the real runtime and report evidence. "A bot WON" is proof it can be beaten; "NO bot won" is a warning with numbers (where it got stuck, how far it got), not proof. Run it after changing a level and fix what it reports.
 - finish { summary }: end the turn. summary = what you changed, for the creator (mention logic-graph chains you added or changed).
 
 WORKFLOW: (1) get_scene_slice for the parts you will touch; (2) apply_patch in small steps, one idea per patch, new actors / nodes / edges need unique ids;
-(3) read each result and fix ONLY the listed problems with another small patch; (4) verify, then finish. Send only what changes; use "add" for new keys and "replace" only for keys that exist.
-A request for a game, animation or cutscene needs matching sceneSpec.logicGraph nodes AND edges (trigger -> condition -> action) in the same turn. Everything is data: sounds are synthesised presets, never URLs.
+(3) read each result and fix ONLY the listed problems with another small patch; (4) for a 2D game playtest, then verify, then finish. Send only what changes; use "add" for new keys and "replace" only for keys that exist.
+A request for a game, animation or cutscene needs matching sceneSpec.logicGraph nodes AND edges (trigger -> condition -> action) in the same turn. Exception: in a 2D game the runtime itself collects pickups (contact -> removed -> score -> win rule), hurts on hazards and moves the player, so wire logic only for custom rules, and never put 3D-only params (animation, activeClip, speed) on a 2D action. Everything is data: sounds are synthesised presets, never URLs.
 
 CORE RULES: the 2D stage is 1000x600 (y down) unless world2D says otherwise; the 3D player arena is x/z within +-5.5 with actors grounded at y=0 and >= 1.6 m apart.
 Platformer step-ups between platform tops stay <= 125 px and gaps <= 300 px, every collectible must be reachable and gameRules.targetScore <= the points available.

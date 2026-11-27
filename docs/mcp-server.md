@@ -31,6 +31,8 @@ claude mcp add omnistage -- npx tsx mcp/server.ts --project projects/omnistage.s
 | `omnistage_create_scene` | Blank `2d` / `3d` scene, `game` or `media`. |
 | `omnistage_get_scene_slice` | Reads only the sections you ask for (`summary`, `actors`, `nodes2D`, `logic`, `world`, `rules`, `hud`, `variables`, `audio`, `camera`, `vfx`, `other`), optionally narrowed by `ids`. Capped at ~6000 characters; use `omnistage_get_scene` for the whole scene. |
 | `omnistage_search_assets` | Finds real asset ids: 3D models with their clips, 2D presets, particle and SFX presets (`kind` filter). |
+| `omnistage_add_from_kit` | 2D games: replaces the level with a verified genre kit (`platformer`, `key-hunt`, `turret-dodge`, `survival`; `difficulty` 1–6) through the shared check, then saves. Kits are beaten by the playtest bot at every difficulty. |
+| `omnistage_playtest` | 2D games: deterministic bots play the scene on the real game runtime and return evidence (won = proven, replayable; not-won = a warning with numbers: collected, setbacks, where the player got stuck, whether doing nothing wins). Read-only. |
 | `omnistage_apply_patch` | JSON Merge Patch and/or JSON Patch ops → shared check (logic graph repair + auto-fix + verify, the same path as the studio) → save. Returns remaining issues. |
 | `omnistage_verify` | Verifier only (no changes). |
 | `omnistage_set_active_scene`, `omnistage_link_scenes` | Storyboard order and level progression (`sequence.nextSceneId`). |
@@ -41,11 +43,13 @@ Calls are serialised, and project writes are atomic (temp file + rename). Scene 
 
 ### Shared tool layer
 
-`omnistage_get_scene_slice`, `omnistage_search_assets` and the check behind `omnistage_apply_patch` come from the same pure module the studio uses (`src/agent/tools/sceneTools.ts`): `checkScene` = recipes hook → `finalizeLogicGraph` → `autoFixSceneSpec` → verifier. The studio's native tool-use edit mode (Settings → AI → "Tool use", Anthropic API only, opt-in, falls back to JSON patches) exposes the same tools to the model: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `finish`.
+`omnistage_get_scene_slice`, `omnistage_search_assets` and the check behind `omnistage_apply_patch` come from the same pure module the studio uses (`src/agent/tools/sceneTools.ts`): `checkScene` = recipes hook → `finalizeLogicGraph` → `autoFixSceneSpec` → verifier. The studio's native tool-use edit mode (Settings → AI → "Tool use", Anthropic API only, opt-in, falls back to JSON patches) exposes the same tools to the model: `get_scene_slice`, `apply_patch`, `verify`, `search_assets`, `add_from_kit`, `playtest`, `finish`.
 
 Differences: over MCP a patch is always saved and its report returned (the calling agent decides what to do); in the studio tool loop a patch that makes verification worse is reverted.
 
-Deferred (they need machinery that does not exist yet, so there are no stub tools): `generate_asset` (needs the creator's cost confirmation, as in the Meshy panel), `playtest` (deterministic bot, roadmap E), `screenshot`, `add_from_kit` (genre kits, roadmap C).
+Deferred (they need machinery that does not exist yet, so there are no stub tools): `generate_asset` (needs the creator's cost confirmation, as in the Meshy panel), `screenshot`.
+
+`omnistage_add_from_kit` and `omnistage_playtest` are host tools (`src/agent/tools/gameTools.ts`): they need the headless game runtime, so the studio tool loop and this server pass them to the toolbox as `extraTools`; a toolbox without them neither lists nor runs them. Playtest philosophy: a bot that wins is proof, a bot that does not win is only a hint (the bots are simple), so "not-won" is a warning, never an error.
 
 ## Example agent loop
 

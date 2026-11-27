@@ -21,6 +21,7 @@ import { buildStandalonePlayable, StandaloneAdNetwork } from '../src/exporter/me
 import { PLAYER_RUNTIME } from '../src/exporter/generated/playerRuntime';
 import { applyJsonPatch, mergePatch } from '../src/utils/jsonPatch';
 import { checkScene, mcpToolDefinition, SceneToolbox } from '../src/agent/tools/sceneTools';
+import { GAME_TOOL_HANDLERS } from '../src/agent/tools/gameTools';
 
 export interface ProjectBundle {
   projectBundleVersion: string;
@@ -169,7 +170,7 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
         'Game design (optional): sceneSpec.gameDesign {title,genre,pitch,coreLoop,goal,win,lose,mechanics[jump|collect|avoid-hazards|dodge-projectiles|unlock|survive],usesHealth,levels[{name,teaches,introduces,uses,difficulty}]} makes the verifier check the level against it (intent.* warnings: missing verbs, health, HUD bar, timer, counters). Omit it for scenes without a design.',
         'Game state (skill game-state-and-combat): sceneSpec.variables [{id,initial,min?,max?}], node.health {max,invulnerableSeconds?}, node.contactDamage, node.prefab + node.spawner {prefabId,everySeconds,max?} + node.projectile {vx,vy,damage?,lifetimeSeconds?,target?}, sceneSpec.hud [{id,kind,source,anchor,...}], gameRules.winCondition "variable-threshold" + winVariable {id,atLeast}; logic nodes variable-compare / health-check / random-chance and actions set-variable / add-variable / damage / heal / spawn / despawn / win / lose. Every variableId must be declared and every prefabId a prefab node.',
         'Game behaviour (enemies, NPCs, doors): actors[].stateMachine / nodes2D[].stateMachine = { initial, states: { name: { move?, points?, speed?, clip?, animation?, onEnter?: Action[], transitions?: [{ to, when: Condition }] } } } using only the stateMachine vocabulary below (skill behaviour-state-machines).',
-        'Read before you patch: omnistage_get_scene_slice returns only the sections you ask for (summary, actors, nodes2D, logic, world, rules, hud, variables, audio, camera, vfx); omnistage_search_assets finds real asset / preset ids. omnistage_apply_patch runs the same shared check as the studio (logic graph repair, auto-fix, verifier).',
+        'Read before you patch: omnistage_get_scene_slice returns only the sections you ask for (summary, actors, nodes2D, logic, world, rules, hud, variables, audio, camera, vfx); omnistage_search_assets finds real asset / preset ids; omnistage_add_from_kit builds a verified genre level (platformer, key-hunt, turret-dodge, survival) and omnistage_playtest lets deterministic bots play a 2D game and returns evidence (won = proven, not-won = check). omnistage_apply_patch runs the same shared check as the studio (logic graph repair, auto-fix, verifier).',
       ],
       assets3D: Object.values(ASSET_REGISTRY).map((a) => ({ assetId: a.assetId, name: a.name, category: a.category, clips: a.embeddedClips || [] })),
       presets2D: PRESET_2D_ASSETS.map((p) => ({ id: p.id, name: p.name, type: p.nodeTemplate.type, role: p.nodeTemplate.physics2D })),
@@ -228,6 +229,30 @@ export const OMNISTAGE_TOOLS: ToolDefinition[] = [
       const bundle = await loadProject(ctx);
       const scene = bundle ? pickScene(bundle, args.sceneId) : createBlankSceneSpec('3d');
       return runSharedTool(new SceneToolbox(scene), 'search_assets', args);
+    },
+  },
+  {
+    ...sharedToolDefinition('playtest'),
+    run: async (args, ctx) => {
+      const scene = pickScene(await requireProject(ctx), args.sceneId);
+      return runSharedTool(new SceneToolbox(scene, { extraTools: GAME_TOOL_HANDLERS }), 'playtest', args);
+    },
+  },
+  {
+    ...sharedToolDefinition('add_from_kit'),
+    mutates: true,
+    run: async (args, ctx) => {
+      const bundle = await requireProject(ctx);
+      const scene = pickScene(bundle, args.sceneId);
+      const toolbox = new SceneToolbox(scene, { scenes: bundle.scenes, extraTools: GAME_TOOL_HANDLERS });
+      const text = runSharedTool(toolbox, 'add_from_kit', args);
+      const result = toolbox.result();
+      if (result.changed) {
+        result.spec.id = scene.id;
+        replaceScene(bundle, result.spec);
+        await saveProject(ctx, bundle);
+      }
+      return { sceneId: scene.id, message: text, summary: summarize(result.spec), verification: result.report };
     },
   },
   {

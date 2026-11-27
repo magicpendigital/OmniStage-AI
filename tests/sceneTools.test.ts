@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { GAME_TOOL_HANDLERS } from '../src/agent/tools/gameTools';
 import { checkScene, MAX_TOOL_RESULT_CHARS, SceneToolbox, SCENE_TOOL_DEFINITIONS, SCENE_TOOL_NAMES, sliceScene } from '../src/agent/tools/sceneTools';
 import { cloneSceneSpec, createBlankSceneSpec } from '../src/registry/assetRegistry';
 import { buildAgentSystemPrompt } from '../src/agent/systemPrompts';
@@ -14,7 +15,7 @@ function gameScene(): SceneSpec {
 
 test('tool definitions: exactly the tools that exist, plain JSON-schema objects', () => {
   assert.deepEqual(SCENE_TOOL_DEFINITIONS.map((d) => d.name), [...SCENE_TOOL_NAMES]);
-  for (const forbidden of ['generate_asset', 'playtest', 'screenshot', 'add_from_kit']) {
+  for (const forbidden of ['generate_asset', 'screenshot']) {
     assert.ok(!SCENE_TOOL_NAMES.includes(forbidden as never), `${forbidden} must not exist yet`);
   }
   for (const d of SCENE_TOOL_DEFINITIONS) {
@@ -185,4 +186,50 @@ test('tools system prompt: compact, names the tools, keeps the data contracts', 
   assert.doesNotMatch(prompt, /AVAILABLE 3D RIGGED GLTF/);
   assert.ok(prompt.length < buildAgentSystemPrompt().length, 'smaller than the full prompt');
   assert.match(buildAgentSystemPrompt(undefined, 'patch'), /JSON PATCH EDITS/, 'other modes untouched');
+});
+
+test('host tools: a plain toolbox neither lists nor runs add_from_kit / playtest; one with GAME_TOOL_HANDLERS does', () => {
+  const plain = new SceneToolbox(gameScene());
+  assert.deepEqual(plain.definitions.map((d) => d.name), ['get_scene_slice', 'apply_patch', 'verify', 'search_assets', 'finish']);
+  assert.match(plain.run('playtest', {}), /^ERROR: .*not available in this host/);
+  const full = new SceneToolbox(gameScene(), { extraTools: GAME_TOOL_HANDLERS });
+  assert.deepEqual(full.definitions.map((d) => d.name), [...SCENE_TOOL_NAMES]);
+});
+
+test('add_from_kit: replaces the level through the shared check, keeps id and title, and the result plays', () => {
+  const spec = gameScene();
+  spec.title = 'My Game';
+  const tb = new SceneToolbox(spec, { extraTools: GAME_TOOL_HANDLERS });
+  const out = tb.run('add_from_kit', { kit: 'key-hunt', difficulty: 3 });
+  assert.match(out, /^OK:/, out);
+  assert.match(out, /Key hunt/);
+  assert.match(out, /a bot beat the merged level/, out);
+  const result = tb.result();
+  assert.equal(result.changed, true);
+  assert.equal(result.spec.id, spec.id);
+  assert.equal(result.spec.title, 'My Game');
+  assert.equal(result.spec.mode, 'game');
+  assert.ok(result.spec.nodes2D.length > 5);
+  assert.equal(result.report.errors, 0);
+  const played = tb.run('playtest', {});
+  assert.match(played, /a bot WON/, played);
+});
+
+test('add_from_kit: bad input is an ERROR string; 3D scenes are refused; nothing changes', () => {
+  const tb = new SceneToolbox(gameScene(), { extraTools: GAME_TOOL_HANDLERS });
+  assert.match(tb.run('add_from_kit', { kit: 'racing' }), /^ERROR: Unknown kit "racing"\. Kits: platformer/);
+  assert.match(tb.run('add_from_kit', {}), /^ERROR: Unknown kit/);
+  assert.equal(tb.result().changed, false);
+  const three = createBlankSceneSpec('3d');
+  assert.match(new SceneToolbox(three, { extraTools: GAME_TOOL_HANDLERS }).run('add_from_kit', { kit: 'platformer' }), /^ERROR: .*3D/);
+});
+
+test('playtest: reports evidence; skips media and 3D scenes politely', () => {
+  const noPlayer = gameScene();
+  noPlayer.nodes2D = noPlayer.nodes2D.filter((n) => !n.physics2D.startsWith('player'));
+  const tb = new SceneToolbox(noPlayer, { extraTools: GAME_TOOL_HANDLERS });
+  const media = new SceneToolbox(createBlankSceneSpec('2d'), { extraTools: GAME_TOOL_HANDLERS });
+  assert.match(media.run('playtest', {}), /^Playtest skipped: .*media/);
+  const empty = tb.run('playtest', {});
+  assert.match(empty, /playtest\.no-player/);
 });

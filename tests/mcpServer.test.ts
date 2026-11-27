@@ -157,3 +157,25 @@ test('apply_patch runs the shared check: logic graph is finalized and results ke
   const broken = await call(ctx, 'omnistage_apply_patch', { ops: [{ op: 'replace', path: '/actors/@ghost/position', value: [0, 0, 0] }] });
   assert.equal(broken.isError, true);
 });
+
+test('game tools over MCP: add_from_kit builds a level into the project file, playtest is read-only and a bot wins it', async () => {
+  const ctx = context();
+  const list: any = await handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ctx);
+  const byName = Object.fromEntries(list.result.tools.map((t: any) => [t.name, t]));
+  assert.equal(byName['omnistage_playtest'].annotations.readOnlyHint, true);
+  assert.equal(byName['omnistage_add_from_kit'].annotations.readOnlyHint, false);
+  assert.ok(byName['omnistage_add_from_kit'].inputSchema.properties.sceneId);
+
+  await call(ctx, 'omnistage_create_scene', { engineType: '2d', title: 'Kit me', mode: 'game' });
+  const made = await call(ctx, 'omnistage_add_from_kit', { kit: 'turret-dodge', difficulty: 2 });
+  assert.equal(made.isError, false, made.text);
+  assert.equal(made.json.verification.errors, 0);
+  const played = await call(ctx, 'omnistage_playtest', {});
+  assert.equal(played.isError, false, played.text);
+  assert.match(String(played.json ?? played.text), /a bot WON/);
+  const stored = await call(ctx, 'omnistage_get_scene', {});
+  assert.ok(stored.json.nodes2D.length > 5, 'the kit level was saved');
+
+  const bad = await call(ctx, 'omnistage_add_from_kit', { kit: 'nope' });
+  assert.equal(bad.isError, true);
+});

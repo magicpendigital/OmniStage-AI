@@ -404,12 +404,20 @@ const PRESETS: GenrePreset[] = [
   },
 ];
 
+function presetForPrompt(prompt: string): GenrePreset {
+  const text = ` ${fold(prompt)} `;
+  return PRESETS.find((p) => p.triggers.some((t) => text.includes(` ${t} `) || (t.length > 4 && text.includes(t)))) ?? PRESETS[PRESETS.length - 1];
+}
+
+/** The genre the offline director picks for a prompt (keyword match, platformer by default). Genre kits are chosen from it. */
+export function detectGameGenre(prompt: string): GameGenre {
+  return presetForPrompt(prompt).genre;
+}
+
 export function buildLocalGameDesign(prompt: string, intent: { sceneCount: number }): GameDesign {
   const n = Math.max(1, intent.sceneCount);
   const vi = lineLanguage(prompt) === 'vi';
-  const text = ` ${fold(prompt)} `;
-  const preset =
-    PRESETS.find((p) => p.triggers.some((t) => text.includes(` ${t} `) || (t.length > 4 && text.includes(t)))) ?? PRESETS[PRESETS.length - 1];
+  const preset = presetForPrompt(prompt);
   const words = vi ? preset.vi : preset.en;
   const levels: GameDesignLevel[] = Array.from({ length: n }, (_, i) => {
     const verb = preset.verbs[i] ?? undefined;

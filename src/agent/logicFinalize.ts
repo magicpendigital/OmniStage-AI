@@ -308,24 +308,32 @@ export function ensureMechanicLogicGraph(spec: SceneSpec): string[] {
     if (s.ids.length > 1) ref.actorIds = [...s.ids];
     return ref;
   };
-  const playAnimation = (id: string, title: string, s: MechanicSubject, extra: Record<string, any>) =>
-    b.node(
+  const playAnimation = (id: string, title: string, s: MechanicSubject, extra: Record<string, any>) => {
+    const params: Record<string, any> = {
+      ...refParams(s),
+      animation: s.animation,
+      activeClip: s.clip,
+      speed: 1,
+      scoreDelta: s.scoreValue,
+      onClickAction: s.onClickAction,
+      ...extra,
+    };
+    // Skeletal animation is 3D-only: the runtime refuses it for a 2D node, and the refusal aborted the whole action (the score never counted).
+    if (s.kind === '2d') {
+      delete params.animation;
+      delete params.activeClip;
+      delete params.speed;
+    }
+    return b.node(
       id,
       'action',
       'actor-action',
       title,
       [port('in-flow', 'Exec In', 'flow'), port('in-actor', 'Target Actor', 'actor')],
       [port('out-flow', 'Next Action', 'flow'), port('out-score', 'Score Delta', 'number')],
-      {
-        ...refParams(s),
-        animation: s.animation,
-        activeClip: s.clip,
-        speed: 1,
-        scoreDelta: s.scoreValue,
-        onClickAction: s.onClickAction,
-        ...extra,
-      }
+      params
     );
+  };
   const vfxNode = (id: string, title: string, vfxType: string, s?: MechanicSubject) =>
     b.node(
       id,
@@ -434,6 +442,9 @@ export function ensureMechanicLogicGraph(spec: SceneSpec): string[] {
   }
 
   for (const s of subjects) {
+    // A 2D pickup is collected by the runtime itself (contact -> removed -> score -> win rule). A wired chain would take over the pickup
+    // (the runtime skips its own collection for contacts a logic graph handles) without ever removing it, so the star could be farmed.
+    if (s.kind === '2d' && s.role === 'collectible') continue;
     b.row += 1;
     if (s.role === 'collectible') {
       const trig = collisionTrigger(s, 'collectible');
@@ -933,6 +944,36 @@ function sanitizeLogicGraph(draft: SceneSpec): string[] {
  * Post-processes any generated SceneSpec (Gemini or local heuristics): validates the logic graph and wires every
  * mechanic that has no node yet, so non-coders always get connected trigger -> condition -> action chains to inspect.
  */
+/**
+ * Scenes saved before 2D pickups were left to the runtime carry the old generated collection chain (`node-collectible-*-collision|range|collect`) and 3D-only
+ * animation params on 2D actions. The chain takes over the pickup without removing it, and the params make every action throw: drop both.
+ */
+function repairLegacy2DChains(spec: SceneSpec): string[] {
+  const graph = spec.logicGraph;
+  if (spec.engineType !== '2d' || !graph || !Array.isArray(graph.nodes)) return [];
+  const notes: string[] = [];
+  const generated = new Set(
+    graph.nodes.filter((n) => /^node-collectible-.+-(collision|range|collect)$/.test(n.id) && typeof n.params?.node2DId === 'string').map((n) => n.id)
+  );
+  if (generated.size) {
+    graph.nodes = graph.nodes.filter((n) => !generated.has(n.id));
+    graph.edges = (graph.edges || []).filter((e) => !generated.has(e.sourceNodeId) && !generated.has(e.targetNodeId));
+    notes.push(`Logic graph: removed ${generated.size} generated 2D pickup node(s); the runtime collects 2D pickups itself`);
+  }
+  let stripped = 0;
+  for (const n of graph.nodes) {
+    if (n.type !== 'action' || !n.params) continue;
+    for (const key of ['animation', 'activeClip', 'speed']) {
+      if (n.params[key] !== undefined && (typeof n.params.node2DId === 'string' || n.params.actorId === undefined)) {
+        delete n.params[key];
+        stripped++;
+      }
+    }
+  }
+  if (stripped) notes.push(`Logic graph: removed ${stripped} 3D-only animation param(s) from 2D actions`);
+  return notes;
+}
+
 export function finalizeLogicGraph(spec: SceneSpec): { spec: SceneSpec; notes: string[] } {
   const next = cloneSceneSpec(spec);
   const notes: string[] = [];
@@ -942,6 +983,7 @@ export function finalizeLogicGraph(spec: SceneSpec): { spec: SceneSpec; notes: s
     const fixes = sanitizeLogicGraph(next);
     if (fixes.length) notes.push(`Logic graph auto-repaired: ${fixes.length} issue(s) (${fixes[0]}${fixes.length > 1 ? ', ...' : ''})`);
   }
+  notes.push(...repairLegacy2DChains(next));
   notes.push(...ensureMechanicLogicGraph(next));
   return { spec: next, notes };
 }

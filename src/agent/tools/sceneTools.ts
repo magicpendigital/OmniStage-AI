@@ -12,9 +12,12 @@
  *   apply_patch      mergePatch and/or JSON Patch ops, checked by `checkScene`; a patch that makes verification worse is reverted
  *   verify           the current verifier report
  *   search_assets    built-in 3D assets, 2D presets, particle / SFX presets and caller-supplied library assets
+ *   add_from_kit     (Phase 5) replace a 2D game level with a verified, bot-winnable genre kit        (host tool)
+ *   playtest         (Phase 5) deterministic bots play the 2D game on the shared runtime, return evidence (host tool)
  *   finish           ends the loop with a short summary
  *
- * Deliberately NOT here (they need machinery that does not exist yet): generate_asset, playtest, screenshot, add_from_kit.
+ * Host tools need the headless runtime, so the host passes `extraTools` (see `gameTools.ts`); this module stays light because the
+ * client imports its tool names for the prompt. Deliberately NOT here (no machinery yet): generate_asset, screenshot.
  * Tools never execute code; every result is a compact string (capped) and `run` never throws.
  */
 import { applyPatchProposal, buildIdIndex, describeReportForModel } from '../patchLoop';
@@ -46,7 +49,10 @@ export const SCENE_SLICE_SECTIONS = [
 ] as const;
 export type SceneSliceSection = (typeof SCENE_SLICE_SECTIONS)[number];
 
-export const SCENE_TOOL_NAMES = ['get_scene_slice', 'apply_patch', 'verify', 'search_assets', 'finish'] as const;
+export const SCENE_TOOL_NAMES = ['get_scene_slice', 'apply_patch', 'verify', 'search_assets', 'add_from_kit', 'playtest', 'finish'] as const;
+/** Tools the host provides through `SceneToolboxOptions.extraTools` (see gameTools.ts); a toolbox without them neither lists nor runs them. */
+export const HOST_TOOL_NAMES = ['add_from_kit', 'playtest'] as const;
+export type HostToolName = (typeof HOST_TOOL_NAMES)[number];
 export type SceneToolName = (typeof SCENE_TOOL_NAMES)[number];
 
 export type AssetSearchKind = '3d' | '2d-preset' | 'particle' | 'sfx';
@@ -125,6 +131,26 @@ export const SCENE_TOOL_DEFINITIONS: SceneToolDefinition[] = [
       },
       required: ['query'],
     },
+  },
+  {
+    name: 'add_from_kit',
+    description:
+      'Replace the level of a 2D GAME scene with a genre kit: a complete, verified level that a bot has beaten at every difficulty (platformer, key-hunt, turret-dodge, survival). Keeps the scene id, title and links; REPLACES its 2D nodes, game rules, HUD, variables, logic graph, stage size / camera and marketing overlay (anything built there is lost), so call it FIRST on a new or empty game, then adjust with apply_patch. Prefer it over hand-placing platforms for a standard genre.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kit: { type: 'string', enum: ['platformer', 'key-hunt', 'turret-dodge', 'survival'] },
+        difficulty: { type: 'integer', minimum: 1, maximum: 6, description: '1 gentle ... 6 hard. Default 2.' },
+        title: { type: 'string', description: 'Optional level title.' },
+      },
+      required: ['kit'],
+    },
+  },
+  {
+    name: 'playtest',
+    description:
+      'Let deterministic bots play the current 2D GAME on the real game runtime and return evidence: did a bot win (a replayable proof), how far the best one got, setbacks, where the player got stuck, whether doing nothing wins. "No bot won" is a warning to check, not proof the level is impossible. Run it after you change a level, and fix what it reports.',
+    input_schema: { type: 'object', properties: {} },
   },
   {
     name: 'finish',
@@ -342,7 +368,12 @@ function formatHit(a: AssetHit): Record<string, unknown> {
 // The toolbox
 // ---------------------------------------------------------------------------
 
+/** A host-provided tool: gets the toolbox (read `spec`, call `commitCandidate`) and the tool's arguments; returns the result text. */
+export type HostToolHandler = (toolbox: SceneToolbox, args: Record<string, any>) => string;
+
 export interface SceneToolboxOptions {
+  /** Handlers for the host tools (`HOST_TOOL_NAMES`), from gameTools.ts. */
+  extraTools?: Partial<Record<HostToolName, HostToolHandler>>;
   /** Other scenes of the project (for sequence validation). */
   scenes?: SceneSpec[];
   /** Extra searchable assets (personal library / hub names). */
@@ -393,7 +424,8 @@ export class SceneToolbox {
 
   /** Tool definitions (plain JSON-schema objects). */
   get definitions(): SceneToolDefinition[] {
-    return SCENE_TOOL_DEFINITIONS;
+    const hosted = this.opts.extraTools || {};
+    return SCENE_TOOL_DEFINITIONS.filter((d) => !(HOST_TOOL_NAMES as readonly string[]).includes(d.name) || !!hosted[d.name as HostToolName]);
   }
 
   get finished(): boolean {
@@ -444,13 +476,19 @@ Use get_scene_slice to read what you need, apply_patch in small steps, verify, t
           return this.verifyTool();
         case 'search_assets':
           return this.searchTool(args);
+        case 'add_from_kit':
+        case 'playtest': {
+          const handler = this.opts.extraTools?.[name];
+          if (!handler) return errorText(`Tool "${name}" is not available in this host. Available: ${this.definitions.map((d) => d.name).join(', ')}.`);
+          return capText(handler(this, args));
+        }
         case 'finish': {
           this.finishedFlag = true;
           this.summaryText = typeof args.summary === 'string' ? args.summary.trim().slice(0, 1200) : '';
           return 'OK: finished.';
         }
         default:
-          return errorText(`Unknown tool "${String(name).slice(0, 60)}". Available: ${SCENE_TOOL_NAMES.join(', ')}.`);
+          return errorText(`Unknown tool "${String(name).slice(0, 60)}". Available: ${this.definitions.map((d) => d.name).join(', ')}.`);
       }
     } catch (e) {
       return errorText(`Tool "${String(name).slice(0, 60)}" failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -479,7 +517,6 @@ Use get_scene_slice to read what you need, apply_patch in small steps, verify, t
     const merged = !!proposal.mergePatch && Object.keys(proposal.mergePatch).length > 0;
     if (!opCount && !merged) return errorText('Nothing to apply: send "mergePatch" and/or a non-empty "ops" array.');
 
-    const base = this.baseline();
     let candidate: SceneSpec;
     try {
       candidate = applyPatchProposal(this.working, proposal);
@@ -489,6 +526,17 @@ Use get_scene_slice to read what you need, apply_patch in small steps, verify, t
       return errorText(`PATCH REJECTED: ${msg}. Nothing was applied; the scene is unchanged. Send a corrected patch.`);
     }
 
+    return this.commitCandidate(candidate, { ops: opCount, merged, label: [merged ? 'mergePatch' : '', opCount ? opCount + ' op(s)' : ''].filter(Boolean).join(' + ') });
+  }
+
+  /**
+   * The one place a changed scene is checked and kept: checkScene, revert when it raises the error count, otherwise commit.
+   * Used by apply_patch and by host tools that replace parts of the scene (add_from_kit). Returns the tool result text.
+   */
+  commitCandidate(candidate: SceneSpec, info: { ops?: number; merged?: boolean; label: string }): string {
+    const opCount = info.ops ?? 0;
+    const merged = info.merged ?? false;
+    const base = this.baseline();
     const checked = this.check(candidate);
     if (errorScore(checked.report) > errorScore(base.report)) {
       this.patches.push({ ok: false, ops: opCount, merged, reason: 'worse', errorsAfter: checked.report.errors });
@@ -505,7 +553,7 @@ Use get_scene_slice to read what you need, apply_patch in small steps, verify, t
     checked.presets.forEach((p) => this.presets.add(p));
     this.patches.push({ ok: true, ops: opCount, merged, errorsAfter: checked.report.errors });
     const fixLine = checked.fixes.length ? ` OmniStage auto-fixed ${checked.fixes.length} issue(s): ${checked.fixes.slice(0, 3).join('; ')}${checked.fixes.length > 3 ? '; ...' : ''}.` : '';
-    return capText(`OK: patch applied (${[merged ? 'mergePatch' : '', opCount ? opCount + ' op(s)' : ''].filter(Boolean).join(' + ')}).${fixLine}\n${describeReportForModel(checked.report, 8)}`);
+    return capText(`OK: patch applied (${info.label}).${fixLine}\n${describeReportForModel(checked.report, 8)}`);
   }
 
   private verifyTool(): string {

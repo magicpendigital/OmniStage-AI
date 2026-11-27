@@ -12,6 +12,7 @@ npm run mcp -- --project projects/x.scenespec.json   # OmniStage MCP server (std
 npm run build:player                                  # regenerate the OmniStage Player bundle after changing src/player or src/runtime
 npm run test:e2e      # Playwright: exported Player in the installed Chrome, frame-stepped (after Player/runtime/render3d changes)
 npm run test:e2e:gpu  # WebGPU vs WebGL pixel parity on the real GPU (after render3d / render3d/webgpu changes)
+npm run eval:game      # offline game eval baseline: golden prompts -> levels -> verifier + playtest bot (after kit / runtime / finalizer changes)
 ```
 
 Verification loop: change → `npm run verify` → fix until exit code 0. Do not eyeball results or skip failing tests.
@@ -32,8 +33,9 @@ Verification loop: change → `npm run verify` → fix until exit code 0. Do not
 | Shared runtime (rules, logic graph, 2D frame) | `src/runtime/*` | `.claude/rules/renderers.md` |
 | OmniStage Player (exports, Play Test, phones) | `src/player/*`, `scripts/build-player.mjs`, `src/exporter/playerHtml.ts` | `.claude/rules/exporter.md` |
 | Shared 3D builders (studio + Player) | `src/render3d/*` | `.claude/rules/renderers.md` |
+| Playtest bot (2D, headless, shared runtime) | `src/playtest/*`, `src/agent/gameEval.ts` | `.claude/rules/agent-and-verification.md` |
 | Renderers 3D/2D | `src/renderer/*` | `.claude/rules/renderers.md` |
-| AI director, skills, verifier | `src/agent/*`, `src/verification/*`, `server.ts` | `.claude/rules/agent-and-verification.md` |
+| AI director, skills, verifier, genre kits | `src/agent/*`, `src/verification/*`, `server.ts` | `.claude/rules/agent-and-verification.md` |
 | Exporter / playable ads | `src/exporter/*`, `src/audio/*`, `src/animation/*`, `src/vfx/*`, `src/media/*` | `.claude/rules/exporter.md` |
 | MCP server (agents author projects) | `mcp/*`, `docs/mcp-server.md` | `.claude/rules/agent-and-verification.md` |
 | Character auto-rig (OmniRig) | `src/rig/*`, `src/components/OmniRigModal.tsx` | `.claude/rules/omnirig.md` |

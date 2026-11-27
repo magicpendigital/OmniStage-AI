@@ -19,8 +19,13 @@ export interface RuntimeStoreApi<S = RuntimeHostState> {
 
 let bound: RuntimeStoreApi<any> | null = null;
 
-export function bindRuntimeStore(store: RuntimeStoreApi<any>) {
+export function bindRuntimeStore(store: RuntimeStoreApi<any> | null) {
   bound = store;
+}
+
+/** The store currently bound (null before the first bind). A headless run binds its own store and puts this one back afterwards. */
+export function boundRuntimeStore(): RuntimeStoreApi<any> | null {
+  return bound;
 }
 
 function store(): RuntimeStoreApi<RuntimeHostState> {

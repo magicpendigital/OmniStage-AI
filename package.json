@@ -23,6 +23,7 @@
     "test:e2e": "node scripts/build-player.mjs && playwright test --project=default",
     "test:e2e:gpu": "node scripts/build-player.mjs && playwright test --project=gpu",
     "eval:film": "tsx scripts/eval-film.ts",
+    "eval:game": "tsx scripts/eval-game.ts",
     "meshy:smoke": "tsx scripts/meshy-smoke.ts"
   },
   "dependencies": {

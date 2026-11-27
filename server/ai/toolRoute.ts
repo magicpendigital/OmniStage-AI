@@ -74,14 +74,16 @@ export function registerToolRoutes(app: Express) {
         return;
       }
       secret = conn.apiKey;
-      const [{ buildAgentSystemPrompt }, { SceneToolbox }, { createAnthropicToolClient, runToolLoop }] = await Promise.all([
+      const [{ buildAgentSystemPrompt }, { SceneToolbox }, { GAME_TOOL_HANDLERS }, { createAnthropicToolClient, runToolLoop }] = await Promise.all([
         import('../../src/agent/systemPrompts'),
         import('../../src/agent/tools/sceneTools'),
+        import('../../src/agent/tools/gameTools'),
         import('./toolLoop'),
       ]);
       const toolbox = new SceneToolbox(sceneSpec, {
         scenes: Array.isArray(scenes) ? scenes.filter((s: any) => s && typeof s === 'object' && typeof s.id === 'string').slice(0, MAX_SCENES) : undefined,
         assets: sanitizeExtraAssets(extraAssets),
+        extraTools: GAME_TOOL_HANDLERS,
       });
       const result = await runToolLoop({
         client: createAnthropicToolClient(conn.apiKey),
