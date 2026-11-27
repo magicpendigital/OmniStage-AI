@@ -192,6 +192,7 @@ const ModeBar: React.FC = () => {
               <option value="score-threshold">score threshold</option>
               <option value="collect-all">collect all</option>
               <option value="survive-timer">survive timer</option>
+              <option value="survive-waves">survive all waves</option>
               <option value="unbox-reveal">unbox reveal</option>
               <option value="variable-threshold">variable reaches</option>
             </select>

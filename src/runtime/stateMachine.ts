@@ -31,6 +31,9 @@ import { runtimeStore } from './host';
 import { matchClipName, resolveClipName } from './cinematics';
 import { playSceneSfx } from '../audio/audioBus';
 import { healthMax } from './game/state';
+import { cleanMessage } from './game/messages';
+import { nodeBox2D } from './physics/nodeBox';
+import { findPath, lineOfSight, NAV_CELL, NavGrid, navSignature, type NavInput } from './nav2d';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Vocabulary (closed unions, mirrored in the agent prompt and the MCP contract)
@@ -39,9 +42,10 @@ import { healthMax } from './game/state';
 export const STATE_MACHINE_MOVES: StateMachineMove[] = ['stay', 'patrol', 'move-to', 'chase-player', 'flee-player', 'return-home'];
 export const STATE_MACHINE_CONDITIONS: Array<StateMachineCondition['type']> = [
   'player-near', 'player-far', 'timer', 'arrived', 'health-below', 'score-at-least', 'signal', 'collided', 'clicked', 'random',
+  'player-visible', 'player-hidden',
 ];
 export const STATE_MACHINE_ACTIONS: Array<StateMachineAction['type']> = [
-  'add-score', 'add-health', 'spawn-vfx', 'play-sfx', 'send-signal', 'set-visible', 'end-game',
+  'add-score', 'add-health', 'spawn-vfx', 'play-sfx', 'send-signal', 'set-visible', 'show-message', 'end-game',
 ];
 const ANIMATIONS: AnimationType[] = ['idle', 'bounce', 'spin', 'walk', 'attack', 'float'];
 const VFX_TYPES: VFXType[] = ['sparkles', 'shockwave', 'floating-3d-badge', 'laser-beam', 'confetti'];
@@ -68,6 +72,9 @@ function sanitizeCondition(raw: any): StateMachineCondition | null {
     case 'player-near':
     case 'player-far':
       return finite(raw.distance) && raw.distance > 0 ? { type: raw.type, distance: Math.min(raw.distance, 2000) } : null;
+    case 'player-visible':
+    case 'player-hidden':
+      return { type: raw.type, ...(finite(raw.distance) && raw.distance > 0 ? { distance: Math.min(raw.distance, 2000) } : {}) };
     case 'timer':
       return finite(raw.seconds) ? { type: 'timer', seconds: clamp(raw.seconds, 0, 600) } : null;
     case 'health-below':
@@ -103,6 +110,10 @@ function sanitizeAction(raw: any): StateMachineAction | null {
       const name = signalName(raw.name);
       return name ? { type: 'send-signal', name } : null;
     }
+    case 'show-message': {
+      const msg = cleanMessage(raw);
+      return msg ? { type: 'show-message', text: msg.text, ...(msg.speaker ? { speaker: msg.speaker } : {}), ...(finite(raw.seconds) ? { seconds: msg.seconds } : {}) } : null;
+    }
     case 'set-visible':
     case 'end-game': {
       const key = raw.type === 'set-visible' ? 'visible' : 'won';
@@ -127,6 +138,7 @@ function sanitizeState(raw: any): StateMachineState {
     if (points.length) out.points = points;
   }
   if (finite(raw.speed) && raw.speed > 0) out.speed = Math.min(raw.speed, 1000);
+  if (raw.pathfind === true) out.pathfind = true;
   if (Array.isArray(raw.onEnter)) {
     const actions = raw.onEnter.map(sanitizeAction).filter(Boolean).slice(0, LIMITS.actions) as StateMachineAction[];
     if (actions.length) out.onEnter = actions;
@@ -257,11 +269,14 @@ export function stateMachineIssues(host: MachineHost, spec: Pick<SceneSpec, 'mod
   if (waiting.size) out.push({ code: 'machine.signal-unsent', severity: 'warning', message: `waits for signals nothing sends: ${[...waiting].join(', ')}`, fixable: false });
   const usesPlayer = Object.values(m.states).some((st) =>
     st.move === 'chase-player' || st.move === 'flee-player' ||
-    (st.transitions || []).some((t) => ['player-near', 'player-far', 'collided'].includes(t.when.type)));
+    (st.transitions || []).some((t) => ['player-near', 'player-far', 'collided', 'player-visible', 'player-hidden'].includes(t.when.type)));
   const hasPlayer = isHost2D(host)
     ? (spec.nodes2D || []).some((n) => n.physics2D?.startsWith('player-'))
     : (spec.actors || []).some((a) => a.physicsRole === 'player');
   if (usesPlayer && !hasPlayer) out.push({ code: 'machine.no-player', severity: 'warning', message: 'reacts to the player but the scene has no player', fixable: false });
+  if (!isHost2D(host) && Object.values(m.states).some((st) => st.pathfind)) {
+    out.push({ code: 'machine.pathfind-3d', severity: 'warning', message: 'pathfind only works in 2D scenes (3D arenas have no walls to walk around)', fixable: false });
+  }
   if (spec.mode !== 'game') out.push({ code: 'machine.media-mode', severity: 'warning', message: 'state machines only run in game mode (use performance for films)', fixable: false });
   return out;
 }
@@ -318,6 +333,8 @@ export interface MachineInputs {
   signals: ReadonlySet<string>;
   /** Phase 3: real hit points of an entity that has `health` (the machine's own counter is used otherwise). */
   healthOf?: (id: string) => number | undefined;
+  /** Phase 7A (2D): the walls, for `pathfind` and `player-visible`. Absent = no walls. */
+  nav?: NavInput;
 }
 
 export interface MachineLook {
@@ -344,7 +361,14 @@ interface MachineRun {
   arrived: boolean;
   rolls: number[];
   base: MachineLook;
+  /** Phase 7A: the route being walked (re-planned when the goal moves or every PLAN_SECONDS). */
+  path?: { goal: [number, number]; points: Array<[number, number]>; age: number; /** No route was found: do not search again until the goal moves or PLAN_SECONDS pass. */ failed?: boolean };
 }
+
+/** Seconds a planned route is trusted before it is planned again (walls may move). */
+const PLAN_SECONDS = 0.5;
+/** A waypoint counts as reached inside this many px. */
+const WAYPOINT_REACHED = 6;
 
 /** FNV-1a: stable seed from an id. */
 function hashString(text: string): number {
@@ -391,9 +415,45 @@ export function lookForState(state: StateMachineState, entity: Pick<MachineEntit
 
 export class StateMachineRuntime {
   private runs = new Map<string, MachineRun>();
+  private grid?: { key: string; grid: NavGrid };
 
   reset() {
     this.runs.clear();
+    this.grid = undefined;
+  }
+
+  private gridFor(nav: NavInput): NavGrid {
+    const key = navSignature(nav);
+    if (this.grid?.key !== key) this.grid = { key, grid: new NavGrid(nav) };
+    return this.grid.grid;
+  }
+
+  /**
+   * Where to walk next to reach `goal` around the walls: the goal itself when nothing is in the way, else the next waypoint of the
+   * planned route. `final` is true when the point returned IS the goal. Null = no route exists (stand still).
+   */
+  private steer(run: MachineRun, position: Vector3Tuple, goal: Vector3Tuple, nav: NavInput, dt: number): { target: Vector3Tuple; final: boolean } | null {
+    const from: [number, number] = [position[0], position[1]];
+    const to: [number, number] = [goal[0], goal[1]];
+    if (lineOfSight(nav.blockers, from, to, 10)) {
+      run.path = undefined;
+      return { target: goal, final: true };
+    }
+    let p = run.path;
+    if (!p || Math.hypot(p.goal[0] - to[0], p.goal[1] - to[1]) > NAV_CELL * 1.5 || p.age >= PLAN_SECONDS) {
+      const points = findPath(this.gridFor(nav), from, to);
+      if (!points) {
+        run.path = { goal: to, points: [], age: 0, failed: true };
+        return null;
+      }
+      p = run.path = { goal: to, points, age: 0 };
+    }
+    p.age += dt;
+    if (p.failed) return null;
+    while (p.points.length > 1 && Math.hypot(p.points[0][0] - from[0], p.points[0][1] - from[1]) < WAYPOINT_REACHED) p.points.shift();
+    const next = p.points[0];
+    if (!next) return { target: goal, final: true };
+    return { target: [next[0], next[1], 0], final: p.points.length === 1 };
   }
 
   /** Where each running entity started (its authored pose), for putting it back when the session restarts. */
@@ -458,21 +518,34 @@ export class StateMachineRuntime {
         target = [position[0] + away[0] * speed, position[1] + away[1] * speed, position[2] + away[2] * speed];
         planar = true;
       }
-      if (!target && move !== 'stay' && move !== 'flee-player') run.arrived = true;
+      // Phase 7A: with `pathfind` a 2D walker goes around the walls; `leg` is true while it heads for a waypoint, not the goal.
+      let leg = false;
+      let noRoute = false;
+      if (target && state.pathfind && inputs.engine === '2d' && inputs.nav?.blockers.length && move !== 'flee-player') {
+        const route = this.steer(run, position, target, inputs.nav, dt);
+        if (route) {
+          leg = !route.final;
+          target = route.target;
+        } else {
+          target = undefined;
+          noRoute = true;
+        }
+      } else run.path = undefined;
+      if (!target && !noRoute && move !== 'stay' && move !== 'flee-player') run.arrived = true;
       if (target && dt > 0) {
         const axes = inputs.engine === '2d' ? [0, 1] : planar ? [0, 2] : [0, 1, 2];
         const delta = axes.map((i) => target![i] - position[i]);
         const dist = Math.hypot(...delta);
-        const travel = Math.max(0, dist - stop);
+        const travel = Math.max(0, dist - (leg ? 0 : stop));
         const stepLen = Math.min(travel, speed * dt);
         if (travel <= 1e-6) {
-          if (move !== 'flee-player') run.arrived = true;
+          if (move !== 'flee-player' && !leg) run.arrived = true;
         } else {
           axes.forEach((axis, k) => (position[axis] += (delta[k] / dist) * stepLen));
           for (let i = 0; i < 3; i++) position[i] = clamp(position[i], cfg.min[i], cfg.max[i]);
           const yaw = inputs.engine === '3d' ? Math.atan2(delta[0], delta[axes.length === 3 ? 2 : 1]) : undefined;
           result.moves.set(entity.id, { position, yaw });
-          if (stepLen >= travel - 1e-6 && move !== 'flee-player') {
+          if (stepLen >= travel - 1e-6 && move !== 'flee-player' && !leg) {
             if (move === 'patrol' && state.points?.length) {
               run.patrol = (run.patrol + 1) % state.points.length;
               if (run.patrol === 0) run.arrived = true;
@@ -495,12 +568,24 @@ export class StateMachineRuntime {
     return result;
   }
 
+  /** Is the player within `distance` (if given) and not behind a wall? (2D only has walls.) */
+  private sees(position: Vector3Tuple, inputs: MachineInputs, distance?: number): boolean {
+    if (!inputs.player) return false;
+    if (distance !== undefined && machineDistance(position, inputs.player, inputs.engine) > distance) return false;
+    if (inputs.engine !== '2d' || !inputs.nav) return true;
+    return lineOfSight(inputs.nav.blockers, [position[0], position[1]], [inputs.player[0], inputs.player[1]]);
+  }
+
   private check(c: StateMachineCondition, index: number, entity: MachineEntity, run: MachineRun, inputs: MachineInputs, position: Vector3Tuple): boolean {
     switch (c.type) {
       case 'player-near':
         return !!inputs.player && machineDistance(position, inputs.player, inputs.engine) <= c.distance;
       case 'player-far':
         return !inputs.player || machineDistance(position, inputs.player, inputs.engine) > c.distance;
+      case 'player-visible':
+        return this.sees(position, inputs, c.distance);
+      case 'player-hidden':
+        return !this.sees(position, inputs, c.distance);
       case 'timer':
         return run.time >= c.seconds;
       case 'arrived':
@@ -617,8 +702,16 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
   const touching = new Set<string>();
   if (player) for (const [a, b] of frame.contacts) if (a === player.id) touching.add(b); else if (b === player.id) touching.add(a);
 
+  // Phase 7A: the walls (solid nodes, current positions) for pathfinding and line of sight.
+  const nav: NavInput | undefined = engine === '2d'
+    ? (() => {
+        const blockers = fresh.nodes2D.filter((n) => n.physics2D === 'solid' && n.visible !== false && !n.prefab).map((n) => nodeBox2D(n, { x: n.x, y: n.y }));
+        return blockers.length ? { blockers, world: { width: fresh.world2D?.width ?? 1000, height: fresh.world2D?.height ?? 600 } } : undefined;
+      })()
+    : undefined;
+
   const result = machines.step(dt, entities, {
-    engine, player: playerPos, score: state.gameScore, clicked: new Set(frame.clicked), touching, signals: new Set(frame.signals),
+    engine, player: playerPos, nav, score: state.gameScore, clicked: new Set(frame.clicked), touching, signals: new Set(frame.signals),
     healthOf: (id) => {
       const e = fresh.nodes2D.find((n) => n.id === id) ?? fresh.actors.find((a) => a.id === id);
       const max = healthMax(e);
@@ -695,6 +788,9 @@ export function runStateMachines(machines: StateMachineRuntime, engine: EngineTy
         runtimeStore.setState((current) => ({ sceneSpec: { ...current.sceneSpec, vfx: [...current.sceneSpec.vfx.filter((v) => v.id !== effect.id), effect] } }));
         break;
       }
+      case 'show-message':
+        runtimeStore.getState().showMessage(action.text, { speaker: action.speaker, seconds: action.seconds });
+        break;
       case 'end-game':
         runtimeStore.setState({ gameEnded: true, gameWon: action.won });
         break;

@@ -49,5 +49,9 @@ paths:
 - Game rules, the logic-graph interpreter and the 2D frame live in `src/runtime/*` and must not import React, the studio store or
   anything DOM-only beyond canvas; they read/write state via `runtimeStore` (`src/runtime/host.ts`). Renderers stay thin wrappers so the
   OmniStage Player runs the same code. Rebuild the Player (`npm run build:player`) after runtime changes.
+- Phase 7 game engine: 2D pathfinding / line-of-sight live in `src/runtime/nav2d.ts` (pure, walls = visible non-prefab `solid` nodes); waves in `src/runtime/game/waves.ts` (progress in the
+  store as `gameWave`, run by `entities2d.ts`); key remap in `src/runtime/inputMap.ts` (`applyInputMap` at every place that reads keys — add new input consumers through it);
+  phone stick maths in `touchLayout.ts` (`joystickKeys`); messages in `src/runtime/game/messages.ts` (`gameMessage`, scene-time based); pause is `pauseGame` / `resumeGame` (`gamePaused`) used by the Player menu.
+  Session state (wave, message, pause) is part of `freshGameState`, so every restart clears it.
 - Behaviour state machines (`src/runtime/stateMachine.ts`) run from `RuntimeLogicGraph.advance`, game mode only, seeded, no `Date` /
   `Math.random`. 3D clip names go through `resolveClipName` (cinematics). Restarts restore start poses (`restoreStartPoses`).

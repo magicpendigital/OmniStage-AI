@@ -15,6 +15,7 @@ import { ASSET_REGISTRY } from '../registry/assetRegistry';
 import { easedSplineProgress } from '../animation/easing';
 import { findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
 import { runtimeStore } from '../runtime/host';
+import { applyInputMap } from '../runtime/inputMap';
 import { buildCompositeActor } from '../render3d/compositeActors';
 import { actorBadgeText, actorInTimeline, actorMotion, damp } from '../render3d/actorMotion';
 import { disposeObject } from '../render3d/h';
@@ -532,7 +533,7 @@ export class View3D {
 
     // Game loop: WASD movement + contacts (same rules as the studio SceneDirector).
     if (spec.mode === 'game' && state.isPlaying && !state.gameEnded) {
-      const keys = this.input.keys;
+      const keys = applyInputMap(spec.input, this.input.keys);
       const speed = 4.2 * dt;
       let dx = 0;
       let dz = 0;

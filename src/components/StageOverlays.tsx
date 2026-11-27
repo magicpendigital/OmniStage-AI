@@ -3,6 +3,7 @@ import { Copy, Lock, Maximize2, Move, RotateCw, Trash2, Trophy, Unlock } from 'l
 import { useStudioStore } from '../state/useStudioStore';
 import { GameHudView } from '../runtime/game/hudDom';
 import { resolveHud } from '../runtime/game/state';
+import { activeMessage } from '../runtime/game/messages';
 import {
   ActorNode,
   AnimationType,
@@ -234,6 +235,9 @@ export const GameHudOverlay: React.FC = () => {
   const gameTimeRemaining = useStudioStore((s) => s.gameTimeRemaining);
   const gameVars = useStudioStore((s) => s.gameVars);
   const gameHealth = useStudioStore((s) => s.gameHealth);
+  const gameWave = useStudioStore((s) => s.gameWave);
+  // The selector returns the same object until the message expires, so this does not re-render every frame.
+  const message = useStudioStore((s) => (s.sceneSpec.mode === 'game' ? activeMessage(s.gameMessage, s.currentTime) : null));
   React.useEffect(() => {
     if (!ref.current) return;
     const view = new GameHudView(ref.current, { top: 36 });
@@ -244,9 +248,18 @@ export const GameHudOverlay: React.FC = () => {
     };
   }, []);
   React.useEffect(() => {
-    viewRef.current?.update(resolveHud(sceneSpec, { score: gameScore, timeRemaining: gameTimeRemaining, variables: gameVars, health: gameHealth }));
-  }, [sceneSpec, gameScore, gameTimeRemaining, gameVars, gameHealth]);
-  return <div ref={ref} className="pointer-events-none absolute inset-0" />;
+    viewRef.current?.update(resolveHud(sceneSpec, { score: gameScore, timeRemaining: gameTimeRemaining, variables: gameVars, health: gameHealth, wave: gameWave }));
+  }, [sceneSpec, gameScore, gameTimeRemaining, gameVars, gameHealth, gameWave]);
+  return (
+    <div ref={ref} className="pointer-events-none absolute inset-0">
+      {message && (
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-[24%] max-w-[86%] px-4 py-2.5 rounded-xl bg-[#020617E0] border border-cyan-400/50 text-sm text-slate-100 leading-snug">
+          {message.speaker && <div className="text-[11px] font-bold text-cyan-300 mb-0.5">{message.speaker}</div>}
+          {message.text}
+        </div>
+      )}
+    </div>
+  );
 };
 
 export const EndCard: React.FC = () => {

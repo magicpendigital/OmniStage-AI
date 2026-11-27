@@ -635,7 +635,46 @@ export interface Projectile2D {
   target?: 'player' | 'enemy' | 'any';
 }
 
-export type HudSource = 'score' | 'time' | 'variable' | 'health';
+/** Phase 7C: what the player can do with the controls. */
+export type InputAction = 'left' | 'right' | 'up' | 'down' | 'jump';
+
+/** Phase 7C: extra keys for the player's actions and the style of the on-screen phone controls (see src/runtime/inputMap.ts). */
+export interface InputConfig {
+  /** Extra keys per action (e.g. { jump: ['k'], left: ['j'] }); WASD, the arrows and Space always keep working. Key names are lower case: 'k', 'shift', 'enter', 'space'. */
+  bindings?: Partial<Record<InputAction, string[]>>;
+  /** Phone controls: 'buttons' (arrows + action button), 'joystick' (a thumb stick + action button), 'auto' (a stick for top-down and 3D games, buttons for platformers). */
+  touch?: 'auto' | 'buttons' | 'joystick';
+}
+
+/** Phase 7B: one batch of enemies inside a wave. */
+export interface WaveSpawnGroup {
+  /** id of a node with `prefab: true`. */
+  prefabId: string;
+  /** How many clones this group spawns (1..30). */
+  count: number;
+  /** Seconds between spawns of this group (default 1). */
+  everySeconds?: number;
+  /** Where they appear (design px); default: where the prefab node stands. */
+  x?: number;
+  y?: number;
+  /** Deterministic spread (px) around the position. */
+  jitterX?: number;
+  jitterY?: number;
+}
+
+/** Phase 7B: a wave — spawn groups that run together, then the wave ends (see src/runtime/game/waves.ts). */
+export interface WaveSpec {
+  name?: string;
+  spawns: WaveSpawnGroup[];
+  /** Seconds of calm before this wave starts (default 2). */
+  delaySeconds?: number;
+  /** The wave lasts at least this long from its first spawn (default: until 2 s after the last spawn). */
+  durationSeconds?: number;
+  /** The wave also waits until none of its clones is alive (they were destroyed or expired). */
+  untilCleared?: boolean;
+}
+
+export type HudSource = 'score' | 'time' | 'variable' | 'health' | 'wave';
 export type HudKind = 'counter' | 'bar' | 'text';
 export type HudAnchor = 'top-left' | 'top-center' | 'top-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
 
@@ -773,7 +812,11 @@ export type StateMachineCondition =
   /** Tapped / clicked. */
   | { type: 'clicked' }
   /** Seeded roll every `every` s (default 1) with probability `chance` (0..1). */
-  | { type: 'random'; chance: number; every?: number };
+  | { type: 'random'; chance: number; every?: number }
+  /** Phase 7A: the player is in line of sight (no `solid` wall between), optionally within `distance` (2D; in 3D there are no walls, so it is distance only). */
+  | { type: 'player-visible'; distance?: number }
+  /** Phase 7A: the opposite of `player-visible` — a wall hides the player, or they are out of range / absent. */
+  | { type: 'player-hidden'; distance?: number };
 
 /** Runs once when a state is entered. */
 export type StateMachineAction =
@@ -784,6 +827,8 @@ export type StateMachineAction =
   | { type: 'play-sfx'; sound: GameAudioEvent }
   | { type: 'send-signal'; name: string }
   | { type: 'set-visible'; visible: boolean }
+  /** Phase 7D: a line of dialogue / a hint in the message box (max 160 chars; seconds default 3). */
+  | { type: 'show-message'; text: string; speaker?: string; seconds?: number }
   | { type: 'end-game'; won: boolean };
 
 export interface StateMachineTransition {
@@ -801,6 +846,8 @@ export interface StateMachineState {
   points?: Array<[number, number] | [number, number, number]>;
   /** m/s in 3D (default 1.5), px/s in 2D (default 120). */
   speed?: number;
+  /** Phase 7A (2D): walk AROUND `solid` walls when moving (patrol / move-to / chase-player / return-home) instead of in a straight line through them. */
+  pathfind?: boolean;
   onEnter?: StateMachineAction[];
   /** Checked in order each frame; the first true one fires (at most one transition per frame). */
   transitions?: StateMachineTransition[];
@@ -949,7 +996,7 @@ export interface MarketingOverlayConfig {
 }
 
 export interface GameRule {
-  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer' | 'unbox-reveal' | 'variable-threshold';
+  winCondition: 'collect-all' | 'score-threshold' | 'survive-timer' | 'unbox-reveal' | 'variable-threshold' | 'survive-waves';
   /** Phase 3: with `winCondition: 'variable-threshold'` the game is won when this variable reaches `atLeast`. */
   winVariable?: { id: string; atLeast: number };
   targetScore: number;
@@ -1236,6 +1283,10 @@ export interface SceneSpec {
   variables?: GameVariable[];
   /** Phase 3: declarative in-game HUD. */
   hud?: HudElement[];
+  /** Phase 7B: waves of spawns (2D game scenes); `winCondition: 'survive-waves'` is won when the last one ends. */
+  waves?: WaveSpec[];
+  /** Phase 7C: extra control keys and the phone control style. */
+  input?: InputConfig;
   /** Phase 4: the game design this scene was authored against (intent-alignment verifier + director context). */
   gameDesign?: GameDesign;
   vfx: VFXNode[];

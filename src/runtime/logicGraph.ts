@@ -342,6 +342,10 @@ export class RuntimeLogicGraph {
         state.healEntity(id, finiteNumber(p.amount ?? 1, 'Heal'));
         return `Healed ${id}`;
       }
+      case 'show-message': {
+        state.showMessage(String(p.text ?? ''), { speaker: typeof p.speaker === 'string' ? p.speaker : undefined, seconds: p.seconds === undefined ? undefined : finiteNumber(p.seconds, 'Message seconds') });
+        return `Message: ${String(p.text).slice(0, 40)}`;
+      }
       case 'win':
       case 'lose':
         state.endGame(p.actionType === 'win');

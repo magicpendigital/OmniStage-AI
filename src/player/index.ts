@@ -7,6 +7,7 @@
  */
 import { bindRuntimeStore } from '../runtime/host';
 import { RuntimeLogicGraph } from '../runtime/logicGraph';
+import { canonicalKeysFor, resolveBindings } from '../runtime/inputMap';
 import { installAudioBus } from '../audio/audioBus';
 import type { SceneSpec } from '../types/scene.schema';
 import { createPlayerStore, nextSceneIdFor, PlayerStore } from './playerStore';
@@ -113,7 +114,21 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   const uninstallAudio = options.sound === false ? () => undefined : installAudioBus(store);
   const runtimes = { '2d': new RuntimeLogicGraph('2d'), '3d': new RuntimeLogicGraph('3d') };
   const runtimeFor = () => runtimes[store.getState().sceneSpec.engineType];
-  const input = new InputManager({ onKeyPress: (key, code) => runtimeFor().emit('key-press', { key, code }) });
+  /** Escape (and P, unless the scene binds it) opens / closes the pause menu of a running game round. */
+  const togglePause = () => {
+    const s = store.getState();
+    if (s.gamePaused) s.resumeGame();
+    else s.pauseGame();
+  };
+  const input = new InputManager({
+    onKeyPress: (key, code) => {
+      const scene = store.getState().sceneSpec;
+      if (scene.mode === 'game' && (key === 'escape' || (key === 'p' && !Object.values(resolveBindings(scene.input)).some((keys) => keys?.includes('p'))))) togglePause();
+      // The logic graph still hears the key (a bomb on P), and a remapped key also counts as the key it stands for.
+      runtimeFor().emit('key-press', { key, code });
+      for (const canonical of canonicalKeysFor(scene.input, key)) runtimeFor().emit('key-press', { key: canonical, code: canonical });
+    },
+  });
   const assets = options.assets || {};
   const resolveUrl = (url: string) => assets[url] || url;
   // Phase 8: native bridge (Capacitor plugins inside the app shell, web APIs in a PWA).
@@ -175,7 +190,7 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
   };
 
   const restartScene = () => {
-    store.getState().resetGameSession();
+    store.getState().resetGameSession(); // also clears a pause
     store.setState({ isPlaying: true, currentTime: 0 });
   };
   // Phase 10A: fade in from the target scene's transition colour (cut = none).
@@ -250,6 +265,9 @@ export function createOmniPlayer(root: HTMLElement, data: OmniPlayerData, option
       if (next) gotoScene(next);
     },
     onRetry: restartScene,
+    onPause: togglePause,
+    onResume: () => store.getState().resumeGame(),
+    onRestart: restartScene,
     onReplay: () => gotoScene(data.activeSceneId && data.scenes.some((s) => s.id === data.activeSceneId) ? data.activeSceneId : store.getState().scenes[0].id),
     onCta: openCta,
   }, { touch, fullscreenTarget: root });

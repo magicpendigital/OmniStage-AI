@@ -683,7 +683,7 @@ function gameRootProps(ctx: SceneContext, script: GdRaw, extra: Props): Props {
     ['mode', scene.mode === 'media' ? 'media' : 'game'],
     ['is_2d', scene.engineType === '2d'],
     // Phase 3: "variable-threshold" has no Godot counterpart (variables are not exported); it exports as a score threshold.
-    ['win_condition', rules.winCondition === 'variable-threshold' ? 'score-threshold' : rules.winCondition || 'score-threshold'],
+    ['win_condition', rules.winCondition === 'variable-threshold' || rules.winCondition === 'survive-waves' ? 'score-threshold' : rules.winCondition || 'score-threshold'],
     ['target_score', Math.max(0, Math.round(Number(rules.targetScore) || 100))],
     ['time_limit', Number(rules.timeLimitSeconds) || 15],
     ['duration', Number(scene.durationSeconds) || 8],
@@ -1193,6 +1193,9 @@ function sceneWarnings(scene: SceneSpec, warn: (feature: string, detail: string)
   if (overlay?.enabled && (overlay.subheadline || overlay.badgeText)) warn('Marketing overlay', 'Subheadline, badge and brand colour are not exported (headline and CTA button are).');
   if (scene.variables?.length) warn('Game state', `${scene.variables.length} game variable(s) (${scene.variables.map((v) => v.id).join(', ')}) are not exported; recreate them as GDScript variables.`);
   if (scene.hud?.length) warn('HUD', `${scene.hud.length} HUD element(s) (health bars, counters) are not exported; the Godot project shows its default score label only.`);
+  if (scene.waves?.length) warn('Game state', `${scene.waves.length} wave(s) are not exported; nothing is spawned on a schedule in Godot.`);
+  if (scene.gameRules?.winCondition === 'survive-waves') warn('Gameplay', 'The "survive-waves" win rule depends on waves, which are not exported; it is exported as a score threshold.');
+  if (scene.input) warn('Input', 'Extra key bindings and the phone joystick style are not exported (the Godot project reads WASD / arrows / Space).');
   if (scene.gameRules?.winCondition === 'variable-threshold') warn('Gameplay', 'The "variable-threshold" win rule depends on game variables, which are not exported; it is exported as a score threshold.');
   if (scene.mode === 'game' && scene.gameRules?.winCondition === 'collect-all') {
     warn('Gameplay', '"collect-all" is exported like the runtime: the level is won when the score reaches the target.');

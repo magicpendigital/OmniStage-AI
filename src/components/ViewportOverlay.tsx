@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useStudioStore } from '../state/useStudioStore';
-import { touchButtons, touchLayoutFor } from '../runtime/touchLayout';
+import { joystickKeys, touchButtons, touchLayoutFor, touchStyleFor, type TouchLayout } from '../runtime/touchLayout';
 import type { SettingsConfig } from '../types/scene.schema';
 
 const KEY_EVENT_NAME: Record<string, string> = { arrowleft: 'ArrowLeft', arrowright: 'ArrowRight', arrowup: 'ArrowUp', arrowdown: 'ArrowDown', ' ': ' ' };
@@ -41,6 +41,58 @@ function TouchKey({ label, keyName, style, big }: { label: string; keyName: stri
     >
       {label}
     </button>
+  );
+}
+
+/** Thumb stick: the knob offset becomes the same synthetic arrow-key events the buttons send (see joystickKeys). */
+function TouchStick({ layout }: { layout: TouchLayout }) {
+  const held = useRef<Set<string>>(new Set());
+  const pointer = useRef<number | null>(null);
+  const [knob, setKnob] = useState({ x: 0, y: 0 });
+  const RADIUS = 44;
+  const apply = (keys: string[]) => {
+    const next = new Set(keys);
+    for (const k of held.current) if (!next.has(k)) sendKey('keyup', k);
+    for (const k of next) if (!held.current.has(k)) sendKey('keydown', k);
+    held.current = next;
+  };
+  useEffect(() => () => apply([]), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const move = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerId !== pointer.current) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    let dx = (e.clientX - (r.left + r.width / 2)) / RADIUS;
+    let dy = (e.clientY - (r.top + r.height / 2)) / RADIUS;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) {
+      dx /= len;
+      dy /= len;
+    }
+    setKnob({ x: dx * RADIUS, y: dy * RADIUS });
+    apply(joystickKeys(dx, dy, layout));
+  };
+  const end = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerId !== pointer.current) return;
+    pointer.current = null;
+    setKnob({ x: 0, y: 0 });
+    apply([]);
+  };
+  return (
+    <div
+      className="relative w-28 h-28 rounded-full border border-slate-500/60 bg-slate-900/50 backdrop-blur select-none"
+      style={{ touchAction: 'none' }}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        if (pointer.current !== null) return;
+        pointer.current = e.pointerId;
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        move(e);
+      }}
+      onPointerMove={move}
+      onPointerUp={end}
+      onPointerCancel={end}
+    >
+      <div className="absolute left-1/2 top-1/2 w-12 h-12 -ml-6 -mt-6 rounded-full bg-cyan-400/50 border border-cyan-200 pointer-events-none" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
+    </div>
   );
 }
 
@@ -82,6 +134,7 @@ export const ViewportOverlay: React.FC = () => {
 
   const layout = isPlaying && (isTouch || forceTouch) ? touchLayoutFor(sceneSpec, gameEnded) : 'none';
   const buttons = touchButtons(layout);
+  const stick = layout !== 'none' && touchStyleFor(sceneSpec, layout) === 'joystick';
   const fpsColor = stats.fps >= 50 ? 'text-emerald-300' : stats.fps >= 30 ? 'text-amber-300' : 'text-rose-300';
 
   return (
@@ -107,11 +160,17 @@ export const ViewportOverlay: React.FC = () => {
       </div>
       {layout !== 'none' && (
         <>
-          <div className="absolute bottom-12 left-4 z-30 grid gap-1.5" style={{ gridTemplateColumns: 'repeat(3, 3rem)', gridTemplateRows: 'repeat(2, 3rem)' }}>
-            {buttons.pad.map(([label, key, col, row]) => (
-              <TouchKey key={key} label={label} keyName={key} style={{ gridColumn: col, gridRow: row }} />
-            ))}
-          </div>
+          {stick ? (
+            <div className="absolute bottom-12 left-4 z-30">
+              <TouchStick layout={layout} />
+            </div>
+          ) : (
+            <div className="absolute bottom-12 left-4 z-30 grid gap-1.5" style={{ gridTemplateColumns: 'repeat(3, 3rem)', gridTemplateRows: 'repeat(2, 3rem)' }}>
+              {buttons.pad.map(([label, key, col, row]) => (
+                <TouchKey key={key} label={label} keyName={key} style={{ gridColumn: col, gridRow: row }} />
+              ))}
+            </div>
+          )}
           {buttons.action && (
             <div className="absolute bottom-14 right-5 z-30">
               <TouchKey big label={buttons.action[0]} keyName={buttons.action[1]} />

@@ -35,6 +35,9 @@ import { validMover } from '../runtime/physics/mover';
 import { overlaps } from '../runtime/physics/collide2d';
 import { resolveWorld, VIEW_H, VIEW_W, WORLD_LIMITS } from '../runtime/physics/camera2d';
 import { fixIntent, INTENT_CODES, intentIssues } from './intentAlignment';
+import { cleanMessage } from '../runtime/game/messages';
+import { bindingConflicts, dropBindingConflicts, inputProblems, repairInput } from '../runtime/inputMap';
+import { repairWaves, resolveWaves, waveProblems, wavesMinSeconds } from '../runtime/game/waves';
 import { healthMax, HUD_ANCHORS, HUD_KINDS, HUD_SOURCES, MAX_HUD, MAX_VARIABLES, resolveVariables, VARIABLE_ID, isPlayerEntity, COMPARE_OPS } from '../runtime/game/state';
 
 // --- Phase 10A: film craft (media 3D) ---
@@ -927,6 +930,9 @@ function verifyGameState(spec: SceneSpec, issues: VerificationIssue[]) {
         issues.push(issue('state.compare-invalid', 'error', `Logic node "${n.title}" uses comparison "${String(p.op)}" (use ${COMPARE_OPS.join(' ')}).`, false, n.id));
       }
     }
+    if (p.actionType === 'show-message' && !cleanMessage({ text: p.text })) {
+      issues.push(issue('message.empty', 'warning', `Logic node "${n.title}" shows a message without text (params.text).`, false, n.id));
+    }
     if (p.actionType === 'spawn') {
       const prefab = spec.nodes2D.find((x) => x.id === p.prefabId);
       if (!prefab || !prefab.prefab) issues.push(issue('spawn.prefab-missing', 'error', `Logic node "${n.title}" spawns "${String(p.prefabId)}" which is not a node with prefab: true.`, !!prefab, String(p.prefabId)));
@@ -949,6 +955,51 @@ function verifyGameState(spec: SceneSpec, issues: VerificationIssue[]) {
     }
     if (h?.id) hudIds.add(h.id);
     if (problem) issues.push(issue('state.hud-invalid', 'warning', `HUD element "${h?.id ?? '?'}" is invalid: ${problem}.`, true, h?.id));
+  }
+  // Input remap + phone controls (Phase 7C)
+  const inputIssues = inputProblems(spec);
+  if (inputIssues.length) issues.push(issue('input.invalid', 'warning', `The input settings are invalid: ${inputIssues.slice(0, 3).join('; ')}.`, true));
+  else if (spec.input) {
+    const clash = bindingConflicts(spec.input);
+    if (clash.length) issues.push(issue('input.conflict', 'warning', `Two actions share a key: ${clash.slice(0, 3).join('; ')}.`, true));
+  }
+  if (spec.input && !game) issues.push(issue('input.unsupported', 'warning', 'Input settings only matter in game scenes, so these do nothing.', true));
+  // Waves (Phase 7B)
+  const waveIssuesFound = waveProblems(spec);
+  if (waveIssuesFound.length) issues.push(issue('wave.invalid', 'warning', `Waves are invalid: ${waveIssuesFound.slice(0, 3).join('; ')}.`, true));
+  if (spec.waves?.length && !(game && spec.engineType === '2d')) {
+    issues.push(issue('wave.unsupported', 'warning', 'Waves only run in 2D game scenes, so these do nothing.', true));
+  }
+  if (game && spec.engineType === '2d' && Array.isArray(spec.waves)) {
+    const missing = new Set<string>();
+    for (const w of spec.waves) for (const g of Array.isArray(w?.spawns) ? w.spawns : []) {
+      const prefab = g && spec.nodes2D.find((x) => x.id === g.prefabId);
+      if (g && typeof g.prefabId === 'string' && g.prefabId && (!prefab || !prefab.prefab)) missing.add(g.prefabId);
+    }
+    for (const id of missing) issues.push(issue('wave.prefab-missing', 'error', `A wave spawns "${id}" which is not a node with prefab: true.`, true, id));
+  }
+  if (game && spec.engineType === '2d' && Array.isArray(spec.waves)) {
+    // A wave that waits for its clones to be cleared never ends when those clones cannot die or expire.
+    for (const w of spec.waves) {
+      if (!w?.untilCleared) continue;
+      for (const g of Array.isArray(w.spawns) ? w.spawns : []) {
+        const prefab = g && spec.nodes2D.find((x) => x.id === g.prefabId && x.prefab);
+        const reseeded = g && spec.nodes2D.some((x) => x.spawner?.prefabId === g.prefabId);
+        if (prefab && (reseeded || (!prefab.health && !prefab.projectile))) {
+          issues.push(issue('wave.uncleared', 'warning', `A wave waits until "${g.prefabId}" is cleared, but ${reseeded ? 'a spawner keeps making it' : 'it has no health and is not a projectile, so nothing can remove it'}; the wave may never end.`, false, g.prefabId));
+        }
+      }
+    }
+  }
+  const waveRule = spec.gameRules?.winCondition === 'survive-waves';
+  if (waveRule && resolveWaves(spec).length === 0) {
+    issues.push(issue('wave.win-without-waves', 'error', 'winCondition is "survive-waves" but the scene has no usable waves.', true));
+  } else if (waveRule && game) {
+    const needed = wavesMinSeconds(resolveWaves(spec));
+    const limit = spec.gameRules?.timeLimitSeconds ?? 0;
+    if (limit > 0 && limit < needed + 1) {
+      issues.push(issue('wave.too-long', 'error', `The waves need at least ${Math.ceil(needed)}s but the time limit is ${limit}s, so the round can never be won.`, true));
+    }
   }
   // Spawners / projectiles
   for (const n of spec.nodes2D) {
@@ -1070,6 +1121,38 @@ function fixGameState(spec: SceneSpec, i: VerificationIssue): string | null {
         return ok;
       }).slice(0, MAX_HUD);
       return before === spec.hud.length ? null : `Removed ${before - spec.hud.length} invalid HUD element(s)`;
+    }
+    case 'input.invalid':
+      return (repairInput(spec) ? (dropBindingConflicts(spec), true) : false) ? 'Repaired the input settings (unknown actions and keys dropped)' : null;
+    case 'input.conflict':
+      return dropBindingConflicts(spec) ? 'A key bound to two actions now only belongs to the first' : null;
+    case 'input.unsupported':
+      delete spec.input;
+      return 'Removed the input settings (they only apply to game scenes)';
+    case 'wave.invalid':
+      return repairWaves(spec) ? 'Repaired the waves (bad groups dropped, numbers clamped)' : null;
+    case 'wave.unsupported':
+      delete spec.waves;
+      return 'Removed the waves (they only run in 2D game scenes)';
+    case 'wave.prefab-missing': {
+      const node = spec.nodes2D.find((n) => n.id === i.targetId);
+      if (node) {
+        node.prefab = true;
+        return `Marked "${node.name}" as a prefab (a wave spawns it)`;
+      }
+      for (const w of spec.waves || []) w.spawns = (w.spawns || []).filter((g) => g.prefabId !== i.targetId);
+      spec.waves = (spec.waves || []).filter((w) => w.spawns.length);
+      if (!spec.waves.length) delete spec.waves;
+      return `Removed wave spawns of "${i.targetId}" (no such node)`;
+    }
+    case 'wave.win-without-waves':
+      spec.gameRules.winCondition = 'survive-timer';
+      if (!(spec.gameRules.timeLimitSeconds > 0)) spec.gameRules.timeLimitSeconds = 30;
+      return 'Switched the win condition to survive-timer (there are no waves)';
+    case 'wave.too-long': {
+      const needed = wavesMinSeconds(resolveWaves(spec));
+      spec.gameRules.timeLimitSeconds = Math.ceil(needed + 15);
+      return `Raised the time limit to ${spec.gameRules.timeLimitSeconds}s so every wave can finish`;
     }
     case 'spawn.prefab-missing': {
       const owner = spec.nodes2D.find((n) => n.id === i.targetId && n.spawner);
@@ -1511,6 +1594,14 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
     case 'state.no-player-health':
     case 'state.damage-without-health':
     case 'state.hud-invalid':
+    case 'input.invalid':
+    case 'input.conflict':
+    case 'input.unsupported':
+    case 'wave.invalid':
+    case 'wave.unsupported':
+    case 'wave.prefab-missing':
+    case 'wave.win-without-waves':
+    case 'wave.too-long':
     case 'spawn.prefab-missing':
     case 'spawn.invalid':
     case 'spawn.inside-solid':

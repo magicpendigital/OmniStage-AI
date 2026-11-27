@@ -4,13 +4,16 @@
  * No React, no store, no DOM: everything here is a function of its arguments.
  */
 import type { ActorNode, GameVariable, HealthSpec, HudAnchor, HudElement, Node2D, Projectile2D, SceneSpec, Spawner2D } from '../../types/scene.schema';
+import { hash01 } from './hash';
+import type { GameMessage } from './messages';
+import { freshWaveProgress, resolveWaves, type WaveProgress, waveStatus } from './waves';
 
 export const VARIABLE_ID = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/;
 export const MAX_VARIABLES = 32;
 export const MAX_HUD = 12;
 export const MAX_SPAWNED = 64;
 export const HUD_ANCHORS: readonly HudAnchor[] = ['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'];
-export const HUD_SOURCES = ['score', 'time', 'variable', 'health'] as const;
+export const HUD_SOURCES = ['score', 'time', 'variable', 'health', 'wave'] as const;
 export const HUD_KINDS = ['counter', 'bar', 'text'] as const;
 export const COMPARE_OPS = ['>=', '>', '<=', '<', '==', '!='] as const;
 export type CompareOp = (typeof COMPARE_OPS)[number];
@@ -104,10 +107,16 @@ export interface GameSessionState {
   gameHurtAt: Record<string, number>;
   /** Counts runtime spawns, so every clone gets a unique, replayable id. */
   gameSpawnSerial: number;
+  /** Phase 7B: where the wave schedule is. */
+  gameWave: WaveProgress;
+  /** Phase 7D: the message box on screen (null = none). */
+  gameMessage: GameMessage | null;
+  /** Phase 7D: the player paused the round (Player pause menu). */
+  gamePaused: boolean;
 }
 
 export function freshGameState(spec: SceneSpec): GameSessionState {
-  return { gameVars: initialVariables(spec), gameHealth: initialHealth(spec), gameHurtAt: {}, gameSpawnSerial: 0 };
+  return { gameVars: initialVariables(spec), gameHealth: initialHealth(spec), gameHurtAt: {}, gameSpawnSerial: 0, gameWave: freshWaveProgress(), gameMessage: null, gamePaused: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +128,8 @@ export interface HudSnapshot {
   timeRemaining: number;
   variables: Record<string, number>;
   health: Record<string, number>;
+  /** Phase 7B. */
+  wave?: WaveProgress;
 }
 
 export interface HudItem {
@@ -133,7 +144,7 @@ export interface HudItem {
   color: string;
 }
 
-const HUD_COLORS: Record<HudElement['source'], string> = { score: '#fbbf24', time: '#38bdf8', variable: '#a78bfa', health: '#f87171' };
+const HUD_COLORS: Record<HudElement['source'], string> = { score: '#fbbf24', time: '#38bdf8', variable: '#a78bfa', health: '#f87171', wave: '#fb923c' };
 
 function playerOf(spec: Pick<SceneSpec, 'nodes2D' | 'actors'>): { id: string; health?: HealthSpec } | undefined {
   return spec.nodes2D.find((n) => n.physics2D.startsWith('player-')) ?? spec.actors.find((a) => a.physicsRole === 'player');
@@ -168,6 +179,11 @@ export function resolveHudElement(el: HudElement, spec: SceneSpec, snap: HudSnap
       const hp = snap.health[entity.id] ?? max;
       return { ...base, label: el.label ?? 'HP', text: `${Math.ceil(hp)}/${max}`, fraction: clamp01(hp / max) };
     }
+    case 'wave': {
+      const status = waveStatus(spec, snap.wave);
+      if (!status || resolveWaves(spec).length === 0) return null;
+      return { ...base, label: el.label ?? 'Wave', text: `${status.current}/${status.total}`, fraction: clamp01((status.done ? status.total : status.current - 1) / status.total) };
+    }
     default:
       return null;
   }
@@ -189,22 +205,7 @@ const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 
 // Spawning and projectiles (2D)
 // ---------------------------------------------------------------------------
 
-/** FNV-1a -> [0, 1): the same id and index always give the same number, so spawns replay identically. */
-export function hash01(text: string, index: number): number {
-  let h = 0x811c9dc5;
-  const s = `${text}:${index}`;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  // Murmur3 finaliser: FNV alone spreads sequential suffixes poorly.
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x85ebca6b) >>> 0;
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
+export { hash01 } from './hash';
 
 export function spawnedId(prefabId: string, serial: number): string {
   return `${prefabId}#${serial}`;

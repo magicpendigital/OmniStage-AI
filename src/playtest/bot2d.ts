@@ -690,7 +690,7 @@ export function playtestIssues(spec: SceneSpec, report: PlaytestReport): Playtes
   const issues: PlaytestIssue[] = [];
   const best = report.best;
   if (!best) return issues;
-  const survive = spec.gameRules?.winCondition === 'survive-timer';
+  const survive = spec.gameRules?.winCondition === 'survive-timer' || spec.gameRules?.winCondition === 'survive-waves';
   const idle = report.runs.find((r) => r.strategy === 'idle');
 
   if (report.outcome === 'not-won') {

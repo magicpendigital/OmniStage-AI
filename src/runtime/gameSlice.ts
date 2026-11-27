@@ -5,6 +5,8 @@
  */
 import { ASSET_REGISTRY, cloneSceneSpec, SCENE_TEMPLATES } from '../registry/assetRegistry';
 import type { ActorNode, ExecutionLogEntry, LogicNode, SceneSpec, Vector3Tuple } from '../types/scene.schema';
+import type { WaveProgress } from './game/waves';
+import { cleanMessage, type GameMessage } from './game/messages';
 import { syncGraphWithScene } from './graphSync';
 import { playSceneSfx } from '../audio/audioBus';
 import {
@@ -60,6 +62,11 @@ export interface GameRuntimeState {
   gameHealth: Record<string, number>;
   gameHurtAt: Record<string, number>;
   gameSpawnSerial: number;
+  /** Phase 7B: wave schedule progress (see src/runtime/game/waves.ts). */
+  gameWave: WaveProgress;
+  /** Phase 7D: the message box on screen, and whether the player paused the round. */
+  gameMessage: GameMessage | null;
+  gamePaused: boolean;
   /** Provided by the host store: the studio's version also manages undo history. */
   switchScene: (sceneId: string) => void;
 
@@ -83,6 +90,11 @@ export interface GameRuntimeState {
   spawnPrefab: (prefabId: string, x?: number, y?: number) => string | undefined;
   /** Remove a spawned clone, or hide an authored node. */
   despawnEntity: (id: string) => void;
+  /** Phase 7D: show a line of dialogue / a hint for a few seconds of scene time; throws when there is no text. */
+  showMessage: (text: string, options?: { speaker?: string; seconds?: number }) => void;
+  /** Phase 7D: pause / resume a running game round (Player pause menu). */
+  pauseGame: () => void;
+  resumeGame: () => void;
   resetGameSession: () => void;
   dismissEndCard: () => void;
   appendLog: (entry: Omit<ExecutionLogEntry, 'id' | 'timestamp' | 'sceneTime'> & Partial<Pick<ExecutionLogEntry, 'id' | 'timestamp' | 'sceneTime'>>) => void;
@@ -106,6 +118,11 @@ export function clickRunsBuiltIn(actor: Pick<ActorNode, 'onClickAction' | 'asset
   return mode === 'game' || actor.onClickAction !== 'none';
 }
 
+/** Reaching the target score wins the round, except where another rule decides (variable-threshold: a variable; survive-waves: the last wave). */
+function scoreCanWin(rule: string | undefined): boolean {
+  return rule !== 'variable-threshold' && rule !== 'survive-waves';
+}
+
 export function createGameRuntimeSlice<S extends GameRuntimeState>(
   setRaw: SetState<S>,
   getRaw: GetState<S>,
@@ -122,7 +139,8 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
   togglePlay: () => set((state) => ({ isPlaying: !state.isPlaying })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   toggleLoop: () => set((state) => ({ isLooping: !state.isLooping })),
-  setCurrentTime: (currentTime) => set({ currentTime }),
+  // Scrubbing back drops the message box (it would otherwise show again from the top).
+  setCurrentTime: (currentTime) => set((s) => ({ currentTime, ...(currentTime < s.currentTime && s.gameMessage ? { gameMessage: null } : {}) })),
 
   advanceTimeline: (deltaSeconds) =>
     set((state) => {
@@ -153,6 +171,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
         nextRemaining = Math.max(0, state.gameTimeRemaining - deltaSeconds);
         if (nextRemaining === 0) {
           nextEnded = true;
+          // (`survive-waves` is won when the last wave ends, not when the clock does: running out of time before that loses.)
           if (state.sceneSpec.gameRules.winCondition === 'survive-timer') {
             nextWon = true;
           }
@@ -193,7 +212,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
       const pts = target.scoreValue ?? 25;
       const nextScore = state.gameScore + pts;
       const targetScore = state.sceneSpec.gameRules.targetScore || 100;
-      const won = state.sceneSpec.gameRules.winCondition !== 'variable-threshold' && nextScore >= targetScore;
+      const won = scoreCanWin(state.sceneSpec.gameRules.winCondition) && nextScore >= targetScore;
 
       const nextSpec = cloneSceneSpec(state.sceneSpec);
       const idx = nextSpec.actors.findIndex((a) => a.id === targetActorId);
@@ -461,7 +480,7 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
     set((state) => {
       const nextScore = Math.max(0, state.gameScore + points);
       const targetScore = state.sceneSpec.gameRules.targetScore || 100;
-      const won = state.sceneSpec.gameRules.winCondition !== 'variable-threshold' && nextScore >= targetScore;
+      const won = scoreCanWin(state.sceneSpec.gameRules.winCondition) && nextScore >= targetScore;
       const popup: FloatingScoreFeedback = {
         id: `pop-2d-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
         text: `${points >= 0 ? '+' : ''}${points} PTS · ${label}`,
@@ -579,6 +598,8 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
         ? syncGraphWithScene(cloneSceneSpec(tpl))
         : syncGraphWithScene(cloneSceneSpec(state.sceneSpec));
       restoredSpec.mode = state.sceneSpec.mode;
+      // Without a pristine source (the studio) the live spec still holds runtime clones ("imp#3"): a restart must not keep them.
+      restoredSpec.nodes2D = restoredSpec.nodes2D.filter((n) => !isSpawnedId(n.id));
       restoredSpec.actors.forEach((a) => (a.visible = true));
       restoredSpec.nodes2D.forEach((n) => (n.visible = true));
       return {
@@ -594,6 +615,17 @@ export function createGameRuntimeSlice<S extends GameRuntimeState>(
         machineStates: undefined,
       };
     }),
+
+  showMessage: (text, options) => {
+    const msg = cleanMessage({ text, speaker: options?.speaker, seconds: options?.seconds });
+    if (!msg) throw new Error('A message needs some text');
+    set((s) => ({ gameMessage: { text: msg.text, ...(msg.speaker ? { speaker: msg.speaker } : {}), until: s.currentTime + msg.seconds } }));
+  },
+
+  pauseGame: () =>
+    set((s) => (s.sceneSpec.mode === 'game' && s.isPlaying && !s.gameEnded && !s.gamePaused ? { isPlaying: false, gamePaused: true } : s)),
+
+  resumeGame: () => set((s) => (s.gamePaused ? { isPlaying: true, gamePaused: false } : s)),
 
   dismissEndCard: () => set({ gameEnded: false }),
 

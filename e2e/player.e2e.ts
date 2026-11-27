@@ -454,3 +454,55 @@ test('3D colour grade (Phase 6): noir is black and white, a vignette darkens the
   const warm = await shoot({ temperature: 1 });
   expect(warm.r - warm.b, 'warm shifts red above blue').toBeGreaterThan(plain.r - plain.b + 8);
 });
+
+test('Phase 7: waves spawn on a schedule and the HUD counts them, a remapped key moves the player, Escape pauses and Resume continues, a message box shows and expires', async ({ page }) => {
+  const spec = platformerLevel([
+    node2d('ground', { type: 'tile-platform', x: 500, y: 570, width: 1000, height: 40, physics2D: 'solid' }),
+    node2d('hero', { type: 'sprite-actor', x: 300, y: 510, width: 40, height: 60, physics2D: 'player-platformer', health: { max: 3, invulnerableSeconds: 0.5 } }),
+    node2d('imp', { type: 'vector-shape', x: 900, y: 100, width: 20, height: 20, physics2D: 'none', prefab: true }),
+  ]);
+  spec.gameRules = { winCondition: 'survive-waves', targetScore: 1000, timeLimitSeconds: 40, instructions: '' };
+  spec.waves = [
+    { name: 'Opening', delaySeconds: 0.5, spawns: [{ prefabId: 'imp', count: 2, everySeconds: 0.5 }] },
+    { name: 'Finale', delaySeconds: 0.5, spawns: [{ prefabId: 'imp', count: 1 }] },
+  ];
+  spec.hud = [{ id: 'wave', kind: 'counter', source: 'wave', anchor: 'top-right' }];
+  spec.input = { bindings: { right: ['l'] } };
+  const p = await openExport(page, spec);
+  await p.step(5);
+  await expect(page.locator('[data-hud-id="wave"]')).toContainText('1/2');
+
+  // A remapped key walks the real player.
+  const x0 = (await p.body2D('hero')).x;
+  await p.key('l', true);
+  await p.step(20);
+  await p.key('l', false);
+  expect((await p.body2D('hero')).x, 'L walks right').toBeGreaterThan(x0 + 20);
+
+  // Escape pauses: the clock stops; the menu shows; Resume continues.
+  await p.key('escape', true);
+  await p.key('escape', false);
+  expect(await p.state<boolean>('s.gamePaused')).toBe(true);
+  const t = await p.state<number>('s.currentTime');
+  await p.step(30);
+  expect(await p.state<number>('s.currentTime'), 'time is frozen while paused').toBe(t);
+  await expect(page.locator('.omni-card', { hasText: 'Paused' })).toBeVisible();
+  await page.locator('.omni-card button', { hasText: 'Resume' }).click();
+  expect(await p.state<boolean>('s.gamePaused')).toBe(false);
+  await p.step(6);
+  expect(await p.state<number>('s.currentTime')).toBeGreaterThan(t);
+
+  // A message shows in the box and goes away with scene time.
+  await page.evaluate(() => (window as any).__omniPlayer.store.getState().showMessage('Watch out!', { speaker: 'Guide', seconds: 1 }));
+  await p.step(6);
+  await expect(page.locator('.omni-msg')).toContainText('Watch out!');
+  await p.step(90);
+  await expect(page.locator('.omni-msg')).toBeHidden();
+
+  // The waves run to the end and winning the last one wins the round.
+  for (let i = 0; i < 80 && !(await p.state<boolean>('s.gameEnded')); i++) await p.step(15);
+  expect(await p.state<number>('s.sceneSpec.nodes2D.filter((n) => n.id.startsWith("imp#")).length')).toBe(3);
+  expect(await p.state<boolean>('s.gameEnded')).toBe(true);
+  expect(await p.state<boolean>('s.gameWon'), 'surviving every wave wins').toBe(true);
+  expect(p.errors).toEqual([]);
+});

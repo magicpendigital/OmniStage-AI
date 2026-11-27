@@ -89,31 +89,40 @@ export const GAME_STATE_PROMPT_SECTION = `GAME STATE: VARIABLES, HEALTH, SPAWNER
   max? (alive at once, <= 64), startDelay?, offsetX?, offsetY?, jitterX?, jitterY? } } creates copies of the prefab; copies get ids "<prefabId>#<n>". Use it for falling coins, waves of enemies, turrets.
 - PROJECTILES (2D): node.projectile = { vx, vy (px/s), lifetimeSeconds? (default 3), damage? (default 1), destroyOnHit? (default true), gravity?, target?: 'player'|'enemy'|'any' }.
   Typical turret: a spawner whose prefab is a hazard-looking prefab with a projectile (vx -240) aimed across the level; keep speeds <= 400 px/s so the player can dodge. A solid turret needs spawner.offsetX (or offsetY) so the bullet appears OUTSIDE it, in the direction it flies (verifier: spawn.inside-solid).
-- HUD: sceneSpec.hud = [{ id, kind:'counter'|'bar'|'text', source:'score'|'time'|'variable'|'health', variableId? (for variable), actorId? (for health, default the player), label?, anchor:'top-left'|'top-center'|'top-right'|'bottom-left'|'bottom-center'|'bottom-right', color?, max? }]
+- HUD: sceneSpec.hud = [{ id, kind:'counter'|'bar'|'text', source:'score'|'time'|'variable'|'health'|'wave', variableId? (for variable), actorId? (for health, default the player), label?, anchor:'top-left'|'top-center'|'top-right'|'bottom-left'|'bottom-center'|'bottom-right', color?, max? }]
   Typical: a health bar (top-left) when the player has health, a score counter (top-right), a counter per key / ammo variable. Max 12 elements.
+- WAVES (2D game scenes): sceneSpec.waves = [{ name?, spawns:[{ prefabId (a node with prefab:true), count (1-30), everySeconds? (default 1), x?, y?, jitterX?, jitterY? }] (max 6 groups), delaySeconds? (calm before the wave, default 2), durationSeconds? (default: 2 s after the last spawn), untilCleared? }] (max 20 waves).
+  Waves run one after another and spawn clones of the prefab (ids "<prefabId>#<n>") at x/y (default: where the prefab node stands) plus a deterministic spread. gameRules.winCondition 'survive-waves' is won when the last wave ends;
+  gameRules.timeLimitSeconds must exceed the total (delays + durations) or the round is lost (verifier: wave.too-long). Pair waves with enemy prefabs that have a stateMachine (chase-player) or a projectile / contact damage; add a HUD item source 'wave' to show "2/5".
+- INPUT (game scenes): sceneSpec.input = { bindings?: { left|right|up|down|jump: [extra key names] } (lower case: 'j', 'shift', 'enter', 'space'; max 6 per action; escape / tab are reserved; a key may serve only one action),
+  touch?: 'auto'|'buttons'|'joystick' }. WASD, the arrows and Space ALWAYS keep working; bindings only ADD keys. On phones 'auto' shows a thumb stick for top-down / 3D games and arrow buttons for platformers; set touch:'joystick' to force a stick.
+  Do not tell the player a key you did not bind (verifier: input.invalid / input.conflict).
 - WIN BY VARIABLE: gameRules.winCondition 'variable-threshold' + gameRules.winVariable { id, atLeast } (the variable MUST be declared). The score no longer wins in that mode.
 - LOGIC NODES (type 'condition' category 'logic-gate' unless noted; ports like "If Score >= X": in-flow(flow) -> out-true / out-false (flow)):
   * "If Variable (compare)"  params { conditionType:'variable-compare', variableId, op:'>='|'>'|'<='|'<'|'=='|'!=', value }
   * "If Health (compare)"    params { conditionType:'health-check', actorId? (default player), op, value }
   * "If Random Chance"       params { conditionType:'random-chance', chance: 0..1 }   (seeded: the same run always rolls the same)
   * ACTIONS (type 'action', category 'actor-action', inputs in-flow(flow), outputs out-flow(flow)):
-    'set-variable' / 'add-variable' { variableId, value } | 'damage' / 'heal' { actorId? (default player), amount } | 'spawn' { prefabId, x?, y? } | 'despawn' { actorId? } | 'win' | 'lose'
+    'set-variable' / 'add-variable' { variableId, value } | 'damage' / 'heal' { actorId? (default player), amount } | 'spawn' { prefabId, x?, y? } | 'despawn' { actorId? } | 'show-message' { text (max 160 chars), speaker? (max 24), seconds? (0.5-20, default 3) } | 'win' | 'lose'
   Every variableId MUST be declared in sceneSpec.variables; prefabId MUST be a node with prefab:true. Example: collecting a key (On Collision -> Add To Variable keys +1) and a door
   that opens when If Variable keys >= 3 (-> Win The Game).
 - Behaviour state machines on 2D nodes read the real health: { type:'health-below', value } and { type:'add-health', amount } use node.health when it exists.
-- NOT available yet (do not invent): pathfinding / line-of-sight, input remapping, waves, pause or dialogue HUDs, 3D projectiles and 3D contact damage.`;
+- PAUSE + MESSAGES: the OmniStage Player has a pause button (Escape or P) with Resume / Restart on every game scene — you do not build it. A message box (dialogue / hints) is shown by the 'show-message' action, e.g. a guard's
+  state machine onEnter or a logic node after On Collision ("The door is locked"). Keep messages short; they run for scene time, so they freeze while paused.
+- NOT available yet (do not invent): 3D projectiles and 3D contact damage.`;
 
 /** Phase 9: behaviour state machines (actors[].stateMachine / nodes2D[].stateMachine), run by src/runtime/stateMachine.ts. */
 export const STATE_MACHINE_PROMPT_SECTION = `BEHAVIOUR STATE MACHINES (game mode only; put "stateMachine" on an actor (3D) or a Node2D (2D) that should act on its own: enemies, NPCs, doors, guards):
 stateMachine = { initial: "<state name>", health?: 100, seed?: 1, states: { "<name>": State } }   (state names: letters, digits, - or _; max 16 states)
 State = { move?: 'stay'|'patrol'|'move-to'|'chase-player'|'flee-player'|'return-home', points?: [[x,z] or [x,y,z]] (3D metres, arena ±5.5) | [[x,y]] (2D px, 1000x600),
-          speed?: number (default 1.5 m/s 3D, 120 px/s 2D), clip?: one of the actor's availableClips / the sprite's spriteSheet clips, animation?: AnimationType,
+          speed?: number (default 1.5 m/s 3D, 120 px/s 2D), pathfind?: true (2D only: walk AROUND 'solid' walls instead of through them — use it for every 2D enemy that chases or patrols in a level with walls), clip?: one of the actor's availableClips / the sprite's spriteSheet clips, animation?: AnimationType,
           onEnter?: Action[], transitions?: [{ to: "<state name>", when: Condition }] }   (transitions are checked in order; the first true one wins)
 Condition (closed list, nothing else): { type:'player-near', distance } | { type:'player-far', distance } | { type:'timer', seconds } (time in this state) | { type:'arrived' } (reached
   move-to / return-home target or finished a patrol loop) | { type:'health-below', value } | { type:'score-at-least', value } | { type:'signal', name } | { type:'collided' } (touching the player)
   | { type:'clicked' } (tapped) | { type:'random', chance: 0..1, every?: seconds } (seeded, deterministic)
+  | { type:'player-visible', distance? } (2D: no 'solid' wall between us, within distance if given; use it instead of player-near so guards do not notice through walls) | { type:'player-hidden', distance? } (the opposite: lost sight of the player)
 Action (onEnter): { type:'add-score', amount } | { type:'add-health', amount } (negative = damage) | { type:'spawn-vfx', vfx: VFXType, color? } | { type:'play-sfx', sound: GameAudioEvent }
-  | { type:'send-signal', name } (wakes machines waiting on { type:'signal', name }; a logic-graph action { actionType:'send-signal', signal } does the same) | { type:'set-visible', visible } | { type:'end-game', won }
+  | { type:'send-signal', name } (wakes machines waiting on { type:'signal', name }; a logic-graph action { actionType:'send-signal', signal } does the same) | { type:'set-visible', visible } | { type:'show-message', text, speaker?, seconds? } (a line of dialogue / hint in the message box, max 160 chars) | { type:'end-game', won }
 Rules: initial MUST name a state; every transition "to" MUST name a state; every state must be reachable from initial; never write code or expressions. Moving states play Walk/Run, 'stay' plays Idle
 when no clip is set. Distances use x/z in 3D and x/y in 2D. Examples:
 - Enemy guard: { initial:"patrol", states:{ patrol:{ move:"patrol", points:[[-3,-2],[3,-2]], transitions:[{to:"chase",when:{type:"player-near",distance:3}}] },

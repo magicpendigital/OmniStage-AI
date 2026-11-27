@@ -14,6 +14,7 @@ export class InputManager {
   private keyboard = new Set<string>();
   private touch = new Set<string>();
   private pad = new Set<string>();
+  private stick = new Set<string>();
   private disposers: Array<() => void> = [];
   private gestured = false;
 
@@ -33,6 +34,7 @@ export class InputManager {
     const blur = () => {
       this.keyboard.clear();
       this.touch.clear();
+      this.stick.clear();
       this.sync();
     };
     window.addEventListener('keydown', down);
@@ -56,7 +58,7 @@ export class InputManager {
 
   private sync() {
     this.keys.clear();
-    for (const set of [this.keyboard, this.touch, this.pad]) for (const k of set) this.keys.add(k);
+    for (const set of [this.keyboard, this.touch, this.pad, this.stick]) for (const k of set) this.keys.add(k);
   }
 
   /** Bind an on-screen button to a logical key (press-and-hold). */
@@ -85,6 +87,14 @@ export class InputManager {
       el.removeEventListener('pointercancel', release);
       el.removeEventListener('pointerleave', release);
     });
+  }
+
+  /** The keys the on-screen thumb stick holds right now (replaces the previous set; an empty list releases the stick). */
+  setStick(keys: readonly string[]) {
+    const next = new Set(keys);
+    for (const k of next) if (!this.stick.has(k)) this.opts.onKeyPress?.(k, k);
+    this.stick = next;
+    this.sync();
   }
 
   /** Programmatic key (tests, accessibility switches); merged like touch input. */

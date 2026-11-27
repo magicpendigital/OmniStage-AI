@@ -4,6 +4,7 @@ import { EngineType } from '../types/scene.schema';
 import { DESIGN_HEIGHT, DESIGN_WIDTH, findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
 import { designToWorld, displayedPosition2D, hitTest2D, RuntimeBody2D, stepStage2D, toDesignCoords } from '../runtime/stage2d';
 import { resolveWorld } from '../runtime/physics/camera2d';
+import { canonicalKeysFor } from '../runtime/inputMap';
 
 // Phase 7: the interpreter and the 2D frame live in src/runtime (shared with the OmniStage Player).
 export { findLogicContacts, RuntimeLogicGraph } from '../runtime/logicGraph';
@@ -114,7 +115,10 @@ export const StageCanvas2D: React.FC = () => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable) return;
       pressedKeysRef.current.add(e.key.toLowerCase());
-      if (!e.repeat) logicRuntime.emit('key-press', { key: e.key.toLowerCase(), code: e.code });
+      if (!e.repeat) {
+        logicRuntime.emit('key-press', { key: e.key.toLowerCase(), code: e.code });
+        for (const canonical of canonicalKeysFor(useStudioStore.getState().sceneSpec.input, e.key.toLowerCase())) logicRuntime.emit('key-press', { key: canonical, code: canonical });
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       pressedKeysRef.current.delete(e.key.toLowerCase());

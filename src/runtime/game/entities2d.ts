@@ -9,6 +9,7 @@ import { runtimeStore } from '../host';
 import { overlaps } from '../physics/collide2d';
 import { nodeBox2D } from '../physics/nodeBox';
 import { healthMax, isPlayerEntity, stepProjectile, stepSpawner } from './state';
+import { resolveWaves, stepWaves } from './waves';
 import type { RuntimeBody2D } from '../stage2d';
 
 type Bodies = Record<string, RuntimeBody2D>;
@@ -19,6 +20,35 @@ const bodyOf = (bodies: Bodies, n: Node2D): RuntimeBody2D => (bodies[n.id] ||= {
 function livePos(n: Node2D, bodies: Bodies): { x: number; y: number } {
   const b = bodies[n.id];
   return isPlayerEntity(n) && b ? { x: b.x, y: b.y } : { x: n.x, y: n.y };
+}
+
+/** Phase 7B: runs the scene's wave schedule — spawns what is due and ends the round when the last wave is over (`survive-waves`). */
+function stepWaveSchedule(dt: number) {
+  const state = runtimeStore.getState();
+  const waves = resolveWaves(state.sceneSpec);
+  if (!waves.length || state.gameWave.phase === 'done' || state.gameEnded) return;
+  const nodes = state.sceneSpec.nodes2D;
+  const alive = (prefabId: string) => nodes.filter((n) => n.id.startsWith(`${prefabId}#`)).length;
+  const step = stepWaves(waves, state.gameWave, dt, alive);
+  const next = step.next;
+  for (const spawn of step.spawns) {
+    const prefab = nodes.find((n) => n.id === spawn.prefabId && n.prefab);
+    if (!prefab) continue;
+    try {
+      const id = runtimeStore.getState().spawnPrefab(spawn.prefabId, (spawn.x ?? prefab.x) + spawn.dx, (spawn.y ?? prefab.y) + spawn.dy);
+      // The scene is full (clone cap): give the spawn back, so it is tried again next frame instead of silently lost.
+      if (id === undefined && next.spawned[spawn.group] > 0) next.spawned[spawn.group] -= 1;
+    } catch (error) {
+      runtimeStore.getState().appendLog({ level: 'error', message: `[Waves] ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+  const before = state.gameWave;
+  if (step.next.index !== before.index || step.next.phase !== before.phase) {
+    const entered = step.next.phase === 'active' ? waves[step.next.index]?.name : undefined;
+    if (entered) runtimeStore.getState().appendLog({ level: 'info', message: `[Waves] ${entered} starts` });
+  }
+  runtimeStore.setState({ gameWave: next });
+  if (step.finished && state.sceneSpec.gameRules?.winCondition === 'survive-waves') runtimeStore.getState().endGame(true);
 }
 
 export function stepGameEntities2D(bodies: Bodies, dt: number) {
@@ -39,6 +69,9 @@ export function stepGameEntities2D(bodies: Bodies, dt: number) {
       runtimeStore.getState().appendLog({ level: 'error', actorId: owner.id, message: `[Spawner] ${error instanceof Error ? error.message : String(error)}` });
     }
   }
+
+  // --- waves (Phase 7B) ---
+  stepWaveSchedule(dt);
 
   // --- projectiles ---
   let state = runtimeStore.getState();

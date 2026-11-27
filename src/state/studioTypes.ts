@@ -1,6 +1,8 @@
 /**
  * Phase 7C — StudioState and the types shared by the store slices (src/state/slices/*).
  */
+import type { WaveProgress } from '../runtime/game/waves';
+import type { GameMessage } from '../runtime/game/messages';
 import { AssetCollection, AssetDefinition, AudioTrackSpec, GameRule, GameVariable, HudElement, MarketingOverlayConfig } from '../types/scene.schema';
 import { ActorVoice, BiomeId, DialogueLine, SoundtrackSpec, WorldFeatureType } from '../types/scene.schema';
 import type { ClipSource } from '../runtime/timelineLanes';
@@ -134,6 +136,11 @@ export interface StudioState {
   gameHealth: Record<string, number>;
   gameHurtAt: Record<string, number>;
   gameSpawnSerial: number;
+  /** Phase 7B: wave schedule progress. */
+  gameWave: WaveProgress;
+  /** Phase 7D: message box + pause flag. */
+  gameMessage: GameMessage | null;
+  gamePaused: boolean;
   /** Phase 9: live behaviour state per actor / node id (written by src/runtime/stateMachine.ts). */
   machineStates?: Record<string, string>;
   unboxTapCounts: Record<string, number>;
@@ -274,6 +281,9 @@ export interface StudioState {
   despawnEntity: (id: string) => void;
   resetGameSession: () => void;
   dismissEndCard: () => void;
+  showMessage: (text: string, options?: { speaker?: string; seconds?: number }) => void;
+  pauseGame: () => void;
+  resumeGame: () => void;
 
   // Multi-Scene Storyboard Generation (AI Director multi-step pipeline)
   storyboardJob: StoryboardJobState | null;

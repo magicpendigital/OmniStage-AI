@@ -12,6 +12,7 @@ import { applyBackgroundAndFog, applyStudioEnvironment, createAmbientDust, creat
 import { createContactShadows } from '../render3d/contactShadows';
 import { findLogicContacts, useRuntimeLogicGraph } from './StageCanvas2D';
 import { resolveShot } from '../runtime/cinematics';
+import { applyInputMap, canonicalKeysFor } from '../runtime/inputMap';
 
 const _targetVec = new THREE.Vector3();
 const _camPosVec = new THREE.Vector3();
@@ -47,7 +48,10 @@ export const SceneDirector: React.FC = () => {
 
       const key = e.key.toLowerCase();
       pressedKeysRef.current.add(key);
-      if (!e.repeat) logicRuntime.emit('key-press', { key, code: e.code });
+      if (!e.repeat) {
+        logicRuntime.emit('key-press', { key, code: e.code });
+        for (const canonical of canonicalKeysFor(useStudioStore.getState().sceneSpec.input, key)) logicRuntime.emit('key-press', { key: canonical, code: canonical });
+      }
 
       // W / E / R switch the TransformControls gizmo whenever the gizmo is available (same rule as ActorRenderer's
       // `showTransformGizmo`): everywhere except while a Game Mode scene is playing, where W is a movement key.
@@ -124,7 +128,7 @@ export const SceneDirector: React.FC = () => {
 
     // 1. REAL PLAYABLE GAME LOOP: Player Keyboard Movement + Bounding-Sphere Collision Detection
     if (sceneSpec.mode === 'game' && isPlaying) {
-      const keys = pressedKeysRef.current;
+      const keys = applyInputMap(sceneSpec.input, pressedKeysRef.current);
       let moveX = 0;
       let moveZ = 0;
       const moveSpeed = 4.2 * clampedDelta;

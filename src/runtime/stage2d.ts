@@ -19,6 +19,7 @@ import { nodeBox2D } from './physics/nodeBox';
 import { ControllerInput, createPlatformerState, PlatformerState, stepPlatformer, stepTopDown } from './physics/platformer';
 import { resolveTuning } from './physics/constants';
 import { stepGameEntities2D } from './game/entities2d';
+import { applyInputMap } from './inputMap';
 import { healthMax } from './game/state';
 import type { ProjectileClock, SpawnerClock } from './game/state';
 
@@ -120,7 +121,7 @@ function simulatePlayer2D(
   ctl.x = hit.x;
   ctl.y = hit.y;
 
-  const input = inputFromKeys(keys);
+  const input = inputFromKeys(applyInputMap(spec.input, keys));
   if (topDown) stepTopDown(ctl, input, dt, solids, tuning);
   else if (stepPlatformer(ctl, input, dt, solids, tuning).jumped) playSceneSfx(spec, 'jump');
 
