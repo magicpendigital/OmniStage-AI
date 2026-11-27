@@ -12,7 +12,7 @@ import {
 } from 'three/webgpu';
 import {
   abs, cameraPosition, clamp, cos, dot, float, fract, Fn, fwidth, instancedBufferAttribute, length, max, min, mix, mod,
-  normalize, pass, positionLocal, positionWorld, pow, reflect, reflector, sin, smoothstep, uniform, uv, vec2, vec3, vec4,
+  normalize, pass, positionLocal, positionWorld, pow, reflect, reflector, renderOutput, sin, smoothstep, uniform, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { bloom as bloomNode } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -22,6 +22,7 @@ import type { Built3D, FrameContext } from '../types';
 import type { GpuParticleOptions } from '../gpuParticles';
 import { PARTICLE_KINDS } from '../gpuParticles';
 import { DEFAULT_BLOOM } from '../postfx';
+import type { ResolvedGrade } from '../../runtime/colorGrade';
 import { shaderFx } from './shaderEffects';
 
 const TAU = 6.283185;
@@ -251,16 +252,57 @@ function studioEnvironment(renderer: unknown, scene: THREE.Scene): () => void {
   };
 }
 
+/**
+ * Phase 6: the TSL twin of GRADE_GLSL (src/runtime/colorGrade.ts): the same maths on display-referred colour. The pipeline's own
+ * output transform is turned off and applied here first (tone mapping + sRGB), so the grade sees what the WebGL OutputPass hands it.
+ */
+function gradeNode(rgb: any, uvNode: any, u: Record<string, any>) {
+  const one = float(1);
+  let c = rgb.mul(pow(float(2), u.exposure));
+  c = vec3(
+    c.r.mul(one.add(u.temperature.mul(0.18)).add(u.tint.mul(0.05))),
+    c.g.mul(one.sub(u.tint.mul(0.1))),
+    c.b.mul(one.sub(u.temperature.mul(0.18)).add(u.tint.mul(0.05)))
+  );
+  c = c.sub(0.5).mul(u.contrast).add(0.5);
+  const lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(lum, lum, lum), c, u.saturation);
+  c = u.fade.add(c.mul(one.sub(u.fade)));
+  const l = clamp(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0, 1);
+  c = c.mul(mix(vec3(1, 1, 1), u.shadowTint, one.sub(smoothstep(0, 0.6, l)).mul(u.split)));
+  c = c.mul(mix(vec3(1, 1, 1), u.highlightTint, smoothstep(0.4, 1, l).mul(u.split)));
+  c = c.mul(one.sub(u.vignette.mul(smoothstep(0.35, 1, length(uvNode.sub(0.5)).mul(1.41421356)))));
+  const n = fract(sin(dot(uvNode.mul(vec2(1013.7, 917.3)).add(u.seed.mul(91.7)), vec2(12.9898, 78.233))).mul(43758.5453));
+  c = c.add(n.sub(0.5).mul(u.grain).mul(0.25));
+  return clamp(c, 0, 1);
+}
+
 function bloom(renderer: unknown, scene: THREE.Scene, camera: THREE.Camera, opts: Parameters<NodeBackend['bloom']>[3] = {}) {
   const o = { ...DEFAULT_BLOOM, ...opts };
   const post = new RenderPipeline(renderer as WebGPURenderer);
+  post.outputColorTransform = false;
   const scenePass = pass(scene, camera);
   const color = scenePass.getTextureNode('output');
-  post.outputNode = color.add(bloomNode(color, o.strength, o.radius, o.threshold));
+  const lit = o.enabled === false ? color : color.add(bloomNode(color, o.strength, o.radius, o.threshold));
+  const u: Record<string, any> = {};
+  for (const key of ['exposure', 'contrast', 'saturation', 'temperature', 'tint', 'fade', 'vignette', 'grain', 'split', 'seed']) u[key] = uniform(key === 'contrast' || key === 'saturation' ? 1 : 0);
+  u.shadowTint = uniform(new THREE.Vector3(1, 1, 1));
+  u.highlightTint = uniform(new THREE.Vector3(1, 1, 1));
+  const active = uniform(0);
+  const display: any = renderOutput(lit as any);
+  post.outputNode = mix(display as any, vec4(gradeNode(display.rgb, uv(), u), display.a) as any, active as any) as any;
   return {
     render: () => post.render(),
     setSize: () => undefined, // follows the renderer size
     setCamera: (c: THREE.Camera) => { scenePass.camera = c; },
+    setGrade: (g: ResolvedGrade | null, seed = 0) => {
+      active.value = g ? 1 : 0;
+      if (!g) return;
+      for (const key of ['exposure', 'contrast', 'saturation', 'temperature', 'tint', 'fade', 'vignette', 'grain', 'split'] as const) u[key].value = g[key];
+      u.seed.value = seed;
+      u.shadowTint.value.set(...g.shadowTint);
+      u.highlightTint.value.set(...g.highlightTint);
+    },
     dispose: () => post.dispose(),
   };
 }

@@ -507,3 +507,22 @@ test('Phase 3 game state is never dropped silently: variables, HUD, health, spaw
     assert.ok(details.includes(needle), `warns about ${needle}`);
   }
 });
+
+test('colour grade: exposure / contrast / saturation become Environment adjustments, the rest is a warning', () => {
+  const scene = syncGraphWithScene(coinRush());
+  scene.grade = { preset: 'noir', exposure: 1, contrast: 1.2 };
+  const build = buildGodotProject([scene]);
+  const tscn = sceneFile(build);
+  assert.match(tscn, /adjustment_enabled = true/);
+  assert.match(tscn, /adjustment_brightness = 2(\.0+)?\b/);
+  assert.match(tscn, /adjustment_contrast = 1\.2/);
+  assert.match(tscn, /adjustment_saturation = 0(\.0+)?\b/);
+  const w = build.warnings.find((x) => x.feature === 'Colour grade');
+  assert.ok(w, 'vignette / grain are reported as not exported');
+  assert.match(w!.detail, /vignette/);
+  assert.match(w!.detail, /film grain/);
+
+  const plain = buildGodotProject([syncGraphWithScene(coinRush())]);
+  assert.doesNotMatch(sceneFile(plain), /adjustment_enabled/);
+  assert.ok(!plain.warnings.some((x) => x.feature === 'Colour grade'));
+});

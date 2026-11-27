@@ -28,6 +28,7 @@ import { ProblemsPanel, useProblemCounts } from './ProblemsPanel';
 import { AUDIO_KIND_COLOR, canSpeak, speakText } from './panels/AudioPanel';
 import { IconBtn, Kbd, startDrag } from './ui';
 import { coverageLabel, scriptCoverage } from '../verification/scriptCoverage';
+import { deriveTimeline, overlappingClips, type TimelineLane } from '../runtime/timelineLanes';
 
 const HEAD_HEIGHT = 34;
 
@@ -63,6 +64,47 @@ const Lane: React.FC<{ duration: number; children?: React.ReactNode }> = ({ dura
   );
 };
 
+/** Phase 6: the clips of a derived lane (shots, performance steps, captions, sound, look). Click a clip to jump to its start. */
+const ClipBars: React.FC<{ lane: TimelineLane; duration: number }> = ({ lane, duration }) => {
+  const setCurrentTime = useStudioStore((s) => s.setCurrentTime);
+  return (
+    <>
+      {lane.clips.map((c) => (
+        <div
+          key={c.id}
+          className="clip"
+          role="button"
+          tabIndex={0}
+          title={`${c.label} · ${c.start.toFixed(1)}–${c.end.toFixed(1)}s`}
+          aria-label={`${lane.label}: ${c.label} from ${c.start.toFixed(1)} seconds`}
+          style={{ left: `${(c.start / duration) * 100}%`, width: `${Math.max(1.5, ((c.end - c.start) / duration) * 100)}%`, ['--c' as any]: lane.color }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setCurrentTime(c.start)}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setCurrentTime(c.start)}
+        >
+          {c.label}
+        </div>
+      ))}
+    </>
+  );
+};
+
+const ClipRow: React.FC<{ lane: TimelineLane; duration: number }> = ({ lane, duration }) => {
+  const clash = overlappingClips(lane).length > 0;
+  return (
+    <div className="tl-row">
+      <div className="tl-name" title={clash ? 'Some clips on this track overlap' : lane.label}>
+        <i className="tag-dot" style={{ background: lane.color }} />
+        <span className="truncate">{lane.label}</span>
+        {clash && <span className="shrink-0 text-[9px] text-amber-400">overlap</span>}
+      </div>
+      <Lane duration={duration}>
+        <ClipBars lane={lane} duration={duration} />
+      </Lane>
+    </div>
+  );
+};
+
 // ----------------------------------------------------------------------------
 // Tab 1 · Timeline & camera keyframe sequencer
 // ----------------------------------------------------------------------------
@@ -81,6 +123,10 @@ const TimelineTab: React.FC = () => {
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / duration) * 100))}%`;
   const keyframes = sceneSpec.camera.keyframes || [];
   const ticks = Array.from({ length: 11 }, (_, i) => (duration / 10) * i);
+  // Phase 6: shots, performance steps, captions, sound and the look, derived from the scene (never stored).
+  const lanes = React.useMemo(() => deriveTimeline(sceneSpec), [sceneSpec]);
+  const shotsLane = lanes.find((l) => l.kind === 'shots');
+  const extraLanes = lanes.filter((l) => ['captions', 'music', 'ambience', 'sfx', 'look'].includes(l.kind));
 
   return (
     <div className="h-full overflow-auto">
@@ -137,11 +183,14 @@ const TimelineTab: React.FC = () => {
           </div>
         )}
 
+        {shotsLane && <ClipRow lane={shotsLane} duration={duration} />}
+
         {/* Actor / layer tracks */}
         {!is2D &&
           sceneSpec.actors.map((actor) => {
             const st = actor.startTime ?? 0;
             const et = actor.endTime ?? duration;
+            const perf = lanes.find((l) => l.id === `actor-${actor.id}`);
             return (
               <div key={actor.id} className="tl-row">
                 <button type="button" className={`tl-name text-left ${actor.id === selectedActorId ? 'sel' : ''}`} onClick={() => selectActor(actor.id)}>
@@ -149,12 +198,16 @@ const TimelineTab: React.FC = () => {
                   <span className="truncate">{actor.name}</span>
                 </button>
                 <Lane duration={duration}>
-                  <div
-                    className="clip"
-                    style={{ left: pct(st), width: `${Math.max(3, ((et - st) / duration) * 100)}%`, ['--c' as any]: actor.primaryColor || '#5aa9ff' }}
-                  >
-                    {actor.activeClip || actor.activeAnimation} · {st.toFixed(1)}–{et.toFixed(1)}s
-                  </div>
+                  {perf ? (
+                    <ClipBars lane={perf} duration={duration} />
+                  ) : (
+                    <div
+                      className="clip"
+                      style={{ left: pct(st), width: `${Math.max(3, ((et - st) / duration) * 100)}%`, ['--c' as any]: actor.primaryColor || '#5aa9ff' }}
+                    >
+                      {actor.activeClip || actor.activeAnimation} · {st.toFixed(1)}–{et.toFixed(1)}s
+                    </div>
+                  )}
                 </Lane>
               </div>
             );
@@ -196,6 +249,10 @@ const TimelineTab: React.FC = () => {
               </div>
             );
           })}
+
+        {extraLanes.map((lane) => (
+          <ClipRow key={lane.id} lane={lane} duration={duration} />
+        ))}
 
         {(is2D ? (sceneSpec.nodes2D || []).length : sceneSpec.actors.length) === 0 && (
           <p className="p-4 text-center text-[11px] text-dim">Nothing on stage yet. Tracks appear here as you add actors and layers.</p>

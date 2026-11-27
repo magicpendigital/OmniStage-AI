@@ -25,6 +25,7 @@ import { clickRunsBuiltIn } from '../runtime/gameSlice';
 import { matchClipName, performedActor, resolveShot } from '../runtime/cinematics';
 import { createContactShadows } from '../render3d/contactShadows';
 import { createBloom, PostFx } from '../render3d/postfx';
+import { grainSeed, resolveGrade } from '../runtime/colorGrade';
 import { applyBackgroundAndFog, applyStudioEnvironment, configureRenderer, createAmbientDust, createGroundGrid, createLightingRig, createPedestal } from '../render3d/stage3d';
 import { createActorBadge, createBurst, createVfx } from '../render3d/vfx3d';
 import type { Built3D, FrameContext } from '../render3d/types';
@@ -100,6 +101,8 @@ export class View3D {
   private clock = 0;
   private ro: ResizeObserver;
   private bloom?: PostFx;
+  /** Phase 6: display-pass stack (no bloom) for scenes that have a colour grade but no ultra bloom. */
+  private gradeFx?: PostFx;
   /** Phase 8 app builds: live quality (pixel ratio, shadows, particles, post FX) from the adaptive governor. */
   private settings: QualitySettings | null = null;
   private contactPart?: Built3D;
@@ -189,6 +192,16 @@ export class View3D {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.bloom?.setSize(w, h, this.renderer.getPixelRatio());
+    this.gradeFx?.setSize(w, h, this.renderer.getPixelRatio());
+  }
+
+  private gradeStack(): PostFx {
+    if (!this.gradeFx) {
+      const nb = nodeBackend();
+      this.gradeFx = nb ? nb.bloom(this.renderer, this.scene, this.camera, { enabled: false }) : createBloom(this.renderer, this.scene, this.camera, { enabled: false });
+      this.gradeFx.setSize(Math.max(1, this.parent.clientWidth), Math.max(1, this.parent.clientHeight), this.renderer.getPixelRatio());
+    }
+    return this.gradeFx;
   }
 
   // ---------------------------------------------------------------- world
@@ -562,8 +575,17 @@ export class View3D {
     this.updateCamera(state.sceneSpec, state.currentTime, sceneChanged);
     if (this.settings) this.applyParticles();
     for (const part of this.worldParts) part.prerender?.(this.renderer, this.scene);
-    if (this.bloom && (this.settings?.postFx ?? true)) this.bloom.render(dt);
-    else this.renderer.render(this.scene, this.camera);
+    // Phase 6: the scene's colour grade is the last pass; grain is seeded by the timeline frame, so frame-stepped exports repeat exactly.
+    const grade = resolveGrade(state.sceneSpec.grade);
+    const seed = grainSeed(state.currentTime);
+    if (this.bloom && (this.settings?.postFx ?? true)) {
+      this.bloom.setGrade(grade, seed);
+      this.bloom.render(dt);
+    } else if (grade) {
+      const fx = this.gradeStack();
+      fx.setGrade(grade, seed);
+      fx.render(dt);
+    } else this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
@@ -574,6 +596,7 @@ export class View3D {
     this.hdriTexture?.dispose();
     this.disposeEnv?.();
     this.bloom?.dispose();
+    this.gradeFx?.dispose();
     this.ro.disconnect();
     this.canvas.removeEventListener('pointerdown', this.onPointer);
     // A shared WebGPU renderer outlives this view (switching 2D ↔ 3D scenes must not re-initialise the GPU device).

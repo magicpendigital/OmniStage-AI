@@ -291,7 +291,7 @@ export function sliceScene(spec: SceneSpec, sections: SceneSliceSection[], ids?:
         };
         break;
       case 'camera':
-        out.camera = { camera: spec.camera, camera2D: spec.camera2D };
+        out.camera = { camera: spec.camera, camera2D: spec.camera2D, grade: spec.grade };
         break;
       case 'other':
         out.other = {

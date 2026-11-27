@@ -5,6 +5,7 @@
 import { expect, test } from '@playwright/test';
 import { openExport, shaderFxScene, template } from './exportFixture';
 import { applyBiomeToScene } from '../src/runtime/biomes';
+import type { SceneSpec } from '../src/types/scene.schema';
 
 const PLAYER_3D = 's.sceneSpec.actors.find((a) => a.physicsRole === "player").position';
 
@@ -388,4 +389,40 @@ test('game state: a turret spawns projectiles that wear the player down, the HUD
   expect(await p.state<boolean>('s.gameEnded'), 'running out of health ends the game').toBe(true);
   expect(await p.state<boolean>('s.gameWon'), 'as a loss').toBe(false);
   expect(p.errors).toEqual([]);
+});
+
+test('3D colour grade (Phase 6): noir is black and white, a vignette darkens the corners, no grade changes nothing', async ({ page }) => {
+  const make = (grade?: SceneSpec['grade']) => {
+    const spec = shaderFxScene();
+    for (const a of spec.actors) delete a.shaderEffect;
+    if (grade) spec.grade = grade;
+    return spec;
+  };
+  const shoot = async (grade?: SceneSpec['grade']) => {
+    const pg = await page.context().newPage();
+    const p = await openExport(pg, make(grade));
+    await pg.evaluate(() => (window as any).__omniPlayer.store.setState({ currentTime: 0 }));
+    await p.waitAssets();
+    await p.step(10, 0.05);
+    const stats = await p.colorStats();
+    if (grade) await pg.screenshot({ path: test.info().outputPath(`grade-${grade.preset ?? 'custom'}.png`) });
+    expect(p.errors).toEqual([]);
+    await pg.close();
+    return stats;
+  };
+  const plain = await shoot();
+  const again = await shoot();
+  expect(Math.abs(plain.r - again.r) + Math.abs(plain.g - again.g) + Math.abs(plain.b - again.b), 'the same scene renders the same twice').toBeLessThan(3);
+  expect(plain.spread, 'the ungraded scene has colour').toBeGreaterThan(8);
+
+  const noir = await shoot({ preset: 'noir', grain: 0, vignette: 0 });
+  expect(noir.spread, 'noir channels agree (black and white)').toBeLessThan(2);
+  expect(noir.r + noir.g + noir.b, 'noir still has light in it').toBeGreaterThan(30);
+
+  const vignette = await shoot({ vignette: 1 });
+  expect(vignette.corner, 'corners go dark').toBeLessThan(plain.corner * 0.35 + 3);
+  expect(Math.abs(vignette.center - plain.center), 'the centre is untouched').toBeLessThan(plain.center * 0.15 + 4);
+
+  const warm = await shoot({ temperature: 1 });
+  expect(warm.r - warm.b, 'warm shifts red above blue').toBeGreaterThan(plain.r - plain.b + 8);
 });

@@ -89,6 +89,36 @@ export async function openExport(page: Page, spec: SceneSpec, opts: Partial<Play
         const mean = sum / n;
         return { mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), width: src.width, height: src.height };
       }),
+    /** Phase 6: mean colour of the 64 x 36 frame, how far apart the channels are, and the luminance of the centre vs the four corners. */
+    colorStats: () =>
+      page.evaluate(() => {
+        (window as any).__omniPlayer.step(1 / 60);
+        const src = document.querySelector('canvas.omni-stage') as HTMLCanvasElement;
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 36;
+        const g = c.getContext('2d')!;
+        g.drawImage(src, 0, 0, 64, 36);
+        const d = g.getImageData(0, 0, 64, 36).data;
+        const lum = (x0: number, y0: number, w: number, h: number) => {
+          let sum = 0;
+          let n = 0;
+          for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+            const i = (y * 64 + x) * 4;
+            sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            n++;
+          }
+          return sum / n;
+        };
+        let r = 0, gr = 0, b = 0, spreadSum = 0;
+        const n = d.length / 4;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i]; gr += d[i + 1]; b += d[i + 2];
+          spreadSum += Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+        }
+        const corners = [lum(0, 0, 4, 4), lum(60, 0, 4, 4), lum(0, 32, 4, 4), lum(60, 32, 4, 4)];
+        return { r: r / n, g: gr / n, b: b / n, spread: spreadSum / n, center: lum(30, 16, 4, 4), corner: corners.reduce((a, v) => a + v, 0) / 4 };
+      }),
     /** Like pixelStats, but returns the 64 x 36 luminance grid (to compare two frames pixel by pixel). */
     pixelGrid: () =>
       page.evaluate(() => {

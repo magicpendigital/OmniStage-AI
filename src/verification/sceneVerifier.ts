@@ -14,7 +14,8 @@ import type {
   VerificationIssue,
   VerificationReport,
 } from '../types/scene.schema';
-import { isEaseId } from '../animation/easing';
+import { isEaseRef } from '../animation/easing';
+import { gradeProblems, sanitizeGrade } from '../runtime/colorGrade';
 import { SFX_PRESET_IDS } from '../audio/audioBus';
 import { PARTICLE_2D_PRESETS, particleRuntimeFor } from '../vfx/particles2D';
 import { MAX_SCENE_RECIPES, RECIPE_ID_RE, sameRecipe, sanitizeParticleRecipe, sanitizeSfxRecipe } from '../extensions/validate';
@@ -259,7 +260,7 @@ function verify2D(spec: SceneSpec, issues: VerificationIssue[]) {
       issues.push(issue('2d.invalid-spritesheet', 'warning', `"${n.name}" has an invalid spriteSheet (needs imageUrl and positive frame size, columns, frameCount, fps).`, true, n.id));
     }
     for (const k of n.keyframeTrack || []) {
-      if (k.ease !== undefined && !isEaseId(k.ease)) {
+      if (k.ease !== undefined && !isEaseRef(k.ease)) {
         issues.push(issue('keyframe.unknown-ease', 'warning', `"${n.name}" uses unknown ease "${k.ease}".`, true, n.id));
         break;
       }
@@ -308,7 +309,7 @@ function clickCollects(a: ActorNode) {
 function verify3D(spec: SceneSpec, issues: VerificationIssue[]) {
   const actors = visible(spec.actors);
   for (const k of spec.camera?.keyframes || []) {
-    if (k.ease !== undefined && !isEaseId(k.ease)) {
+    if (k.ease !== undefined && !isEaseRef(k.ease)) {
       issues.push(issue('keyframe.unknown-ease', 'warning', `Camera keyframe at ${k.time}s uses unknown ease "${k.ease}".`, true));
       break;
     }
@@ -350,7 +351,7 @@ function verifyMedia(spec: SceneSpec, issues: VerificationIssue[]) {
   for (const a of spec.actors) {
     for (const st of a.performance || []) {
       const badMove = st.moveTo !== undefined && (!Array.isArray(st.moveTo) || st.moveTo.length !== 3 || st.moveTo.some((v) => !Number.isFinite(v) || Math.abs(v) > STAGE_3D));
-      if (!Number.isFinite(st.time) || st.time < 0 || st.time > duration || badMove || (st.ease !== undefined && !isEaseId(st.ease))) {
+      if (!Number.isFinite(st.time) || st.time < 0 || st.time > duration || badMove || (st.ease !== undefined && !isEaseRef(st.ease))) {
         issues.push(issue('media.performance-invalid', 'warning', `"${a.name}" has a performance step outside the scene (time ${st.time}s of ${duration}s) or an invalid moveTo / ease.`, true, a.id));
         break;
       }
@@ -1125,11 +1126,20 @@ function fixStateMachine(spec: SceneSpec, i: VerificationIssue): string | null {
   return next ? `Repaired "${host.name}" state machine (${i.code})` : `Removed "${host.name}" empty state machine`;
 }
 
+/** Phase 6: the colour grade is data; keep it inside its ranges and say when a 2D scene would silently ignore it. */
+function verifyGrade(spec: SceneSpec, issues: VerificationIssue[]) {
+  if (spec.grade === undefined) return;
+  const problems = gradeProblems(spec.grade);
+  if (problems.length) issues.push(issue('grade.invalid', 'warning', `Colour grade is invalid: ${problems.slice(0, 3).join('; ')}.`, true));
+  else if (spec.engineType === '2d') issues.push(issue('grade.2d-ignored', 'warning', 'A colour grade only applies to 3D scenes; this 2D scene ignores it.', true));
+}
+
 export function verifySceneSpec(spec: SceneSpec, opts: VerifyOptions = {}): VerificationReport {
   const issues: VerificationIssue[] = [];
   verifyCommon(spec, issues, opts);
   verifyRecipes(spec, issues);
   verifyShaderEffects(spec, issues);
+  verifyGrade(spec, issues);
   if (spec.engineType === '2d') verify2D(spec, issues);
   else verify3D(spec, issues);
   verifyMedia(spec, issues);
@@ -1211,7 +1221,7 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
         .filter((st) => Number.isFinite(st.time))
         .map((st) => {
           const next = { ...st, time: clamp(st.time, 0, duration) };
-          if (next.ease !== undefined && !isEaseId(next.ease)) delete next.ease;
+          if (next.ease !== undefined && !isEaseRef(next.ease)) delete next.ease;
           if (next.moveTo !== undefined) {
             if (!Array.isArray(next.moveTo) || next.moveTo.length !== 3 || next.moveTo.some((v) => !Number.isFinite(v))) delete next.moveTo;
             else next.moveTo = [clamp(next.moveTo[0], -STAGE_3D, STAGE_3D), next.moveTo[1], clamp(next.moveTo[2], -STAGE_3D, STAGE_3D)];
@@ -1358,9 +1368,18 @@ function applyFix(spec: SceneSpec, i: VerificationIssue, opts: VerifyOptions): s
         }
       }
       return 'Removed unknown audio cues (defaults apply)';
+    case 'grade.invalid': {
+      const fixed = sanitizeGrade(spec.grade);
+      if (fixed) spec.grade = fixed;
+      else delete spec.grade;
+      return 'Clamped the colour grade into its ranges';
+    }
+    case 'grade.2d-ignored':
+      delete spec.grade;
+      return 'Removed the colour grade (2D scenes do not use it)';
     case 'keyframe.unknown-ease':
-      for (const n of spec.nodes2D || []) for (const k of n.keyframeTrack || []) if (k.ease && !isEaseId(k.ease)) delete k.ease;
-      for (const k of spec.camera?.keyframes || []) if (k.ease && !isEaseId(k.ease)) delete k.ease;
+      for (const n of spec.nodes2D || []) for (const k of n.keyframeTrack || []) if (k.ease && !isEaseRef(k.ease)) delete k.ease;
+      for (const k of spec.camera?.keyframes || []) if (k.ease && !isEaseRef(k.ease)) delete k.ease;
       return 'Reset unknown easings to linear';
     case '2d.unknown-particle': {
       const n = spec.nodes2D.find((x) => x.id === i.targetId);

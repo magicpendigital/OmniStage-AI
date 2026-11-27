@@ -4,6 +4,7 @@
  */
 import { LIGHTING_PRESETS, SCENE_TEMPLATES, cloneSceneSpec, createBlankSceneSpec } from '../../registry/assetRegistry';
 import { syncGraphWithScene } from '../../runtime/graphSync';
+import { sanitizeGrade } from '../../runtime/colorGrade';
 import { freshGameState } from '../../runtime/game/state';
 import { Vector3Tuple } from '../../types/scene.schema';
 import type { StudioGet, StudioSet, StudioSlice } from '../studioTypes';
@@ -301,6 +302,19 @@ export const createScenesSlice = (set: StudioSet, get: StudioGet): StudioSlice =
       nextSpec.environment = { ...nextSpec.environment, ...patch };
       return {
         pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('environment', patch)),
+        futureSpecs: [],
+        sceneSpec: nextSpec,
+      };
+    }),
+
+  updateGrade: (patch) =>
+    set((state) => {
+      const nextSpec = cloneSceneSpec(state.sceneSpec);
+      const merged = patch === null ? undefined : sanitizeGrade({ ...nextSpec.grade, ...patch });
+      if (merged) nextSpec.grade = merged;
+      else delete nextSpec.grade;
+      return {
+        pastSpecs: pushPast(state.pastSpecs, state.sceneSpec, editKey('grade', patch ?? { cleared: true })),
         futureSpecs: [],
         sceneSpec: nextSpec,
       };

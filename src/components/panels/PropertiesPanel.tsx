@@ -36,6 +36,7 @@ import {
   Vector3Tuple,
 } from '../../types/scene.schema';
 import { PLATFORMER_DEFAULTS } from '../../runtime/physics/constants';
+import { GRADE_PRESET_IDS, GRADE_PRESETS, GRADE_RANGES, resolveGrade } from '../../runtime/colorGrade';
 import { resolveCamera2D, resolveWorld, WORLD_LIMITS } from '../../runtime/physics/camera2d';
 
 // ----------------------------------------------------------------------------
@@ -896,6 +897,70 @@ const CameraProps: React.FC = () => {
   );
 };
 
+/** Phase 6: the scene's colour grade and lens look (3D scenes). The preset sets the numbers; each slider overrides one. */
+const GradeProps: React.FC = () => {
+  const grade = useStudioStore((s) => s.sceneSpec.grade);
+  const update = useStudioStore((s) => s.updateGrade);
+  const resolved = resolveGrade(grade);
+  const base = GRADE_PRESETS[grade?.preset ?? 'neutral'];
+  const num = (key: keyof typeof GRADE_RANGES, label: string, step: number) => (
+    <Row key={key} label={label}>
+      <NumField
+        ariaLabel={`Grade ${label}`}
+        step={step}
+        min={GRADE_RANGES[key][0]}
+        max={GRADE_RANGES[key][1]}
+        value={grade?.[key] ?? (base as unknown as Record<string, number>)[key]}
+        onChange={(v) => update({ [key]: v })}
+      />
+    </Row>
+  );
+  return (
+    <Section id="s-grade" title="Colour grade & lens" defaultOpen={false} badge={resolved ? grade?.preset ?? 'custom' : 'off'}>
+      <Row label="Look" title="A named look; the sliders below override it">
+        <select className="field sm" aria-label="Grade preset" value={grade?.preset ?? 'neutral'} onChange={(e) =>
+            // Picking a look starts from that look: drop the old slider overrides (they would silently skew the new preset).
+            update({
+              preset: e.target.value as (typeof GRADE_PRESET_IDS)[number],
+              exposure: undefined,
+              contrast: undefined,
+              saturation: undefined,
+              temperature: undefined,
+              tint: undefined,
+              fade: undefined,
+              vignette: undefined,
+              grain: undefined,
+              split: undefined,
+              shadows: undefined,
+              highlights: undefined,
+            })
+          }>
+          {GRADE_PRESET_IDS.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </select>
+      </Row>
+      {num('exposure', 'Exposure', 0.1)}
+      {num('contrast', 'Contrast', 0.05)}
+      {num('saturation', 'Saturation', 0.05)}
+      {num('temperature', 'Warmth', 0.05)}
+      {num('tint', 'Tint', 0.05)}
+      {num('fade', 'Fade', 0.02)}
+      {num('vignette', 'Vignette', 0.05)}
+      {num('grain', 'Film grain', 0.05)}
+      {grade && (
+        <Row label="Reset">
+          <button className="btn sm" aria-label="Remove colour grade" onClick={() => update(null)}>
+            Remove grade
+          </button>
+        </Row>
+      )}
+    </Section>
+  );
+};
+
 const LightingProps: React.FC = () => {
   const env = useStudioStore((s) => s.sceneSpec.environment);
   const setLightingPreset = useStudioStore((s) => s.setLightingPreset);
@@ -1072,6 +1137,7 @@ export const PropertiesPanel: React.FC = () => {
       <div className="pp-scene-h">Scene</div>
       {!is2D && <CameraProps />}
       {!is2D && <LightingProps />}
+      {!is2D && <GradeProps />}
       <SceneSettings />
       <CtaProps />
     </div>

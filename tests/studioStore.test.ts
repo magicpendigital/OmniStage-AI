@@ -39,3 +39,22 @@ test('click rule shared by studio and Player: graph-handled clicks keep unbox pr
   assert.equal(clickRunsBuiltIn(coin, 'game', false), true);
   assert.equal(clickRunsBuiltIn({ assetId: 'x', onClickAction: 'none' }, 'media', false), false);
 });
+
+test('updateGrade merges and clamps, one slider drag is one undo step, null removes the grade (Phase 6)', () => {
+  useStudioStore.getState().createNewBlankScene('3d', 'Grade test');
+  assert.equal(useStudioStore.getState().sceneSpec.grade, undefined);
+  useStudioStore.getState().updateGrade({ preset: 'warm' });
+  assert.deepEqual(useStudioStore.getState().sceneSpec.grade, { preset: 'warm' });
+  useStudioStore.getState().updateGrade({ vignette: 0.3 });
+  useStudioStore.getState().updateGrade({ vignette: 0.4 });
+  assert.deepEqual(useStudioStore.getState().sceneSpec.grade, { preset: 'warm', vignette: 0.4 }, 'numbers merge into the preset');
+  useStudioStore.getState().updateGrade({ exposure: 99 });
+  assert.equal(useStudioStore.getState().sceneSpec.grade!.exposure, 2, 'clamped into range');
+  useStudioStore.getState().undo();
+  assert.equal(useStudioStore.getState().sceneSpec.grade!.exposure, undefined);
+  assert.equal(useStudioStore.getState().sceneSpec.grade!.vignette, 0.4);
+  useStudioStore.getState().updateGrade(null);
+  assert.equal(useStudioStore.getState().sceneSpec.grade, undefined);
+  useStudioStore.getState().undo();
+  assert.equal(useStudioStore.getState().sceneSpec.grade!.preset, 'warm', 'removing the grade is undoable');
+});

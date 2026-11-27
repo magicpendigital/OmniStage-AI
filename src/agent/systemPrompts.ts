@@ -235,7 +235,8 @@ AUTHORING & SPATIAL DESIGN RULES:
    (nodes AND edges) together with actors, world, vfx, camera and gameRules in the SAME response. Each mechanic (collecting items, boss fight, tap-to-unbox, camera cutscene, ...)
    must appear as connected trigger -> condition -> action nodes so a non-coder can see and tweak it in the node editor. A response that adds gameplay without matching graph nodes is incomplete.
 6. Motion Easing: nodes2D[].keyframeTrack[] and camera.keyframes[] accept an optional "ease" applied from that keyframe to the next:
-   'linear' | 'sine.inOut' | 'power1.out' | 'power2.inOut' | 'power3.out' | 'expo.out' | 'back.out' | 'elastic.out' | 'bounce.out'.
+   'linear' | 'sine.inOut' | 'power1.out' | 'power2.inOut' | 'power3.out' | 'expo.out' | 'back.out' | 'elastic.out' | 'bounce.out', or a cubic-bezier
+   string "bezier(x1,y1,x2,y2)" (x1 and x2 in 0..1, y in -2..3; e.g. "bezier(0.4,0,0.2,1)" for a smooth settle, "bezier(0.7,0,0.3,1)" for a cinematic ease-in-out).
 7. Procedural Game Audio: sceneSpec.audio = { enabled, masterVolume (0..1), cues: { collect, jump, hit, win, lose, click, 'scene-start' } }
    where each cue is 'coin' | 'jump' | 'hit' | 'powerup' | 'explosion' | 'laser' | 'win' | 'lose' | 'click' | 'whoosh' | 'none'. Sounds are synthesised, never audio URLs.
 8. 2D Spritesheets & Particles: a Node2D with imageUrl may add spriteSheet { frameWidth, frameHeight, columns, frameCount, fps, clips?: { idle|run|jump: { start, end } } }.
@@ -279,6 +280,11 @@ AUTHORING & SPATIAL DESIGN RULES:
    'forcefield'|'lava'|'rainbow', color?: '#rrggbb', intensity?: 0..3 (1), speed?: 0..5 (1), progress?: 0..1 (dissolve only),
    progressTween?: { from, to, start, duration } (seconds; dissolve-in = from 1 to 0, dissolve-out = from 0 to 1) }.
    Use sparingly (a ghost / AI projection = hologram, a shield = forcefield, a magic vanish = dissolve, a stylised hero = toon).
+15. COLOUR GRADE (3D scenes; data only): sceneSpec.grade = { preset?: 'neutral'|'warm'|'cool'|'noir'|'vivid'|'faded'|'teal-orange'|'sepia',
+   exposure?: -2..2 stops, contrast?: 0.5..1.6 (1), saturation?: 0..2 (1), temperature?: -1 cool..1 warm, tint?: -1 green..1 magenta,
+   fade?: 0..0.4 (lifted blacks), vignette?: 0..1, grain?: 0..1, split?: 0..1 with shadows?/highlights?: '#rrggbb' (split toning) }.
+   The numbers override the preset. Pick ONE look per film and give every scene of it the same grade; keep it subtle for ads and games
+   (vignette <= 0.25, grain <= 0.15) so the scene stays readable. 2D scenes ignore it.
 
 ${LOGIC_GRAPH_PROMPT_SECTION}
 ${STATE_MACHINE_PROMPT_SECTION}

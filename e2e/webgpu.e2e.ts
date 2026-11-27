@@ -16,6 +16,11 @@ const scenes = {
     s.world.weather = { type: 'snow', intensity: 0.6 };
     return s;
   },
+  'colour grade (teal-orange split toning, vignette, grain) on the open world': () => {
+    const s = template('open-world-nature-island');
+    s.grade = { preset: 'teal-orange', vignette: 0.4, grain: 0.2 };
+    return s;
+  },
   'shader effect presets (hologram, toon, forcefield, lava, rainbow, dissolve) on GLTF + composites': () => {
     const s = shaderFxScene();
     s.actors.find((a) => a.id === 'mine')!.shaderEffect = { preset: 'dissolve', progress: 0.45 };
@@ -56,5 +61,18 @@ test('WebGPU Player: ultra quality (node bloom) renders and actors animate', asy
   const px = await p.pixelStats();
   expect(px.std).toBeGreaterThan(8);
   expect((await p.view3d()).backend).toBe('webgpu');
+  expect(p.errors).toEqual([]);
+});
+
+test('WebGPU Player: the colour grade really applies (noir is black and white, a vignette darkens the corners)', async ({ page }) => {
+  const spec = template('open-world-nature-island');
+  spec.grade = { preset: 'noir', grain: 0, vignette: 1 };
+  const p = await openExport(page, spec, { quality: 'high', renderer: 'webgpu', playerRuntimeSource: PLAYER_RUNTIME_WEBGPU });
+  test.skip((await p.backend()) !== 'webgpu', 'no WebGPU adapter');
+  await p.waitAssets();
+  await p.step(10, 0.05);
+  const c = await p.colorStats();
+  expect(c.spread, 'noir channels agree').toBeLessThan(2);
+  expect(c.corner, 'the vignette blackens the corners').toBeLessThan(c.center * 0.5 + 2);
   expect(p.errors).toEqual([]);
 });

@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { verifySceneSpec } from '../src/verification/sceneVerifier';
 import { createBlankSceneSpec } from '../src/registry/assetRegistry';
 import {
   applyEase,
   EASE_IDS,
   EASING_RUNTIME_SOURCE,
   easedSplineProgress,
+  isEaseRef,
   sampleKeyframes,
 } from '../src/animation/easing';
 import { createOmniSfxPlayer } from '../src/audio/sfxRuntime';
@@ -88,4 +90,43 @@ test('standalone playable export carries audio + eased keyframes in the scene da
   assert.ok(scripts.length >= 2);
   for (const source of scripts) assert.doesNotThrow(() => new Function(source), 'inline script must parse');
   assert.ok(html.includes('"ease":"back.out"') && html.includes('"collect":"powerup"'));
+});
+
+test('cubic-bezier eases (Phase 6): parsed, bounded, monotone in x and identical in the exported runtime', () => {
+  assert.ok(isEaseRef('bezier(0.4,0,0.2,1)'));
+  assert.ok(isEaseRef('bezier( 0.7 , 0 , 0.3 , 1 )'));
+  assert.ok(isEaseRef('power3.out'));
+  for (const bad of ['bezier(2,0,0.2,1)', 'bezier(0.4,0,0.2)', 'bezier(a,b,c,d)', 'bezier(0.4,9,0.2,1)', 'bezier(0.4,0,0.2,1)x', 'toString', '__proto__', 42]) {
+    assert.ok(!isEaseRef(bad), `${String(bad)} must be rejected`);
+  }
+  assert.equal(applyEase('bezier(0,0,1,1)', 0.5).toFixed(6), '0.500000', 'x1=y1,x2=y2 is linear');
+  assert.equal(applyEase('bezier(0.4,0,0.2,1)', 0), 0);
+  assert.equal(applyEase('bezier(0.4,0,0.2,1)', 1), 1);
+  const curve = 'bezier(0.7,0,0.3,1)';
+  let last = -1;
+  for (let i = 0; i <= 20; i++) {
+    const v = applyEase(curve, i / 20);
+    assert.ok(v >= last - 1e-12, `ease-in-out is monotone at ${i}`);
+    last = v;
+  }
+  assert.ok(applyEase(curve, 0.1) < 0.1 && applyEase(curve, 0.9) > 0.9, 'slow in, slow out');
+  assert.ok(applyEase('bezier(0.3,1.6,0.6,1)', 0.5) > 1, 'a y above 1 overshoots');
+  assert.equal(applyEase('bezier(nonsense)', 0.3), 0.3, 'a malformed curve is linear');
+  const omniEase = new Function(`${EASING_RUNTIME_SOURCE}; return OMNI_EASE;`)() as (n: string, t: number) => number;
+  for (const c of [curve, 'bezier(0.4,0,0.2,1)', 'bezier(0.3,1.6,0.6,1)', 'bezier(0.2,-0.5,0.8,1)']) {
+    for (const t of [0, 0.07, 0.25, 0.5, 0.8, 0.99, 1]) assert.ok(Math.abs(omniEase(c, t) - applyEase(c, t)) < 1e-12, `${c} @ ${t}`);
+  }
+  for (const bad of ['bezier(1.2.3,0,0,1)', 'bezier(.,0,0,1)', 'bezier(0.4,-.,0.2,1)']) {
+    assert.ok(!isEaseRef(bad), `${bad} must be rejected`);
+    assert.equal(omniEase(bad, 0.3), 0.3, `${bad} is linear in the exported runtime`);
+    assert.equal(applyEase(bad, 0.3), 0.3, `${bad} is linear in the studio`);
+  }
+  assert.equal(omniEase('toString', 0.4), 0.4, 'the exported runtime never resolves prototype names');
+  const keys = [{ time: 0, x: 0, ease: curve as 'linear' }, { time: 2, x: 10 }];
+  assert.ok(Math.abs(sampleKeyframes(keys, 1)!.progress - 0.5) < 1e-6, 'symmetric curve crosses the middle at 0.5');
+  const spec = createBlankSceneSpec('2d');
+  spec.nodes2D[0].keyframeTrack = [{ time: 0, x: 0, y: 0, ease: 'bezier(0.4,0,0.2,1)' } as never, { time: 1, x: 5, y: 0 } as never];
+  assert.ok(!verifySceneSpec(spec).issues.some((i) => i.code === 'keyframe.unknown-ease'), 'a valid bezier is not flagged');
+  (spec.nodes2D[0].keyframeTrack![0] as { ease?: string }).ease = 'bezier(9,0,0.2,1)';
+  assert.ok(verifySceneSpec(spec).issues.some((i) => i.code === 'keyframe.unknown-ease'), 'an out-of-range bezier is flagged');
 });

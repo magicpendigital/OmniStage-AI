@@ -53,6 +53,8 @@ import { directorQAAvailable, reviewCut, runDirectorQAForShot } from './director
 import { describeCutQA } from './cutQA';
 import { applyBibleToScene, formatBibleSummary, lintStoryBible, writeStoryBible } from './storyBible';
 import { carryFromPrevious, lintCuts } from './filmEditor';
+import { unifyFilmGrade } from './filmGrade';
+import { sanitizeGrade } from '../runtime/colorGrade';
 import { shareLocationWorld } from './locations';
 import { applyCue, musicCueSheet } from './musicCues';
 import { sanitizeShaderEffect } from '../runtime/shaderEffects';
@@ -440,6 +442,7 @@ export function normalizeGeneratedSceneSpec(raw: any, fallbackEngine: EngineType
     gameRules: { ...base.gameRules, ...(raw.gameRules ?? {}) },
     timelineTracks: Array.isArray(raw.timelineTracks) ? raw.timelineTracks : base.timelineTracks,
     ...(normalizeSoundtrack(raw.soundtrack) ? { soundtrack: normalizeSoundtrack(raw.soundtrack) } : {}),
+    ...(sanitizeGrade(raw.grade) ? { grade: sanitizeGrade(raw.grade) } : {}),
     ...(normalizeDialogue(raw.dialogue).length ? { dialogue: normalizeDialogue(raw.dialogue) } : {}),
   };
 }
@@ -1209,6 +1212,9 @@ export async function generateStoryboardWithAgent(
     callbacks.onScene?.(spec, i, source);
   }
 
+  // Phase 6: one colour look for the whole film.
+  const gradeNote = unifyFilmGrade(scenes, plan.kind, cueSheet.map((c) => c.mood));
+  if (gradeNote) editorNotes.push(gradeNote);
   if (cuesApplied) editorNotes.push(`Editor: score planned once for the film (${cueSheet[0]?.tempo} BPM, mood by act: ${[...new Set(cueSheet.map((c) => c.mood).filter(Boolean))].join(' → ') || 'as authored'}), ${cuesApplied} scene(s) followed it`);
   // What the editor could not decide for you (lighting jumps, jump cuts) goes to the summary.
   for (const f of lintCuts(scenes)) if (!f.fixable && f.severity === 'warning') editorNotes.push(`Editor: ${f.message}`);

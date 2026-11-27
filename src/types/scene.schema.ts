@@ -350,6 +350,10 @@ export type EaseId =
   | 'elastic.out'
   | 'bounce.out';
 
+/** Phase 6: a CSS-style cubic-bezier curve, written `bezier(x1,y1,x2,y2)` with x1, x2 in [0,1] (y may overshoot). */
+export type BezierEase = `bezier(${string})`;
+export type EaseRef = EaseId | BezierEase;
+
 /** Procedural (sfxr-style) sound presets synthesised in WebAudio — no audio files, works offline in playable ads. */
 export type SfxPresetId =
   | 'coin'
@@ -528,7 +532,7 @@ export interface Keyframe2D {
   scaleY?: number;
   opacity?: number;
   /** Easing applied from this keyframe to the next one (default 'linear'). */
-  ease?: EaseId;
+  ease?: EaseRef;
 }
 
 export interface Node2D {
@@ -663,7 +667,7 @@ export interface CameraKeyframe {
   fov?: number;
   label?: string;
   /** Easing applied from this keyframe to the next one (default 'linear'). */
-  ease?: EaseId;
+  ease?: EaseRef;
 }
 
 export interface CameraRig {
@@ -887,7 +891,7 @@ export interface PerformanceStep {
   /** Clip playback speed. */
   speed?: number;
   /** Easing of the walk (default 'sine.inOut'). */
-  ease?: EaseId;
+  ease?: EaseRef;
   /** Short note for the editor ("wakes up", "waves at fox"). */
   label?: string;
 }
@@ -994,6 +998,39 @@ export interface GameDesign {
   /** Counters the design needs (keys, ammo); declared as `sceneSpec.variables`. */
   variables?: { id: string; label: string }[];
   levels: GameDesignLevel[];
+}
+
+// ----------------------------------------------------------------------------
+// Phase 6 — post-production: colour grade + lens look (3D scenes; applied by the display pass in studio, Play Test, exports)
+// ----------------------------------------------------------------------------
+
+/** Named looks (see GRADE_PRESETS in src/runtime/colorGrade.ts); the numeric fields below override the preset. */
+export type GradePreset = 'neutral' | 'warm' | 'cool' | 'noir' | 'vivid' | 'faded' | 'teal-orange' | 'sepia';
+
+export interface ColorGrade {
+  preset?: GradePreset;
+  /** Stops, -2..2 (0 = unchanged). */
+  exposure?: number;
+  /** 0.5..1.6 around mid grey (1 = unchanged). */
+  contrast?: number;
+  /** 0 (black and white) .. 2 (1 = unchanged). */
+  saturation?: number;
+  /** -1 cool .. 1 warm. */
+  temperature?: number;
+  /** -1 green .. 1 magenta. */
+  tint?: number;
+  /** Lifted blacks 0..0.4 (the "faded film" look). */
+  fade?: number;
+  /** Darkened corners 0..1. */
+  vignette?: number;
+  /** Film grain 0..1 (a new pattern every frame at 24 fps; deterministic for a given time). */
+  grain?: number;
+  /** Split toning: how strongly `shadows` / `highlights` tint the dark / bright parts, 0..1. */
+  split?: number;
+  /** #rrggbb */
+  shadows?: string;
+  /** #rrggbb */
+  highlights?: string;
 }
 
 export interface TimelineTrack {
@@ -1201,6 +1238,8 @@ export interface SceneSpec {
   marketingOverlay: MarketingOverlayConfig;
   gameRules: GameRule;
   timelineTracks: TimelineTrack[];
+  /** Phase 6: colour grade + lens look for 3D scenes (omit for none). */
+  grade?: ColorGrade;
   logicGraph?: LogicGraphSpec;
   sequence?: SceneSequenceMeta;
   /** Phase 4: procedural sound cues for gameplay events (also embedded in standalone playable exports). */

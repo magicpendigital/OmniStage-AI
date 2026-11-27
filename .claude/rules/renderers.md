@@ -12,7 +12,8 @@ paths:
   (src/player/view3d.ts) calls them directly. Never add a visual only to an R3F component — add it to a builder so exports match.
   Builders must not import React, drei or the studio store; time comes from `FrameContext`. JSX in builders uses
   `/** @jsxRuntime classic */ /** @jsx h */` (src/render3d/h.ts); add new tags to `h()`. Off-screen passes go in `Built3D.prerender`
-  (contact shadows); post-processing lives in `src/render3d/postfx.ts` (bloom on Ultra). Do not add drei visual helpers to the viewport.
+  (contact shadows); post-processing lives in `src/render3d/postfx.ts` (bloom on Ultra; Phase 6 adds the colour-grade pass as the LAST pass, with a TSL twin in `webgpu/index.ts`). Do not add drei visual helpers to the viewport.
+- Colour grade / lens look (Phase 6, `SceneSpec.grade`, `src/runtime/colorGrade.ts`): data only, 3D scenes. The maths exists three times — `GRADE_GLSL`, the TSL `gradeNode` and the CPU `gradeRgb` (pinned by `tests/colorGrade.test.ts`); change them together and run `npm run test:e2e` + `npm run test:e2e:gpu`. The pass runs on display-referred colour, is skipped when `resolveGrade` is null, grain is seeded by `grainSeed(currentTime)` (never wall time), and a grade also builds the composer on tiers that have no bloom (Player `gradeStack`, studio `StudioPost`).
 - Acting and shots (`actor.performance`, `camera.shots`, scene transitions) are resolved ONLY by `src/runtime/cinematics.ts`
   (`performedActor`, `resolveShot`, `matchClipName`). Renderers draw the performed actor and set the camera exactly from the shot (no
   smoothing, so cuts are cuts and frame-stepped exports match). Never re-implement this maths in a component.

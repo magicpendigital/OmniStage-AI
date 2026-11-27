@@ -2,6 +2,7 @@ import React from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { configureRenderer } from '../render3d/stage3d';
 import { createBloom } from '../render3d/postfx';
+import { grainSeed, resolveGrade } from '../runtime/colorGrade';
 import { useStudioStore } from '../state/useStudioStore';
 import { SceneDirector } from './SceneDirector';
 
@@ -21,14 +22,20 @@ const isSoftwareGl = (() => {
   }
 })();
 
-/** Takes over R3F's render loop (useFrame priority 1) and renders through the shared bloom composer. */
-function StudioBloom() {
+/**
+ * Takes over R3F's render loop (useFrame priority 1) and renders through the shared post composer: bloom (Ultra) and/or the scene's
+ * colour grade (Phase 6, any quality except draft) — the same passes the Player runs.
+ */
+function StudioPost({ bloom }: { bloom: boolean }) {
   const { gl, scene, camera, size, viewport } = useThree();
-  const fx = React.useMemo(() => createBloom(gl, scene, camera), [gl, scene]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fx = React.useMemo(() => createBloom(gl, scene, camera, { enabled: bloom }), [gl, scene, bloom]); // eslint-disable-line react-hooks/exhaustive-deps
+  const gradeSpec = useStudioStore((s) => s.sceneSpec.grade);
+  const grade = React.useMemo(() => resolveGrade(gradeSpec), [gradeSpec]);
   React.useEffect(() => () => fx.dispose(), [fx]);
   React.useEffect(() => fx.setSize(size.width, size.height, viewport.dpr), [fx, size.width, size.height, viewport.dpr]);
   useFrame((_, delta) => {
     fx.setCamera(camera);
+    fx.setGrade(grade, grainSeed(useStudioStore.getState().currentTime));
     fx.render(delta);
   }, 1);
   return null;
@@ -42,6 +49,8 @@ export const StageCanvas: React.FC = () => {
   const draft = isSoftwareGl || quality === 'draft';
   // Phase 7C: Ultra quality adds bloom (the same post-processing the Player uses at quality=ultra).
   const bloom = useStudioStore((s) => s.settings.renderQuality === 'ultra-postprocessing' && s.settings.enableBloom) && !draft;
+  // Phase 6: a colour grade also needs the composer (without bloom unless Ultra asked for it).
+  const graded = useStudioStore((s) => resolveGrade(s.sceneSpec.grade) !== null) && !draft;
 
   return (
     <div className="relative w-full h-full select-none">
@@ -65,7 +74,7 @@ export const StageCanvas: React.FC = () => {
         }}
       >
         <SceneDirector />
-        {bloom && <StudioBloom />}
+        {(bloom || graded) && <StudioPost bloom={bloom} />}
       </Canvas>
     </div>
   );
